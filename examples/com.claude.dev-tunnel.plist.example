@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Example LaunchAgent the bootstrap tool installs to
+    ~/Library/LaunchAgents/com.claude.dev-tunnel.plist
+  It starts the tunnel at login and restarts it whenever it exits
+  (KeepAlive), throttled to one restart per 30s.
+
+  Manage it with:
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude.dev-tunnel.plist
+    launchctl bootout   gui/$(id -u) ~/Library/LaunchAgents/com.claude.dev-tunnel.plist
+    launchctl print     gui/$(id -u)/com.claude.dev-tunnel
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.dev-tunnel</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/ssh</string>
+        <string>-N</string>
+        <string>-o</string>
+        <string>ExitOnForwardFailure=yes</string>
+        <string>claude-dev-tunnel</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USER/Library/Logs/claude-dev-tunnel.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USER/Library/Logs/claude-dev-tunnel.err.log</string>
+</dict>
+</plist>
