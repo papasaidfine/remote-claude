@@ -36,6 +36,7 @@ Because `ExitOnForwardFailure yes` is configured, ssh exits immediately when the
 - The tunnel isn't actually up: check on the local machine that the `ssh -N claude-dev-tunnel` process is alive;
 - The local sshd isn't running:
   - macOS: `sudo launchctl print system/com.openssh.sshd`; check System Settings → Sharing → Remote Login;
+  - Linux: `systemctl status sshd` (Debian/Ubuntu: `ssh`), then `sudo systemctl start sshd` if needed;
   - Windows: `Get-Service sshd`, then `Start-Service sshd` if needed;
 - The local sshd isn't listening on 127.0.0.1: `netstat -an | grep :22` (mac) / `netstat -an | findstr :22` (Win).
 
@@ -55,6 +56,7 @@ The most common class of problems — check each item:
 4. **Key mismatch**: the private key `ssh -i` points at on the server must be the pair of the public key written into the local authorized_keys. Compare fingerprints with `ssh-keygen -lf` on both sides.
 5. **Read the local sshd log**:
    - macOS: `log stream --predicate 'process == "sshd"' --info` (watch while connecting);
+   - Linux: `sudo journalctl -u sshd -f` (Debian/Ubuntu: `-u ssh`);
    - Windows: `Get-WinEvent -LogName OpenSSH/Operational -MaxEvents 30 | Format-List TimeCreated,Message`.
 
 ### Username / host in the connect-back command
@@ -95,6 +97,16 @@ macOS spawns sshd on demand via launchd, so a new config applies to **new connec
 sudo launchctl kickstart -k system/com.openssh.sshd
 ```
 
+### Linux: ListenAddress has no effect (Ubuntu 23.10+)
+
+Recent Ubuntu uses systemd **socket activation** (`ssh.socket`) for sshd; in that mode the socket unit decides the listen address and `ListenAddress` in sshd_config is ignored. Either switch back to the service:
+
+```bash
+sudo systemctl disable --now ssh.socket && sudo systemctl enable --now ssh.service
+```
+
+or override the socket: `sudo systemctl edit ssh.socket` and set `ListenStream=` then `ListenStream=127.0.0.1:22`. The bootstrap script warns when it detects this situation.
+
 ### Windows: `Add-WindowsCapability` fails (0x800f0954 etc.)
 
 Usually WSUS / group policy blocks Features-on-Demand downloads. Ask an admin to allow "Specify settings for optional component installation", or install OpenSSH Server offline (Microsoft's Win32-OpenSSH releases: `https://github.com/PowerShell/openssh-portable/releases`).
@@ -123,7 +135,55 @@ Get-ScheduledTaskInfo -TaskName ClaudeDevTunnel    # LastRunTime / LastTaskResul
 - The task runs "only when the user is logged on" by default, so the tunnel stops after logout — this is expected (the key's ACL belongs to that user);
 - Verify the keepalive script manually: `powershell -File $env:USERPROFILE\.ssh\claude-dev-tunnel-keepalive.ps1` (runs in the foreground so you see ssh's output directly).
 
-## 6. Everything works, but you want to verify the security posture
+### Linux systemd user service doesn't start / stops after logout
+
+```bash
+systemctl --user status claude-dev-tunnel.service
+journalctl --user -u claude-dev-tunnel -f
+```
+
+- User services stop when your last session ends; enable lingering to keep the tunnel up: `sudo loginctl enable-linger $USER`;
+- After editing the unit file, run `systemctl --user daemon-reload`.
+
+## 6. Server-side wrapper issues (claude-local / claude-local-shell)
+
+### `ssh claude-local` says `Host key verification failed` / `REMOTE HOST IDENTIFICATION HAS CHANGED`
+
+The host key of whatever answers on `127.0.0.1:<reverse_port>` changed — usually because a *different* local machine now holds the tunnel (or the local machine was reinstalled). If that change is expected:
+
+```bash
+rm ~/.ssh/known_hosts.claude-local     # the alias uses a dedicated known-hosts file
+ssh claude-local 'echo ok'             # accept-new stores the new key
+```
+
+If you did NOT expect the machine behind the tunnel to change, stop and check what is actually listening on the reverse port first.
+
+### `claude-local: command not found`
+
+`~/.local/bin` is not on the PATH. Add `export PATH="$HOME/.local/bin:$PATH"` to your shell profile, or call the wrappers by full path.
+
+### The agent's commands still run on the server despite `SHELL=...`
+
+- Make sure the variable is set on the **agent process itself**, e.g. `SHELL=~/.local/bin/claude-local-shell claude` on one line (an `export` in another shell/tab does not apply);
+- Test the wrapper directly first: `~/.local/bin/claude-local-shell -c 'hostname'` should print the **local** machine's hostname.
+
+### Commands run in the wrong directory
+
+The wrapper `cd`s into `CLAUDE_LOCAL_DIR` (from the environment or `~/.config/claude-local/env`) before every command. Check what is effective:
+
+```bash
+~/.local/bin/claude-local-shell -c 'pwd'
+```
+
+Note the directory must exist on the **local** machine.
+
+### `claude-local-mount` fails
+
+- `sshfs` must be installed on the server (`apt install sshfs` etc.);
+- The tunnel must be up (`ssh claude-local 'echo ok'` first);
+- Stale mount after a tunnel drop: `claude-local-mount -u` then mount again (the mount uses `-o reconnect`, but a long outage can still wedge it).
+
+## 7. Everything works, but you want to verify the security posture
 
 ```bash
 # on the server: the reverse port must listen on 127.0.0.1 only

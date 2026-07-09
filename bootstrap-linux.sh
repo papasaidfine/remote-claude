@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 #
-# bootstrap-macos.sh — Reverse SSH dev-environment bootstrap for macOS.
+# bootstrap-linux.sh — Reverse SSH dev-environment bootstrap for Linux.
 #
-# Prepares this Mac so a remote server's Claude / Codex agent can SSH back
-# into it through a reverse tunnel:
+# Prepares this Linux machine so a remote server's Claude / Codex agent can
+# SSH back into it through a reverse tunnel:
 #
-#   local mac  ── ssh -N claude-dev-tunnel ──▶  remote server
-#   remote server 127.0.0.1:<reverse_port>  ──▶  local mac 127.0.0.1:22
+#   local linux  ── ssh -N claude-dev-tunnel ──▶  remote server
+#   remote server 127.0.0.1:<reverse_port>  ──▶  local linux 127.0.0.1:22
 #
 # What it does (idempotent, safe to re-run):
-#   1. Enables Remote Login (sshd) via systemsetup.
+#   1. Installs openssh-server if missing (apt/dnf/yum/pacman/zypper),
+#      enables and starts the sshd systemd service.
 #   2. Hardens sshd: pubkey auth on, password auth off (optional),
 #      loopback-only listen (optional). Backs up config, validates with
 #      `sshd -t` before restarting.
@@ -18,9 +19,9 @@
 #      from="127.0.0.1,::1" restriction (dedup by key blob).
 #   5. Generates ~/.ssh/claude_tunnel_ed25519 for the local→server hop.
 #   6. Writes a managed "Host claude-dev-tunnel" block into ~/.ssh/config.
-#   7. Optionally installs a LaunchAgent that keeps the tunnel up at login.
+#   7. Optionally installs a systemd user service that keeps the tunnel up.
 #
-# Usage:  ./bootstrap-macos.sh
+# Usage:  ./bootstrap-linux.sh
 # Non-interactive overrides via env vars: SERVER_HOST, SERVER_USER,
 # SERVER_PORT, REVERSE_PORT, LOCAL_USER, SERVER_PUBKEY.
 
@@ -35,9 +36,8 @@ AUTH_KEYS="$SSH_DIR/authorized_keys"
 SSHD_CONFIG="/etc/ssh/sshd_config"
 SSHD_DROPIN_DIR="/etc/ssh/sshd_config.d"
 SSHD_DROPIN="$SSHD_DROPIN_DIR/100-claude-dev-tunnel.conf"
-LAUNCH_AGENT_LABEL="com.claude.dev-tunnel"
-LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_AGENT_LABEL.plist"
-LOG_DIR="$HOME/Library/Logs"
+USER_UNIT_DIR="$HOME/.config/systemd/user"
+USER_UNIT="$USER_UNIT_DIR/$TUNNEL_ALIAS.service"
 TS="$(date +%Y%m%d-%H%M%S)"
 
 BEGIN_MARK="# >>> ${TUNNEL_ALIAS} (managed by reverse-ssh-bootstrap) >>>"
@@ -73,15 +73,15 @@ ask_yn() { # ask_yn <prompt> <Y|N>  -> exit status 0 = yes
 }
 
 # ---------------------------------------------------------------- platform
-[[ "$(uname -s)" == "Darwin" ]] || die "This script is for macOS. On Windows, run bootstrap-windows.ps1 in an elevated PowerShell."
+[[ "$(uname -s)" == "Linux" ]] || die "This script is for Linux. Use bootstrap-macos.sh on macOS or bootstrap-windows.ps1 on Windows."
 
 cat <<'EOF'
 ==========================================================
- Reverse SSH bootstrap (macOS)
- local mac  ->  remote server  ->  (reverse tunnel)  -> local mac
+ Reverse SSH bootstrap (Linux)
+ local linux  ->  remote server  ->  (reverse tunnel)  -> local linux
 ==========================================================
 This will modify:
-  - Remote Login / sshd settings (requires sudo)
+  - openssh-server install / sshd service / sshd_config (requires sudo)
   - ~/.ssh/{config,authorized_keys,claude_tunnel_ed25519}
 All modified system files are backed up first.
 EOF
@@ -110,7 +110,16 @@ if ask_yn "Disable password login for the local sshd (recommended, public key on
 else
   DISABLE_PASSWORD=0
 fi
-if ask_yn "Make the local sshd listen on 127.0.0.1 only (recommended; note: direct SSH from the LAN will stop working)" "Y"; then
+
+# If this session itself came in over SSH, loopback-only would lock the user
+# out of this machine after the next reconnect — default to No in that case.
+LOOPBACK_DEFAULT="Y"
+if [[ -n "${SSH_CONNECTION:-}" ]]; then
+  warn "You appear to be logged into this machine over SSH (SSH_CONNECTION is set)."
+  warn "Restricting sshd to 127.0.0.1 would prevent you from SSHing back in remotely."
+  LOOPBACK_DEFAULT="N"
+fi
+if ask_yn "Make the local sshd listen on 127.0.0.1 only (recommended for desktops; note: direct SSH from the LAN will stop working)" "$LOOPBACK_DEFAULT"; then
   LOOPBACK_ONLY=1
 else
   LOOPBACK_ONLY=0
@@ -217,21 +226,60 @@ write_ssh_config_block
 echo
 log "Configuring the system sshd next (requires sudo)"
 
-enable_remote_login() {
-  local status
-  status="$(sudo systemsetup -getremotelogin 2>/dev/null || true)"
-  if [[ "$status" == *": On"* ]]; then
-    log "Remote Login is already enabled"
+find_sshd_bin() {
+  local p
+  for p in /usr/sbin/sshd /usr/bin/sshd /usr/local/sbin/sshd; do
+    [[ -x "$p" ]] && { printf '%s\n' "$p"; return 0; }
+  done
+  command -v sshd 2>/dev/null || return 1
+}
+
+install_sshd() {
+  if find_sshd_bin >/dev/null; then
+    log "openssh-server is already installed"
     return 0
   fi
-  log "Enabling Remote Login (sshd)"
-  if ! sudo systemsetup -setremotelogin on 2>/dev/null; then
-    warn "systemsetup failed (recent macOS versions may require Full Disk Access)."
-    warn "Please enable it manually: System Settings -> General -> Sharing -> Remote Login, then re-run this script."
-    return 1
+  log "Installing openssh-server"
+  if command -v apt-get >/dev/null; then
+    sudo apt-get update -qq && sudo apt-get install -y openssh-server
+  elif command -v dnf >/dev/null; then
+    sudo dnf install -y openssh-server
+  elif command -v yum >/dev/null; then
+    sudo yum install -y openssh-server
+  elif command -v pacman >/dev/null; then
+    sudo pacman -S --noconfirm openssh
+  elif command -v zypper >/dev/null; then
+    sudo zypper install -y openssh
+  else
+    die "No supported package manager found (apt/dnf/yum/pacman/zypper); please install openssh-server manually and re-run"
   fi
+  find_sshd_bin >/dev/null || die "openssh-server installation did not provide an sshd binary"
 }
-enable_remote_login || die "Could not enable Remote Login"
+install_sshd
+SSHD_BIN="$(find_sshd_bin)"
+
+# Debian/Ubuntu name the unit ssh.service; most other distros use sshd.service
+find_sshd_unit() {
+  local u
+  for u in sshd ssh; do
+    if systemctl list-unit-files "$u.service" --no-legend 2>/dev/null | grep -q "$u.service"; then
+      printf '%s\n' "$u"
+      return 0
+    fi
+  done
+  return 1
+}
+
+SSHD_UNIT=""
+if command -v systemctl >/dev/null && [[ -d /run/systemd/system ]]; then
+  SSHD_UNIT="$(find_sshd_unit || true)"
+fi
+if [[ -n "$SSHD_UNIT" ]]; then
+  log "Enabling and starting $SSHD_UNIT.service"
+  sudo systemctl enable --now "$SSHD_UNIT.service"
+else
+  warn "systemd not detected; please make sure sshd is running and enabled with your init system"
+fi
 
 configure_sshd() {
   local use_dropin=0
@@ -259,7 +307,7 @@ AuthorizedKeysFile .ssh/authorized_keys"
     if [[ "$LOOPBACK_ONLY" -eq 1 ]] && sudo grep -qE '^[[:space:]]*ListenAddress[[:space:]]' "$SSHD_CONFIG"; then
       warn "$SSHD_CONFIG already contains ListenAddress directives; ListenAddress is additive, please verify the final listen addresses yourself"
     fi
-    if ! sudo /usr/sbin/sshd -t; then
+    if ! sudo "$SSHD_BIN" -t; then
       err "sshd config validation failed, rolling back the drop-in"
       sudo rm -f "$SSHD_DROPIN"
       [[ -f "$SSHD_DROPIN.claude-bak-$TS" ]] && sudo mv "$SSHD_DROPIN.claude-bak-$TS" "$SSHD_DROPIN"
@@ -272,7 +320,7 @@ AuthorizedKeysFile .ssh/authorized_keys"
     set_sshd_option() { # set_sshd_option <Key> <Value>
       local key="$1" value="$2"
       if sudo grep -qE "^[#[:space:]]*${key}([[:space:]]|\$)" "$SSHD_CONFIG"; then
-        sudo sed -i '' -E "s|^[#[:space:]]*(${key})([[:space:]].*)?\$|\\1 ${value}|" "$SSHD_CONFIG"
+        sudo sed -i -E "s|^[#[:space:]]*(${key})([[:space:]].*)?\$|\\1 ${value}|" "$SSHD_CONFIG"
       else
         printf '%s %s\n' "$key" "$value" | sudo tee -a "$SSHD_CONFIG" >/dev/null
       fi
@@ -286,7 +334,7 @@ AuthorizedKeysFile .ssh/authorized_keys"
     if [[ "$LOOPBACK_ONLY" -eq 1 ]]; then
       set_sshd_option "ListenAddress" "127.0.0.1"
     fi
-    if ! sudo /usr/sbin/sshd -t; then
+    if ! sudo "$SSHD_BIN" -t; then
       err "sshd config validation failed, restoring the backup"
       sudo cp "$SSHD_CONFIG.claude-bak-$TS" "$SSHD_CONFIG"
       die "sshd -t did not pass, original config restored"
@@ -294,10 +342,22 @@ AuthorizedKeysFile .ssh/authorized_keys"
   fi
   log "sshd config validation passed"
 
-  # macOS launches sshd on demand via launchd; kickstart applies the new config now
-  sudo launchctl kickstart -k system/com.openssh.sshd 2>/dev/null \
-    || warn "launchctl kickstart failed (safe to ignore: macOS will use the new config on the next connection)"
-  log "sshd reloaded"
+  # Ubuntu 23.10+ uses systemd socket activation for sshd; the socket unit,
+  # not sshd_config, decides the listen address in that mode.
+  if [[ "$LOOPBACK_ONLY" -eq 1 ]] && command -v systemctl >/dev/null \
+     && systemctl is-enabled ssh.socket >/dev/null 2>&1; then
+    warn "ssh.socket (systemd socket activation) is enabled on this system."
+    warn "In that mode the ListenAddress directive is IGNORED; the socket unit decides the address."
+    warn "Either 'sudo systemctl disable --now ssh.socket && sudo systemctl enable --now ssh.service',"
+    warn "or add a socket override: sudo systemctl edit ssh.socket  (set ListenStream=127.0.0.1:22)"
+  fi
+
+  if [[ -n "$SSHD_UNIT" ]]; then
+    sudo systemctl restart "$SSHD_UNIT.service"
+    log "sshd restarted"
+  else
+    warn "Please restart sshd manually to apply the new configuration"
+  fi
 }
 configure_sshd
 
@@ -312,49 +372,42 @@ if ask_yn "Upload it to the server now via ssh-copy-id (needs the server passwor
     || warn "ssh-copy-id failed; please append the public key above to ~/.ssh/authorized_keys on the server manually"
 fi
 
-# ---------------------------------------------------------------- LaunchAgent (optional)
+# ---------------------------------------------------------------- systemd user service (optional)
 echo
-if ask_yn "Install a LaunchAgent to start and keep the tunnel up after login (optional)" "N"; then
-  mkdir -p "$(dirname "$LAUNCH_AGENT_PLIST")" "$LOG_DIR"
-  if [[ -f "$LAUNCH_AGENT_PLIST" ]]; then
-    cp "$LAUNCH_AGENT_PLIST" "$LAUNCH_AGENT_PLIST.claude-bak-$TS"
-  fi
-  cat > "$LAUNCH_AGENT_PLIST" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>$LAUNCH_AGENT_LABEL</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/bin/ssh</string>
-        <string>-N</string>
-        <string>-o</string>
-        <string>ExitOnForwardFailure=yes</string>
-        <string>$TUNNEL_ALIAS</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>ThrottleInterval</key>
-    <integer>30</integer>
-    <key>StandardOutPath</key>
-    <string>$LOG_DIR/$TUNNEL_ALIAS.log</string>
-    <key>StandardErrorPath</key>
-    <string>$LOG_DIR/$TUNNEL_ALIAS.err.log</string>
-</dict>
-</plist>
+AUTOSTART_INSTALLED=0
+if command -v systemctl >/dev/null && [[ -d /run/systemd/system ]]; then
+  if ask_yn "Install a systemd user service to start and keep the tunnel up (optional)" "N"; then
+    mkdir -p "$USER_UNIT_DIR"
+    if [[ -f "$USER_UNIT" ]]; then
+      cp "$USER_UNIT" "$USER_UNIT.claude-bak-$TS"
+    fi
+    SSH_BIN="$(command -v ssh)"
+    cat > "$USER_UNIT" <<EOF
+[Unit]
+Description=$TUNNEL_ALIAS reverse SSH tunnel
+After=network-online.target
+
+[Service]
+ExecStart=$SSH_BIN -N -o ExitOnForwardFailure=yes $TUNNEL_ALIAS
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=default.target
 EOF
-  launchctl bootout "gui/$(id -u)" "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
-  launchctl bootstrap "gui/$(id -u)" "$LAUNCH_AGENT_PLIST" 2>/dev/null \
-    || launchctl load -w "$LAUNCH_AGENT_PLIST"
-  log "LaunchAgent installed and started: $LAUNCH_AGENT_PLIST"
-  log "Logs: $LOG_DIR/$TUNNEL_ALIAS.log / $TUNNEL_ALIAS.err.log"
-  AUTOSTART_INSTALLED=1
+    systemctl --user daemon-reload
+    systemctl --user enable --now "$TUNNEL_ALIAS.service"
+    log "systemd user service installed and started: $USER_UNIT"
+    log "Logs: journalctl --user -u $TUNNEL_ALIAS -f"
+    if ask_yn "Enable lingering so the tunnel also runs when you are not logged in (sudo loginctl enable-linger)" "N"; then
+      sudo loginctl enable-linger "$USER" \
+        && log "Lingering enabled for $USER" \
+        || warn "Could not enable lingering; the tunnel will only run while you are logged in"
+    fi
+    AUTOSTART_INSTALLED=1
+  fi
 else
-  AUTOSTART_INSTALLED=0
+  warn "systemd not detected; skipping the autostart option (run 'ssh -N $TUNNEL_ALIAS' manually or use your init system)"
 fi
 
 # ---------------------------------------------------------------- summary
@@ -380,11 +433,11 @@ cat <<EOF
 EOF
 if [[ "$AUTOSTART_INSTALLED" -eq 1 ]]; then
   cat <<EOF
-The tunnel is set to start at login (LaunchAgent). To stop it:
-     launchctl bootout gui/\$(id -u) $LAUNCH_AGENT_PLIST
+The tunnel is managed by a systemd user service. To stop it:
+     systemctl --user disable --now $TUNNEL_ALIAS.service
 EOF
 else
-  echo "For start-at-login, re-run this script and answer yes at the LaunchAgent step."
+  echo "For autostart, re-run this script and answer yes at the systemd user service step."
 fi
 echo
 echo "See the 'Removal / rollback' section of README.md for rollback instructions."

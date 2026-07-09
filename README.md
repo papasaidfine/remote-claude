@@ -2,9 +2,12 @@
 
 English | [中文](README.zh-CN.md)
 
-Let Claude / Codex running on a remote server SSH back into your local machine (Windows / macOS) through a **reverse SSH tunnel** and develop inside your local project directory.
+Let Claude / Codex running on a remote server SSH back into your local machine (Windows / macOS / Linux) through a **reverse SSH tunnel** and develop inside your local project directory.
 
-This repo provides a locally-run bootstrap CLI tool that automates: local sshd installation and hardening, SSH key generation, `~/.ssh/config` writing, `authorized_keys` writing, and optional start-at-login for the tunnel.
+This repo provides:
+
+- a locally-run **bootstrap CLI tool** that automates: local sshd installation and hardening, SSH key generation, `~/.ssh/config` writing, `authorized_keys` writing, and optional start-at-login for the tunnel;
+- a server-side **setup script + wrappers** (`server/setup-server.sh`) that give agents on the server a `claude-local` ssh alias and a `claude-local-shell` SHELL wrapper, so their shell commands execute on your local machine.
 
 ## Architecture
 
@@ -55,14 +58,18 @@ Do not reuse one key for both: a leaked local key should not mean "anyone can lo
 
 ## Quick start
 
-### macOS
+### macOS / Linux
 
 ```bash
-chmod +x bootstrap-macos.sh
-./bootstrap-macos.sh
+chmod +x bootstrap.sh bootstrap-macos.sh bootstrap-linux.sh
+./bootstrap.sh          # detects the platform and runs the matching script
 ```
 
 The script interactively asks for the server address, user, port, reverse port, the server-side public key, etc., then performs all local configuration (system-level changes require sudo).
+
+Linux notes:
+- if you are logged into the machine over SSH, the loopback-only option defaults to **No** so you don't lock yourself out;
+- autostart uses a systemd user service (`claude-dev-tunnel.service`); enable lingering (`sudo loginctl enable-linger $USER`) if the tunnel should run without an active login session.
 
 ### Windows
 
@@ -81,14 +88,15 @@ Parameters are also supported (skips the corresponding prompts):
 
 ### Server-side preparation
 
-1. Generate the connect-back key for Claude / Codex on the server (if you don't have one yet):
+1. Run the server setup script on the server (user-level, no sudo):
 
    ```bash
-   ssh-keygen -t ed25519 -f ~/.ssh/claude_to_local_ed25519 -N "" -C "claude-to-local"
-   cat ~/.ssh/claude_to_local_ed25519.pub   # paste this line into the bootstrap tool
+   ./server/setup-server.sh
    ```
 
-2. Add the **local tunnel public key** printed by the bootstrap tool (`claude_tunnel_ed25519.pub`) to the server's `~/.ssh/authorized_keys` (the tool also offers an ssh-copy-id-style automatic upload).
+   It generates the connect-back key `~/.ssh/claude_to_local_ed25519`, prints the public key to paste into the local bootstrap, writes a `Host claude-local` block into the server's `~/.ssh/config`, and installs the `claude-local*` wrappers into `~/.local/bin` (see [Working from the server](#working-from-the-server-the-claude-local-wrappers)).
+
+2. Add the **local tunnel public key** printed by the local bootstrap tool (`claude_tunnel_ed25519.pub`) to the server's `~/.ssh/authorized_keys` (the tool also offers an ssh-copy-id-style automatic upload).
 
 ### Start the tunnel
 
@@ -105,6 +113,44 @@ ssh -i ~/.ssh/claude_to_local_ed25519 -p <reverse_port> <local_user>@127.0.0.1
 ```
 
 and you're back in a shell / project directory on the local machine.
+
+## Working from the server: the claude-local wrappers
+
+`server/setup-server.sh` installs three commands into `~/.local/bin` on the server:
+
+| Command | Purpose |
+|---|---|
+| `claude-local` | `claude-local` opens an interactive shell on the local machine; `claude-local <cmd>` runs one command there |
+| `claude-local-shell` | SHELL-compatible wrapper (`-c` handling) for agents — see below |
+| `claude-local-mount` | optional: mount the local project dir on the server via sshfs |
+
+### Pointing an agent's SHELL at the tunnel
+
+Claude Code (and most agents) execute their Bash-tool commands through the `SHELL` environment variable. Projects exist that exploit this to develop across machines: point `SHELL` at an ssh wrapper and keep files in sync with mutagen. Our setup borrows the wrapper idea but needs **no sync layer**, because the files live on the local machine and the commands run there too:
+
+```bash
+# on the server — every Bash-tool command now executes on the LOCAL machine,
+# inside the configured project directory:
+SHELL=~/.local/bin/claude-local-shell claude
+```
+
+The wrapper reads defaults from `~/.config/claude-local/env` (written by the setup script); `CLAUDE_LOCAL_HOST` and `CLAUDE_LOCAL_DIR` environment variables override it per run:
+
+```bash
+CLAUDE_LOCAL_DIR=~/projects/myapp SHELL=~/.local/bin/claude-local-shell claude
+```
+
+**Caveat**: with the SHELL wrapper only, the agent's *file* tools (Read/Edit) still act on the server's filesystem. Two ways to keep everything consistent:
+
+1. let the agent do file work through shell commands as well (`cat`, heredocs, `sed`, …), or
+2. mount the local project on the server first — a live mount, not a sync:
+
+   ```bash
+   claude-local-mount                       # requires sshfs; mounts at ~/claude-local-project
+   cd ~/claude-local-project && SHELL=~/.local/bin/claude-local-shell claude
+   # file tools and shell commands now see the same files
+   claude-local-mount -u                    # unmount when done
+   ```
 
 ## The Windows administrators_authorized_keys pitfall
 
@@ -164,6 +210,12 @@ See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for more.
   launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.claude.dev-tunnel.plist
   ```
 
+- Linux systemd user service:
+
+  ```bash
+  systemctl --user disable --now claude-dev-tunnel.service
+  ```
+
 - Windows Scheduled Task:
 
   ```powershell
@@ -198,6 +250,31 @@ launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.claude.dev-tunnel.plis
 rm -f ~/Library/LaunchAgents/com.claude.dev-tunnel.plist
 ```
 
+### Linux
+
+```bash
+# restore the sshd config (with the drop-in approach, deleting the file is enough)
+sudo rm -f /etc/ssh/sshd_config.d/100-claude-dev-tunnel.conf
+# older systems (where the main config was edited directly):
+#   sudo cp /etc/ssh/sshd_config.claude-bak-<timestamp> /etc/ssh/sshd_config
+sudo sshd -t && sudo systemctl restart sshd   # or 'ssh' on Debian/Ubuntu
+
+# remove the autostart
+systemctl --user disable --now claude-dev-tunnel.service
+rm -f ~/.config/systemd/user/claude-dev-tunnel.service
+systemctl --user daemon-reload
+```
+
+### Server side
+
+```bash
+# remove the wrappers and config
+rm -f ~/.local/bin/claude-local ~/.local/bin/claude-local-shell ~/.local/bin/claude-local-mount
+rm -rf ~/.config/claude-local
+# delete the block between the claude-local markers in ~/.ssh/config
+# delete ~/.ssh/claude_to_local_ed25519{,.pub} and ~/.ssh/known_hosts.claude-local
+```
+
 ### Windows (elevated PowerShell)
 
 ```powershell
@@ -218,15 +295,22 @@ Remove-Item "$env:USERPROFILE\.ssh\claude-dev-tunnel-keepalive.ps1" -ErrorAction
 ## Repository layout
 
 ```
+bootstrap.sh                            platform dispatcher (detects macOS / Linux)
 bootstrap-macos.sh                      macOS bootstrap script (bash)
+bootstrap-linux.sh                      Linux bootstrap script (bash)
 bootstrap-windows.ps1                   Windows bootstrap script (PowerShell)
+server/
+  setup-server.sh                       server-side setup: connect-back key,
+                                        claude-local ssh alias, SHELL wrappers
 README.md / README.zh-CN.md             this document (English / Chinese)
 TROUBLESHOOTING.md /
   TROUBLESHOOTING.zh-CN.md              troubleshooting guide (English / Chinese)
 examples/
-  ssh_config.example                    Host block written into ~/.ssh/config
+  ssh_config.example                    Host block written into ~/.ssh/config (local)
+  server_ssh_config.example             Host block written on the server
   authorized_keys.example               authorized_keys line with the from= restriction
   sshd_config.macos.conf                macOS sshd drop-in config example
   sshd_config.windows.snippet           Windows sshd_config changes example
   com.claude.dev-tunnel.plist.example   macOS LaunchAgent example
+  claude-dev-tunnel.service.example     Linux systemd user service example
 ```

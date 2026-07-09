@@ -1,0 +1,366 @@
+#!/usr/bin/env bash
+#
+# setup-server.sh — run this ON THE REMOTE SERVER.
+#
+# Prepares the server side of the reverse SSH setup so Claude / Codex running
+# on the server can work on the LOCAL machine through the reverse tunnel:
+#
+#   1. Generates ~/.ssh/claude_to_local_ed25519 (the connect-back key) and
+#      prints its public key — paste it into the local bootstrap script.
+#   2. Writes a managed "Host claude-local" block into ~/.ssh/config that
+#      points at the reverse tunnel (127.0.0.1:<reverse_port>).
+#   3. Installs wrappers into ~/.local/bin:
+#        claude-local        open a shell / run a command on the local machine
+#        claude-local-shell  SHELL-compatible wrapper: point Claude Code /
+#                            Codex at it (SHELL=~/.local/bin/claude-local-shell)
+#                            so every Bash-tool command runs on the local
+#                            machine, optionally inside CLAUDE_LOCAL_DIR
+#        claude-local-mount  optional: mount the local project dir here via
+#                            sshfs (live mount — no mutagen-style sync needed)
+#   4. Stores defaults (local project dir) in ~/.config/claude-local/env.
+#
+# Everything is user-level: no sudo required, idempotent, safe to re-run.
+#
+# Usage:  ./setup-server.sh
+# Non-interactive overrides via env vars: REVERSE_PORT, LOCAL_USER,
+# LOCAL_PROJECT_DIR.
+
+set -euo pipefail
+
+LOCAL_ALIAS="claude-local"
+KEY_NAME="claude_to_local_ed25519"
+SSH_DIR="$HOME/.ssh"
+KEY_PATH="$SSH_DIR/$KEY_NAME"
+SSH_CONFIG="$SSH_DIR/config"
+BIN_DIR="$HOME/.local/bin"
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-local"
+CONF_FILE="$CONF_DIR/env"
+TS="$(date +%Y%m%d-%H%M%S)"
+
+BEGIN_MARK="# >>> ${LOCAL_ALIAS} (managed by reverse-ssh-bootstrap) >>>"
+END_MARK="# <<< ${LOCAL_ALIAS} <<<"
+
+log()  { printf '\033[1;32m[+]\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*"; }
+err()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; }
+die()  { err "$*"; exit 1; }
+
+ask() { # ask <prompt> [default]  -> echoes answer
+  local prompt="$1" default="${2:-}" reply
+  if [[ -n "$default" ]]; then
+    read -r -p "$prompt [$default]: " reply
+    printf '%s\n' "${reply:-$default}"
+  else
+    read -r -p "$prompt: " reply
+    printf '%s\n' "$reply"
+  fi
+}
+
+ask_yn() { # ask_yn <prompt> <Y|N>  -> exit status 0 = yes
+  local prompt="$1" default="$2" reply hint
+  hint="y/N"; [[ "$default" == "Y" ]] && hint="Y/n"
+  while true; do
+    read -r -p "$prompt [$hint]: " reply
+    reply="${reply:-$default}"
+    case "$reply" in
+      [Yy]*) return 0 ;;
+      [Nn]*) return 1 ;;
+    esac
+  done
+}
+
+cat <<'EOF'
+==========================================================
+ Reverse SSH bootstrap — SERVER side
+ Installs the claude-local alias + SHELL wrappers so agents
+ on this server can work on your local machine.
+==========================================================
+EOF
+echo
+
+# ---------------------------------------------------------------- inputs
+REVERSE_PORT="${REVERSE_PORT:-$(ask 'Reverse SSH port on this server (must match the local bootstrap)' '2222')}"
+[[ "$REVERSE_PORT" =~ ^[0-9]+$ ]] || die "Reverse port must be a number"
+LOCAL_USER="${LOCAL_USER:-$(ask 'Username on the LOCAL machine')}"
+[[ -n "$LOCAL_USER" ]] || die "Local username must not be empty"
+echo
+echo "Optional: default project directory on the LOCAL machine. When set, the"
+echo "SHELL wrapper runs every command inside it (override per-run with the"
+echo "CLAUDE_LOCAL_DIR environment variable)."
+LOCAL_PROJECT_DIR="${LOCAL_PROJECT_DIR:-$(ask 'Local project directory (empty = local home directory)' '')}"
+
+# ---------------------------------------------------------------- connect-back key
+mkdir -p "$SSH_DIR"
+chmod 700 "$SSH_DIR"
+if [[ -f "$KEY_PATH" && -f "$KEY_PATH.pub" ]]; then
+  log "Connect-back key already exists: $KEY_PATH"
+else
+  log "Generating the connect-back key: $KEY_PATH"
+  ssh-keygen -t ed25519 -f "$KEY_PATH" -N "" -C "claude-to-local" >/dev/null
+fi
+chmod 600 "$KEY_PATH"
+
+# ---------------------------------------------------------------- ~/.ssh/config
+write_ssh_config_block() {
+  local block tmp
+  block="$(cat <<EOF
+$BEGIN_MARK
+Host $LOCAL_ALIAS
+    HostName 127.0.0.1
+    Port $REVERSE_PORT
+    User $LOCAL_USER
+    IdentityFile ~/.ssh/$KEY_NAME
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    UserKnownHostsFile ~/.ssh/known_hosts.$LOCAL_ALIAS
+    ForwardAgent no
+    ServerAliveInterval 30
+    ServerAliveCountMax 3
+$END_MARK
+EOF
+)"
+  touch "$SSH_CONFIG"
+  chmod 600 "$SSH_CONFIG"
+
+  if grep -qF "$BEGIN_MARK" "$SSH_CONFIG"; then
+    if ! ask_yn "~/.ssh/config already contains a $LOCAL_ALIAS block, update it" "Y"; then
+      warn "Keeping the existing block, skipping the write"
+      return 0
+    fi
+    cp "$SSH_CONFIG" "$SSH_CONFIG.claude-bak-$TS"
+    log "Backed up ~/.ssh/config -> $SSH_CONFIG.claude-bak-$TS"
+    tmp="$(mktemp)"
+    awk -v begin="$BEGIN_MARK" -v end="$END_MARK" '
+      $0 == begin { skip = 1; next }
+      $0 == end   { skip = 0; next }
+      !skip { print }
+    ' "$SSH_CONFIG" > "$tmp"
+    cat "$tmp" > "$SSH_CONFIG"
+    rm -f "$tmp"
+  else
+    if grep -qE "^[[:space:]]*Host[[:space:]]+.*\b$LOCAL_ALIAS\b" "$SSH_CONFIG"; then
+      warn "~/.ssh/config contains a 'Host $LOCAL_ALIAS' block that is not managed by this tool."
+      warn "ssh uses first-match-wins, so the earlier block would override what this tool writes."
+      if ! ask_yn "Write the block anyway (cleaning up the old block manually is recommended)" "N"; then
+        die "Aborted. Please remove the old Host $LOCAL_ALIAS block and re-run"
+      fi
+    fi
+    cp "$SSH_CONFIG" "$SSH_CONFIG.claude-bak-$TS"
+    log "Backed up ~/.ssh/config -> $SSH_CONFIG.claude-bak-$TS"
+  fi
+
+  { [[ -s "$SSH_CONFIG" ]] && [[ "$(tail -c1 "$SSH_CONFIG")" != "" ]] && echo; printf '%s\n' "$block"; } >> "$SSH_CONFIG"
+  log "Wrote Host $LOCAL_ALIAS to ~/.ssh/config"
+}
+write_ssh_config_block
+
+# ---------------------------------------------------------------- defaults file
+mkdir -p "$CONF_DIR"
+if [[ -f "$CONF_FILE" ]]; then
+  cp "$CONF_FILE" "$CONF_FILE.claude-bak-$TS"
+fi
+cat > "$CONF_FILE" <<EOF
+# Defaults for the claude-local wrappers (managed by reverse-ssh-bootstrap).
+# Environment variables set at run time take precedence over this file.
+CLAUDE_LOCAL_HOST="$LOCAL_ALIAS"
+CLAUDE_LOCAL_DIR="$LOCAL_PROJECT_DIR"
+EOF
+log "Wrote defaults to $CONF_FILE"
+
+# ---------------------------------------------------------------- wrappers
+mkdir -p "$BIN_DIR"
+
+install_wrapper() { # install_wrapper <name>  (content on stdin)
+  local path="$BIN_DIR/$1"
+  cat > "$path"
+  chmod 755 "$path"
+  log "Installed $path"
+}
+
+install_wrapper "claude-local-shell" <<'WRAPPER'
+#!/usr/bin/env bash
+#
+# claude-local-shell — SHELL-compatible wrapper (managed by
+# reverse-ssh-bootstrap). Executes commands on the LOCAL machine through the
+# reverse SSH tunnel instead of on this server.
+#
+# Agents such as Claude Code use the SHELL environment variable for their
+# Bash tool, so pointing SHELL here makes every command run locally:
+#
+#   SHELL=~/.local/bin/claude-local-shell claude
+#
+# Configuration (env vars beat ~/.config/claude-local/env):
+#   CLAUDE_LOCAL_HOST  ssh Host alias to use            (default: claude-local)
+#   CLAUDE_LOCAL_DIR   directory on the local machine to run commands in
+#                      (default: empty = the local user's home directory)
+#
+# Invocations handled:
+#   claude-local-shell -c 'command'   run the command on the local machine
+#   claude-local-shell                interactive shell on the local machine
+
+set -u
+
+# Load defaults from the config file; environment variables take precedence.
+CONF_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/claude-local/env"
+env_host="${CLAUDE_LOCAL_HOST:-}"
+env_dir_set="${CLAUDE_LOCAL_DIR+x}"
+env_dir="${CLAUDE_LOCAL_DIR:-}"
+if [ -f "$CONF_FILE" ]; then
+  # shellcheck disable=SC1090
+  . "$CONF_FILE"
+fi
+[ -n "$env_host" ] && CLAUDE_LOCAL_HOST="$env_host"
+[ -n "$env_dir_set" ] && CLAUDE_LOCAL_DIR="$env_dir"
+TARGET="${CLAUDE_LOCAL_HOST:-claude-local}"
+DIR="${CLAUDE_LOCAL_DIR:-}"
+
+# The remote command string is interpreted by the local user's login shell,
+# so only the directory needs quoting — the command itself IS shell code.
+prefix=""
+if [ -n "$DIR" ]; then
+  qdir="$(printf '%q' "$DIR")"
+  prefix="cd $qdir && "
+fi
+
+cmd=""
+have_cmd=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -c)
+      shift
+      cmd="${1-}"
+      have_cmd=1
+      break
+      ;;
+    -l|-i|--login|--noprofile|--norc)
+      shift   # ignore login/interactive flags some callers add
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if [ "$have_cmd" -eq 1 ]; then
+  [ -n "$cmd" ] || cmd=":"   # `shell -c ''` must be a no-op, not a syntax error
+  exec ssh -q -o LogLevel=ERROR "$TARGET" "${prefix}${cmd}"
+fi
+
+# No -c: open an interactive shell on the local machine.
+if [ -n "$DIR" ]; then
+  exec ssh -t -o LogLevel=ERROR "$TARGET" "cd $qdir && exec \"\$SHELL\" -l"
+fi
+exec ssh -t -o LogLevel=ERROR "$TARGET"
+WRAPPER
+
+install_wrapper "claude-local" <<'WRAPPER'
+#!/usr/bin/env bash
+#
+# claude-local — convenience command (managed by reverse-ssh-bootstrap).
+#
+#   claude-local              interactive shell on the local machine
+#   claude-local <command>    run the command on the local machine
+#
+# Respects CLAUDE_LOCAL_HOST / CLAUDE_LOCAL_DIR like claude-local-shell.
+
+set -u
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ $# -eq 0 ]; then
+  exec "$SELF_DIR/claude-local-shell"
+fi
+exec "$SELF_DIR/claude-local-shell" -c "$*"
+WRAPPER
+
+install_wrapper "claude-local-mount" <<'WRAPPER'
+#!/usr/bin/env bash
+#
+# claude-local-mount — optional helper (managed by reverse-ssh-bootstrap).
+# Mounts the local project directory on this server via sshfs so file tools
+# (Read/Edit) see the same files that shell commands touch through
+# claude-local-shell. A live mount — no mutagen-style syncing involved.
+#
+#   claude-local-mount [mountpoint]     default: ~/claude-local-project
+#   claude-local-mount -u [mountpoint]  unmount
+#
+# Requires sshfs on this server and CLAUDE_LOCAL_DIR to be set (or configured
+# in ~/.config/claude-local/env).
+
+set -eu
+
+# Load defaults from the config file; environment variables take precedence.
+CONF_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/claude-local/env"
+env_host="${CLAUDE_LOCAL_HOST:-}"
+env_dir_set="${CLAUDE_LOCAL_DIR+x}"
+env_dir="${CLAUDE_LOCAL_DIR:-}"
+if [ -f "$CONF_FILE" ]; then
+  # shellcheck disable=SC1090
+  . "$CONF_FILE"
+fi
+[ -n "$env_host" ] && CLAUDE_LOCAL_HOST="$env_host"
+[ -n "$env_dir_set" ] && CLAUDE_LOCAL_DIR="$env_dir"
+TARGET="${CLAUDE_LOCAL_HOST:-claude-local}"
+DIR="${CLAUDE_LOCAL_DIR:-}"
+
+unmount=0
+if [ "${1:-}" = "-u" ]; then
+  unmount=1
+  shift
+fi
+MOUNTPOINT="${1:-$HOME/claude-local-project}"
+
+if [ "$unmount" -eq 1 ]; then
+  fusermount -u "$MOUNTPOINT" 2>/dev/null || umount "$MOUNTPOINT"
+  echo "Unmounted $MOUNTPOINT"
+  exit 0
+fi
+
+command -v sshfs >/dev/null || {
+  echo "sshfs is not installed on this server (e.g. apt install sshfs)" >&2
+  exit 1
+}
+[ -n "$DIR" ] || {
+  echo "CLAUDE_LOCAL_DIR is not set; set it or configure $CONF_FILE" >&2
+  exit 1
+}
+
+mkdir -p "$MOUNTPOINT"
+sshfs "$TARGET:$DIR" "$MOUNTPOINT" -o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3
+echo "Mounted $TARGET:$DIR at $MOUNTPOINT"
+echo "Unmount with: claude-local-mount -u $MOUNTPOINT"
+WRAPPER
+
+case ":$PATH:" in
+  *":$BIN_DIR:"*) ;;
+  *) warn "$BIN_DIR is not on your PATH; add it (e.g. export PATH=\"\$HOME/.local/bin:\$PATH\")" ;;
+esac
+
+# ---------------------------------------------------------------- summary
+cat <<EOF
+
+==========================================================
+ Done! Next steps
+==========================================================
+1. Paste this public key into the LOCAL bootstrap script when it asks for
+   the "server-side public key" (it adds the loopback-only restriction):
+
+$(cat "$KEY_PATH.pub")
+
+2. Start the tunnel on the LOCAL machine:
+     ssh -N claude-dev-tunnel
+
+3. Test the connect-back from this server:
+     ssh $LOCAL_ALIAS 'echo ok'
+
+4. Let agents on this server work on the local machine:
+     claude-local                          # interactive shell over there
+     claude-local git status               # run one command over there
+     SHELL=$BIN_DIR/claude-local-shell claude
+         # every Bash-tool command now runs on the local machine
+         # (in CLAUDE_LOCAL_DIR${LOCAL_PROJECT_DIR:+ = $LOCAL_PROJECT_DIR})
+
+   Note: with the SHELL wrapper, the agent's file tools (Read/Edit) still
+   operate on THIS server's filesystem. Either let the agent do file work
+   through shell commands too, or mount the local project here first:
+     claude-local-mount                    # requires sshfs
+     cd ~/claude-local-project && SHELL=$BIN_DIR/claude-local-shell claude
+EOF

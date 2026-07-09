@@ -398,6 +398,9 @@ Write-Host @"
 3. While the tunnel stays connected, Claude / Codex on the server can use:
      ssh -i ~/.ssh/claude_to_local_ed25519 -p $ReversePort $LocalUser@127.0.0.1
    (point -i at the actual private key path of the connect-back key on the server)
+
+   Tip: run server/setup-server.sh on the server to install the
+   claude-local ssh alias and the claude-local-shell SHELL wrapper.
 "@
 if ($autostart) {
     Write-Host @"

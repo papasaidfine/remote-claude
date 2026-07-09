@@ -1,0 +1,24 @@
+# Example systemd user service the Linux bootstrap installs to
+#   ~/.config/systemd/user/claude-dev-tunnel.service
+# It starts the tunnel and restarts it 15s after any exit.
+#
+# Manage it with:
+#   systemctl --user enable --now claude-dev-tunnel.service
+#   systemctl --user disable --now claude-dev-tunnel.service
+#   journalctl --user -u claude-dev-tunnel -f
+#
+# By default user services only run while you are logged in; to keep the
+# tunnel up without an active session:
+#   sudo loginctl enable-linger $USER
+
+[Unit]
+Description=claude-dev-tunnel reverse SSH tunnel
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/ssh -N -o ExitOnForwardFailure=yes claude-dev-tunnel
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=default.target

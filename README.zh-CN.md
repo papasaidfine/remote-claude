@@ -2,9 +2,12 @@
 
 [English](README.md) | 中文
 
-让远程服务器上的 Claude / Codex 通过**反向 SSH 隧道**回到你的本地电脑（Windows / macOS），在本地项目目录中进行开发。
+让远程服务器上的 Claude / Codex 通过**反向 SSH 隧道**回到你的本地电脑（Windows / macOS / Linux），在本地项目目录中进行开发。
 
-本仓库提供一个本地运行的 bootstrap 命令行工具，自动完成：本地 sshd 安装与加固、SSH key 生成、`~/.ssh/config` 写入、`authorized_keys` 写入、以及可选的 tunnel 开机自启。
+本仓库提供：
+
+- 一个本地运行的 **bootstrap 命令行工具**，自动完成：本地 sshd 安装与加固、SSH key 生成、`~/.ssh/config` 写入、`authorized_keys` 写入、以及可选的 tunnel 开机自启；
+- 一个服务器端的 **setup 脚本 + wrapper**（`server/setup-server.sh`），为服务器上的 agent 提供 `claude-local` ssh 别名和 `claude-local-shell` SHELL wrapper，让它们的 shell 命令直接在你的本地电脑上执行。
 
 ## 整体架构
 
@@ -55,14 +58,18 @@ RemoteForward 127.0.0.1:<reverse_port> 127.0.0.1:22
 
 ## 快速开始
 
-### macOS
+### macOS / Linux
 
 ```bash
-chmod +x bootstrap-macos.sh
-./bootstrap-macos.sh
+chmod +x bootstrap.sh bootstrap-macos.sh bootstrap-linux.sh
+./bootstrap.sh          # 自动检测平台并运行对应脚本
 ```
 
 脚本会交互式询问服务器地址、用户、端口、反向端口、服务器侧 public key 等，然后完成全部本地配置（系统级修改需要 sudo）。
+
+Linux 补充说明：
+- 如果你当前是通过 SSH 登录这台机器的，loopback-only 选项默认为 **No**，避免把自己锁在外面；
+- 自启动使用 systemd user service（`claude-dev-tunnel.service`）；如果希望未登录时 tunnel 也在跑，需要开启 lingering（`sudo loginctl enable-linger $USER`）。
 
 ### Windows
 
@@ -81,14 +88,15 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 
 ### 服务器侧准备
 
-1. 在服务器上为 Claude / Codex 生成反连 key（如果还没有）：
+1. 在服务器上运行 setup 脚本（纯用户级，无需 sudo）：
 
    ```bash
-   ssh-keygen -t ed25519 -f ~/.ssh/claude_to_local_ed25519 -N "" -C "claude-to-local"
-   cat ~/.ssh/claude_to_local_ed25519.pub   # 把这行粘贴给 bootstrap 工具
+   ./server/setup-server.sh
    ```
 
-2. 把 bootstrap 工具打印的**本地隧道 public key**（`claude_tunnel_ed25519.pub`）加入服务器的 `~/.ssh/authorized_keys`（工具也提供 ssh-copy-id 式的自动上传选项）。
+   它会生成反连 key `~/.ssh/claude_to_local_ed25519`、打印需要粘贴到本地 bootstrap 的公钥、在服务器的 `~/.ssh/config` 中写入 `Host claude-local` 块，并把 `claude-local*` wrapper 安装到 `~/.local/bin`（见下文"在服务器上工作"一节）。
+
+2. 把本地 bootstrap 工具打印的**本地隧道 public key**（`claude_tunnel_ed25519.pub`）加入服务器的 `~/.ssh/authorized_keys`（工具也提供 ssh-copy-id 式的自动上传选项）。
 
 ### 启动隧道
 
@@ -105,6 +113,44 @@ ssh -i ~/.ssh/claude_to_local_ed25519 -p <reverse_port> <local_user>@127.0.0.1
 ```
 
 即可回到本地电脑的 shell / 项目目录。
+
+## 在服务器上工作：claude-local wrapper
+
+`server/setup-server.sh` 会在服务器的 `~/.local/bin` 安装三个命令：
+
+| 命令 | 用途 |
+|---|---|
+| `claude-local` | 不带参数打开本地电脑的交互 shell；`claude-local <cmd>` 在本地跑一条命令 |
+| `claude-local-shell` | SHELL 兼容 wrapper（处理 `-c`），给 agent 用——见下文 |
+| `claude-local-mount` | 可选：用 sshfs 把本地项目目录挂载到服务器 |
+
+### 把 agent 的 SHELL 指向隧道
+
+Claude Code（以及大多数 agent）的 Bash 工具通过 `SHELL` 环境变量执行命令。已有一类项目利用这一点做跨机开发：把 `SHELL` 指向一个 ssh wrapper，再用 mutagen 同步文件。我们借用了 wrapper 的思路，但**不需要同步层**——因为文件在本地电脑上，命令也在本地电脑上执行：
+
+```bash
+# 在服务器上——之后 agent 的每条 Bash 命令都在本地电脑上执行，
+# 并自动进入配置好的项目目录：
+SHELL=~/.local/bin/claude-local-shell claude
+```
+
+wrapper 从 `~/.config/claude-local/env`（setup 脚本写入）读取默认值；运行时的 `CLAUDE_LOCAL_HOST` / `CLAUDE_LOCAL_DIR` 环境变量优先：
+
+```bash
+CLAUDE_LOCAL_DIR=~/projects/myapp SHELL=~/.local/bin/claude-local-shell claude
+```
+
+**注意**：只用 SHELL wrapper 时，agent 的*文件*工具（Read/Edit）操作的仍是服务器本地文件系统。两种方式保证一致性：
+
+1. 让 agent 的文件操作也走 shell 命令（`cat`、heredoc、`sed` 等）；或
+2. 先把本地项目挂载到服务器——实时挂载，不是同步：
+
+   ```bash
+   claude-local-mount                       # 需要 sshfs；默认挂载到 ~/claude-local-project
+   cd ~/claude-local-project && SHELL=~/.local/bin/claude-local-shell claude
+   # 文件工具和 shell 命令现在看到的是同一份文件
+   claude-local-mount -u                    # 用完卸载
+   ```
 
 ## Windows administrators_authorized_keys 的坑
 
@@ -164,6 +210,12 @@ ssh -i ~/.ssh/claude_to_local_ed25519 -p <reverse_port> <local_user>@127.0.0.1 '
   launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.claude.dev-tunnel.plist
   ```
 
+- Linux systemd user service：
+
+  ```bash
+  systemctl --user disable --now claude-dev-tunnel.service
+  ```
+
 - Windows 计划任务：
 
   ```powershell
@@ -198,6 +250,31 @@ launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.claude.dev-tunnel.plis
 rm -f ~/Library/LaunchAgents/com.claude.dev-tunnel.plist
 ```
 
+### Linux
+
+```bash
+# 还原 sshd 配置（drop-in 方案直接删文件即可）
+sudo rm -f /etc/ssh/sshd_config.d/100-claude-dev-tunnel.conf
+# 老系统（直接编辑主配置的情况）：
+#   sudo cp /etc/ssh/sshd_config.claude-bak-<时间戳> /etc/ssh/sshd_config
+sudo sshd -t && sudo systemctl restart sshd   # Debian/Ubuntu 上是 'ssh'
+
+# 移除自启动
+systemctl --user disable --now claude-dev-tunnel.service
+rm -f ~/.config/systemd/user/claude-dev-tunnel.service
+systemctl --user daemon-reload
+```
+
+### 服务器侧
+
+```bash
+# 移除 wrapper 和配置
+rm -f ~/.local/bin/claude-local ~/.local/bin/claude-local-shell ~/.local/bin/claude-local-mount
+rm -rf ~/.config/claude-local
+# 删除 ~/.ssh/config 中 claude-local 标记之间的块
+# 删除 ~/.ssh/claude_to_local_ed25519{,.pub} 和 ~/.ssh/known_hosts.claude-local
+```
+
 ### Windows（管理员 PowerShell）
 
 ```powershell
@@ -218,15 +295,22 @@ Remove-Item "$env:USERPROFILE\.ssh\claude-dev-tunnel-keepalive.ps1" -ErrorAction
 ## 目录结构
 
 ```
+bootstrap.sh                            平台分发入口（自动检测 macOS / Linux）
 bootstrap-macos.sh                      macOS bootstrap 脚本 (bash)
+bootstrap-linux.sh                      Linux bootstrap 脚本 (bash)
 bootstrap-windows.ps1                   Windows bootstrap 脚本 (PowerShell)
+server/
+  setup-server.sh                       服务器端 setup：反连 key、
+                                        claude-local ssh 别名、SHELL wrapper
 README.md / README.zh-CN.md             本文档（英文 / 中文）
 TROUBLESHOOTING.md /
   TROUBLESHOOTING.zh-CN.md              故障排查（英文 / 中文）
 examples/
-  ssh_config.example                    写入 ~/.ssh/config 的 Host 块示例
+  ssh_config.example                    写入本地 ~/.ssh/config 的 Host 块示例
+  server_ssh_config.example             写入服务器 ~/.ssh/config 的 Host 块示例
   authorized_keys.example               带 from= 限制的 authorized_keys 行示例
   sshd_config.macos.conf                macOS sshd drop-in 配置示例
   sshd_config.windows.snippet           Windows sshd_config 修改点示例
   com.claude.dev-tunnel.plist.example   macOS LaunchAgent 示例
+  claude-dev-tunnel.service.example     Linux systemd user service 示例
 ```
