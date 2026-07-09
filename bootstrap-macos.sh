@@ -88,35 +88,36 @@ EOF
 echo
 
 # ---------------------------------------------------------------- inputs
-SERVER_HOST="${SERVER_HOST:-$(ask '远程服务器 hostname / IP')}"
-[[ -n "$SERVER_HOST" ]] || die "服务器地址不能为空"
-SERVER_USER="${SERVER_USER:-$(ask '远程服务器 SSH 用户名')}"
-[[ -n "$SERVER_USER" ]] || die "服务器用户名不能为空"
-SERVER_PORT="${SERVER_PORT:-$(ask '远程服务器 SSH 端口' '22')}"
-REVERSE_PORT="${REVERSE_PORT:-$(ask '服务器上反向 SSH 端口 (Claude/Codex 连回本机用)' '2222')}"
-LOCAL_USER="${LOCAL_USER:-$(ask '本地用户名 (服务器侧连回来时使用)' "$USER")}"
+SERVER_HOST="${SERVER_HOST:-$(ask 'Remote server hostname / IP')}"
+[[ -n "$SERVER_HOST" ]] || die "Server hostname must not be empty"
+SERVER_USER="${SERVER_USER:-$(ask 'Remote server SSH user')}"
+[[ -n "$SERVER_USER" ]] || die "Server user must not be empty"
+SERVER_PORT="${SERVER_PORT:-$(ask 'Remote server SSH port' '22')}"
+REVERSE_PORT="${REVERSE_PORT:-$(ask 'Reverse SSH port on the server (used by Claude/Codex to connect back)' '2222')}"
+LOCAL_USER="${LOCAL_USER:-$(ask 'Local username (used when connecting back from the server)' "$USER")}"
 
-[[ "$SERVER_PORT" =~ ^[0-9]+$ ]] || die "SSH 端口必须是数字"
-[[ "$REVERSE_PORT" =~ ^[0-9]+$ ]] || die "反向端口必须是数字"
+[[ "$SERVER_PORT" =~ ^[0-9]+$ ]] || die "SSH port must be a number"
+[[ "$REVERSE_PORT" =~ ^[0-9]+$ ]] || die "Reverse port must be a number"
 
 echo
-echo "服务器侧 public key：即服务器上 Claude / Codex 用来反连本机的那把 key 的 .pub 内容"
-echo "(整行粘贴，例如 'ssh-ed25519 AAAA... comment'；留空则跳过这一步)"
-SERVER_PUBKEY="${SERVER_PUBKEY:-$(ask '服务器侧 public key' '')}"
+echo "Server-side public key: the .pub of the key that Claude / Codex on the"
+echo "server will use to SSH back into this machine."
+echo "(paste the whole line, e.g. 'ssh-ed25519 AAAA... comment'; leave empty to skip)"
+SERVER_PUBKEY="${SERVER_PUBKEY:-$(ask 'Server-side public key' '')}"
 
-if ask_yn "禁用本机 sshd 密码登录 (推荐，仅允许 public key)" "Y"; then
+if ask_yn "Disable password login for the local sshd (recommended, public key only)" "Y"; then
   DISABLE_PASSWORD=1
 else
   DISABLE_PASSWORD=0
 fi
-if ask_yn "让本机 sshd 只监听 127.0.0.1 (推荐；注意：局域网将无法直接 SSH 到本机)" "Y"; then
+if ask_yn "Make the local sshd listen on 127.0.0.1 only (recommended; note: direct SSH from the LAN will stop working)" "Y"; then
   LOOPBACK_ONLY=1
 else
   LOOPBACK_ONLY=0
 fi
 
 # ---------------------------------------------------------------- ~/.ssh
-log "准备 ~/.ssh 目录和权限"
+log "Preparing ~/.ssh directory and permissions"
 mkdir -p "$SSH_DIR"
 chmod 700 "$SSH_DIR"
 touch "$AUTH_KEYS"
@@ -124,9 +125,9 @@ chmod 600 "$AUTH_KEYS"
 
 # ---------------------------------------------------------------- local key
 if [[ -f "$KEY_PATH" && -f "$KEY_PATH.pub" ]]; then
-  log "本地隧道 key 已存在: $KEY_PATH"
+  log "Local tunnel key already exists: $KEY_PATH"
 else
-  log "生成本地连接服务器用的 SSH key: $KEY_PATH"
+  log "Generating the SSH key used to connect to the server: $KEY_PATH"
   ssh-keygen -t ed25519 -f "$KEY_PATH" -N "" -C "claude-tunnel" >/dev/null
 fi
 chmod 600 "$KEY_PATH"
@@ -138,24 +139,24 @@ add_authorized_key() {
   printf '%s\n' "$pubkey" > "$tmp"
   if ! ssh-keygen -lf "$tmp" >/dev/null 2>&1; then
     rm -f "$tmp"
-    die "粘贴的内容不是合法的 SSH public key，请检查后重新运行"
+    die "The pasted content is not a valid SSH public key; please check and re-run"
   fi
   rm -f "$tmp"
   blob="$(awk '{for (i = 1; i <= NF; i++) if ($i ~ /^AAAA/) { print $i; exit }}' <<<"$pubkey")"
-  [[ -n "$blob" ]] || die "无法从 public key 中解析 key 数据"
+  [[ -n "$blob" ]] || die "Could not parse the key data from the public key"
   if grep -qF "$blob" "$AUTH_KEYS"; then
-    log "该 public key 已在 authorized_keys 中，跳过"
+    log "This public key is already in authorized_keys, skipping"
     return 0
   fi
   printf 'from="127.0.0.1,::1",no-agent-forwarding,no-X11-forwarding %s\n' "$pubkey" >> "$AUTH_KEYS"
-  log "已写入 authorized_keys（限制为仅可从 loopback 登录）"
+  log "Written to authorized_keys (restricted to loopback logins only)"
 }
 
 if [[ -n "$SERVER_PUBKEY" ]]; then
   add_authorized_key "$SERVER_PUBKEY"
 else
-  warn "未提供服务器侧 public key。之后可将其追加到 $AUTH_KEYS，"
-  warn "建议格式: from=\"127.0.0.1,::1\",no-agent-forwarding,no-X11-forwarding <public-key>"
+  warn "No server-side public key provided. You can append it to $AUTH_KEYS later,"
+  warn "recommended format: from=\"127.0.0.1,::1\",no-agent-forwarding,no-X11-forwarding <public-key>"
 fi
 
 # ---------------------------------------------------------------- ~/.ssh/config
@@ -181,12 +182,12 @@ EOF
   chmod 600 "$SSH_CONFIG"
 
   if grep -qF "$BEGIN_MARK" "$SSH_CONFIG"; then
-    if ! ask_yn "~/.ssh/config 中已有 $TUNNEL_ALIAS 配置块，是否更新" "Y"; then
-      warn "保留现有配置块，跳过写入"
+    if ! ask_yn "~/.ssh/config already contains a $TUNNEL_ALIAS block, update it" "Y"; then
+      warn "Keeping the existing block, skipping the write"
       return 0
     fi
     cp "$SSH_CONFIG" "$SSH_CONFIG.claude-bak-$TS"
-    log "已备份 ~/.ssh/config -> $SSH_CONFIG.claude-bak-$TS"
+    log "Backed up ~/.ssh/config -> $SSH_CONFIG.claude-bak-$TS"
     tmp="$(mktemp)"
     awk -v begin="$BEGIN_MARK" -v end="$END_MARK" '
       $0 == begin { skip = 1; next }
@@ -197,40 +198,40 @@ EOF
     rm -f "$tmp"
   else
     if grep -qE "^[[:space:]]*Host[[:space:]]+.*\b$TUNNEL_ALIAS\b" "$SSH_CONFIG"; then
-      warn "~/.ssh/config 中存在非本工具管理的 'Host $TUNNEL_ALIAS' 配置块。"
-      warn "ssh 采用先到先得，靠前的旧配置会覆盖本工具写入的内容。"
-      if ! ask_yn "仍然继续写入 (建议先手动清理旧配置块)" "N"; then
-        die "已中止。请手动移除旧的 Host $TUNNEL_ALIAS 块后重新运行"
+      warn "~/.ssh/config contains a 'Host $TUNNEL_ALIAS' block that is not managed by this tool."
+      warn "ssh uses first-match-wins, so the earlier block would override what this tool writes."
+      if ! ask_yn "Write the block anyway (cleaning up the old block manually is recommended)" "N"; then
+        die "Aborted. Please remove the old Host $TUNNEL_ALIAS block and re-run"
       fi
     fi
     cp "$SSH_CONFIG" "$SSH_CONFIG.claude-bak-$TS"
-    log "已备份 ~/.ssh/config -> $SSH_CONFIG.claude-bak-$TS"
+    log "Backed up ~/.ssh/config -> $SSH_CONFIG.claude-bak-$TS"
   fi
 
   { [[ -s "$SSH_CONFIG" ]] && [[ "$(tail -c1 "$SSH_CONFIG")" != "" ]] && echo; printf '%s\n' "$block"; } >> "$SSH_CONFIG"
-  log "已写入 Host $TUNNEL_ALIAS 到 ~/.ssh/config"
+  log "Wrote Host $TUNNEL_ALIAS to ~/.ssh/config"
 }
 write_ssh_config_block
 
 # ---------------------------------------------------------------- sshd (needs sudo)
 echo
-log "接下来配置系统 sshd（需要 sudo 权限）"
+log "Configuring the system sshd next (requires sudo)"
 
 enable_remote_login() {
   local status
   status="$(sudo systemsetup -getremotelogin 2>/dev/null || true)"
   if [[ "$status" == *": On"* ]]; then
-    log "Remote Login 已开启"
+    log "Remote Login is already enabled"
     return 0
   fi
-  log "开启 Remote Login (sshd)"
+  log "Enabling Remote Login (sshd)"
   if ! sudo systemsetup -setremotelogin on 2>/dev/null; then
-    warn "systemsetup 开启失败（新版 macOS 可能需要完全磁盘访问权限）。"
-    warn "请手动开启：系统设置 -> 通用 -> 共享 -> 远程登录，然后重新运行本脚本。"
+    warn "systemsetup failed (recent macOS versions may require Full Disk Access)."
+    warn "Please enable it manually: System Settings -> General -> Sharing -> Remote Login, then re-run this script."
     return 1
   fi
 }
-enable_remote_login || die "无法开启 Remote Login"
+enable_remote_login || die "Could not enable Remote Login"
 
 configure_sshd() {
   local use_dropin=0
@@ -250,24 +251,24 @@ AuthorizedKeysFile .ssh/authorized_keys"
   fi
 
   if [[ "$use_dropin" -eq 1 ]]; then
-    log "写入 sshd drop-in 配置: $SSHD_DROPIN"
+    log "Writing sshd drop-in config: $SSHD_DROPIN"
     if [[ -f "$SSHD_DROPIN" ]]; then
       sudo cp "$SSHD_DROPIN" "$SSHD_DROPIN.claude-bak-$TS"
     fi
     printf '%s\n' "$settings" | sudo tee "$SSHD_DROPIN" >/dev/null
     if [[ "$LOOPBACK_ONLY" -eq 1 ]] && sudo grep -qE '^[[:space:]]*ListenAddress[[:space:]]' "$SSHD_CONFIG"; then
-      warn "$SSHD_CONFIG 中已有 ListenAddress 配置，ListenAddress 是累加语义，请人工确认最终监听地址"
+      warn "$SSHD_CONFIG already contains ListenAddress directives; ListenAddress is additive, please verify the final listen addresses yourself"
     fi
     if ! sudo /usr/sbin/sshd -t; then
-      err "sshd 配置校验失败，回滚 drop-in"
+      err "sshd config validation failed, rolling back the drop-in"
       sudo rm -f "$SSHD_DROPIN"
       [[ -f "$SSHD_DROPIN.claude-bak-$TS" ]] && sudo mv "$SSHD_DROPIN.claude-bak-$TS" "$SSHD_DROPIN"
-      die "sshd -t 未通过，已回滚"
+      die "sshd -t did not pass, rolled back"
     fi
   else
-    log "系统不支持 sshd_config.d，直接编辑 $SSHD_CONFIG（已备份）"
+    log "sshd_config.d is not supported on this system, editing $SSHD_CONFIG directly (backed up)"
     sudo cp "$SSHD_CONFIG" "$SSHD_CONFIG.claude-bak-$TS"
-    log "已备份 -> $SSHD_CONFIG.claude-bak-$TS"
+    log "Backed up -> $SSHD_CONFIG.claude-bak-$TS"
     set_sshd_option() { # set_sshd_option <Key> <Value>
       local key="$1" value="$2"
       if sudo grep -qE "^[#[:space:]]*${key}([[:space:]]|\$)" "$SSHD_CONFIG"; then
@@ -286,34 +287,34 @@ AuthorizedKeysFile .ssh/authorized_keys"
       set_sshd_option "ListenAddress" "127.0.0.1"
     fi
     if ! sudo /usr/sbin/sshd -t; then
-      err "sshd 配置校验失败，恢复备份"
+      err "sshd config validation failed, restoring the backup"
       sudo cp "$SSHD_CONFIG.claude-bak-$TS" "$SSHD_CONFIG"
-      die "sshd -t 未通过，已恢复原配置"
+      die "sshd -t did not pass, original config restored"
     fi
   fi
-  log "sshd 配置校验通过"
+  log "sshd config validation passed"
 
-  # macOS 的 sshd 由 launchd 按连接拉起；kickstart 让配置立即生效
+  # macOS launches sshd on demand via launchd; kickstart applies the new config now
   sudo launchctl kickstart -k system/com.openssh.sshd 2>/dev/null \
-    || warn "launchctl kickstart 失败（可忽略：macOS 会在下一次连接时使用新配置）"
-  log "sshd 已重载"
+    || warn "launchctl kickstart failed (safe to ignore: macOS will use the new config on the next connection)"
+  log "sshd reloaded"
 }
 configure_sshd
 
 # ---------------------------------------------------------------- copy key to server (optional)
 echo
-log "本地隧道 public key（需要加入服务器上 $SERVER_USER 的 ~/.ssh/authorized_keys）："
+log "Local tunnel public key (add it to ~/.ssh/authorized_keys of $SERVER_USER on the server):"
 echo
 cat "$KEY_PATH.pub"
 echo
-if ask_yn "现在通过 ssh-copy-id 自动上传到服务器 (需要输入服务器密码或已有可用认证)" "N"; then
+if ask_yn "Upload it to the server now via ssh-copy-id (needs the server password or existing working auth)" "N"; then
   ssh-copy-id -i "$KEY_PATH.pub" -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
-    || warn "ssh-copy-id 失败，请手动将上述 public key 追加到服务器的 ~/.ssh/authorized_keys"
+    || warn "ssh-copy-id failed; please append the public key above to ~/.ssh/authorized_keys on the server manually"
 fi
 
 # ---------------------------------------------------------------- LaunchAgent (optional)
 echo
-if ask_yn "安装 LaunchAgent，登录后自动拉起并保持 tunnel (可选)" "N"; then
+if ask_yn "Install a LaunchAgent to start and keep the tunnel up after login (optional)" "N"; then
   mkdir -p "$(dirname "$LAUNCH_AGENT_PLIST")" "$LOG_DIR"
   if [[ -f "$LAUNCH_AGENT_PLIST" ]]; then
     cp "$LAUNCH_AGENT_PLIST" "$LAUNCH_AGENT_PLIST.claude-bak-$TS"
@@ -349,8 +350,8 @@ EOF
   launchctl bootout "gui/$(id -u)" "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$LAUNCH_AGENT_PLIST" 2>/dev/null \
     || launchctl load -w "$LAUNCH_AGENT_PLIST"
-  log "LaunchAgent 已安装并启动: $LAUNCH_AGENT_PLIST"
-  log "日志: $LOG_DIR/$TUNNEL_ALIAS.log / $TUNNEL_ALIAS.err.log"
+  log "LaunchAgent installed and started: $LAUNCH_AGENT_PLIST"
+  log "Logs: $LOG_DIR/$TUNNEL_ALIAS.log / $TUNNEL_ALIAS.err.log"
   AUTOSTART_INSTALLED=1
 else
   AUTOSTART_INSTALLED=0
@@ -360,26 +361,27 @@ fi
 cat <<EOF
 
 ==========================================================
- 完成！后续步骤
+ Done! Next steps
 ==========================================================
-1. 确认本地隧道 public key 已加入服务器 (~$SERVER_USER/.ssh/authorized_keys)：
+1. Make sure the local tunnel public key is added on the server
+   (~$SERVER_USER/.ssh/authorized_keys):
      $KEY_PATH.pub
 
-2. 手动启动 tunnel（前台保持运行）：
+2. Start the tunnel manually (keeps running in the foreground):
      ssh -N $TUNNEL_ALIAS
 
-3. 只要 tunnel 保持连接，在远程服务器上 Claude / Codex 即可用：
+3. While the tunnel stays connected, Claude / Codex on the server can use:
      ssh -i ~/.ssh/claude_to_local_ed25519 -p $REVERSE_PORT $LOCAL_USER@127.0.0.1
-   （-i 指向服务器上那把反连 key 的私钥路径，按实际情况调整）
+   (point -i at the actual private key path of the connect-back key on the server)
 
 EOF
 if [[ "$AUTOSTART_INSTALLED" -eq 1 ]]; then
   cat <<EOF
-tunnel 已配置为登录自启（LaunchAgent）。停止方式：
+The tunnel is set to start at login (LaunchAgent). To stop it:
      launchctl bootout gui/\$(id -u) $LAUNCH_AGENT_PLIST
 EOF
 else
-  echo "如需登录自启，重新运行脚本并在 LaunchAgent 步骤选择 yes。"
+  echo "For start-at-login, re-run this script and answer yes at the LaunchAgent step."
 fi
 echo
-echo "回滚方法见 README.md 的 “删除 / 回滚” 一节。"
+echo "See the 'Removal / rollback' section of README.md for rollback instructions."

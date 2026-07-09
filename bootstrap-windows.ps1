@@ -127,66 +127,71 @@ All modified system files are backed up first.
 '@
 
 # ---------------------------------------------------------------- inputs
-if (-not $ServerHost)  { $ServerHost  = Read-Default '远程服务器 hostname / IP' }
-if (-not $ServerHost)  { Write-Err '服务器地址不能为空'; exit 1 }
-if (-not $ServerUser)  { $ServerUser  = Read-Default '远程服务器 SSH 用户名' }
-if (-not $ServerUser)  { Write-Err '服务器用户名不能为空'; exit 1 }
-if ($ServerPort -le 0) { $ServerPort  = [int](Read-Default '远程服务器 SSH 端口' '22') }
-if ($ReversePort -le 0){ $ReversePort = [int](Read-Default '服务器上反向 SSH 端口 (Claude/Codex 连回本机用)' '2222') }
-if (-not $LocalUser)   { $LocalUser   = Read-Default '本地用户名 (服务器侧连回来时使用)' $env:USERNAME }
+if (-not $ServerHost)  { $ServerHost  = Read-Default 'Remote server hostname / IP' }
+if (-not $ServerHost)  { Write-Err 'Server hostname must not be empty'; exit 1 }
+if (-not $ServerUser)  { $ServerUser  = Read-Default 'Remote server SSH user' }
+if (-not $ServerUser)  { Write-Err 'Server user must not be empty'; exit 1 }
+if ($ServerPort -le 0) { $ServerPort  = [int](Read-Default 'Remote server SSH port' '22') }
+if ($ReversePort -le 0){ $ReversePort = [int](Read-Default 'Reverse SSH port on the server (used by Claude/Codex to connect back)' '2222') }
+if (-not $LocalUser)   { $LocalUser   = Read-Default 'Local username (used when connecting back from the server)' $env:USERNAME }
 
 Write-Host ''
-Write-Host '服务器侧 public key：即服务器上 Claude / Codex 用来反连本机的那把 key 的 .pub 内容'
-Write-Host "(整行粘贴，例如 'ssh-ed25519 AAAA... comment'；留空则跳过这一步)"
-if (-not $ServerPublicKey) { $ServerPublicKey = Read-Default '服务器侧 public key' '' }
+Write-Host 'Server-side public key: the .pub of the key that Claude / Codex on the'
+Write-Host 'server will use to SSH back into this machine.'
+Write-Host "(paste the whole line, e.g. 'ssh-ed25519 AAAA... comment'; leave empty to skip)"
+if (-not $ServerPublicKey) { $ServerPublicKey = Read-Default 'Server-side public key' '' }
 
-$DisablePassword = Read-YesNo '禁用本机 sshd 密码登录 (推荐，仅允许 public key)' $true
-$LoopbackOnly    = Read-YesNo '让本机 sshd 只监听 127.0.0.1 (推荐；注意：局域网将无法直接 SSH 到本机)' $true
+$DisablePassword = Read-YesNo 'Disable password login for the local sshd (recommended, public key only)' $true
+$LoopbackOnly    = Read-YesNo 'Make the local sshd listen on 127.0.0.1 only (recommended; note: direct SSH from the LAN will stop working)' $true
 
 # ---------------------------------------------------------------- OpenSSH Server install
-Write-Info '检查 OpenSSH Server 是否已安装'
+Write-Info 'Checking whether OpenSSH Server is installed'
 $cap = Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Server*' | Select-Object -First 1
 if (-not $cap) {
-    Write-Err '未找到 OpenSSH.Server capability，请确认 Windows 10 1809+ / Windows 11。'
+    Write-Err 'OpenSSH.Server capability not found; Windows 10 1809+ / Windows 11 is required.'
     exit 1
 }
 if ($cap.State -ne 'Installed') {
-    Write-Info '安装 OpenSSH Server（可能需要几分钟）...'
+    Write-Info 'Installing OpenSSH Server (this can take a few minutes)...'
     Add-WindowsCapability -Online -Name $cap.Name | Out-Null
-    Write-Info 'OpenSSH Server 安装完成'
+    Write-Info 'OpenSSH Server installed'
 } else {
-    Write-Info 'OpenSSH Server 已安装'
+    Write-Info 'OpenSSH Server is already installed'
 }
 $clientCap = Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Client*' | Select-Object -First 1
 if ($clientCap -and $clientCap.State -ne 'Installed') {
-    Write-Info '安装 OpenSSH Client（提供 ssh / ssh-keygen）...'
+    Write-Info 'Installing OpenSSH Client (provides ssh / ssh-keygen)...'
     Add-WindowsCapability -Online -Name $clientCap.Name | Out-Null
 }
 
 # ---------------------------------------------------------------- start sshd + auto start
-# 先启动一次，让 OpenSSH 在 %ProgramData%\ssh 下生成默认 sshd_config 和主机密钥
-Write-Info '启动 sshd 服务并设置开机自启'
+# Start once first so OpenSSH generates the default sshd_config and host keys
+# under %ProgramData%\ssh
+Write-Info 'Starting the sshd service and enabling auto-start'
 Set-Service -Name sshd -StartupType Automatic
 Start-Service -Name sshd
 
 # ---------------------------------------------------------------- sshd_config
 if (-not (Test-Path $SshdConfig)) {
-    Write-Err "未找到 $SshdConfig（sshd 首次启动后应自动生成）"
+    Write-Err "$SshdConfig not found (it should be generated on the first sshd start)"
     exit 1
 }
 $backupPath = "$SshdConfig.claude-bak-$Ts"
 Copy-Item $SshdConfig $backupPath
-Write-Info "已备份 sshd_config -> $backupPath"
+Write-Info "Backed up sshd_config -> $backupPath"
 
 $raw = Get-Content -Raw $SshdConfig
 
-# 1) 注释掉 administrators_authorized_keys 的 Match 块，让管理员用户
-#    也使用自己的 %USERPROFILE%\.ssh\authorized_keys。
-#    已被注释过的行不再匹配该模式，因此重复运行是幂等的。
+# 1) Comment out the administrators_authorized_keys Match block so users in
+#    the Administrators group also use their own
+#    %USERPROFILE%\.ssh\authorized_keys.
+#    Already-commented lines no longer match the pattern, so re-runs are
+#    idempotent.
 $raw = $raw -replace '(?m)^([ \t]*Match[ \t]+Group[ \t]+administrators[ \t]*)\r?$', '# claude-bootstrap disabled: $1'
 $raw = $raw -replace '(?m)^([ \t]*AuthorizedKeysFile[ \t]+__PROGRAMDATA__[/\\]ssh[/\\]administrators_authorized_keys[ \t]*)\r?$', '# claude-bootstrap disabled: $1'
 
-# 2) 设置全局指令（只替换第一处匹配；找不到就追加到文件末尾）
+# 2) Set global directives (replace the first match only; append to the end
+#    of the file when not found)
 function Set-SshdDirective {
     param([string]$Text, [string]$Name, [string]$Value)
     $pattern = "(?m)^[#\t ]*$Name([ \t][^\r\n]*)?\r?$"
@@ -209,9 +214,10 @@ if ($LoopbackOnly) {
 
 [System.IO.File]::WriteAllText($SshdConfig, $raw)
 
-Write-Info '校验 sshd 配置 (sshd -t)'
-# sshd -t 的报错走 stderr；在 EAP=Stop 下 2>&1 会把 stderr 包装成异常
-# (PS 5.1 NativeCommandError)，所以校验期间临时放宽，确保失败时能恢复备份
+Write-Info 'Validating the sshd config (sshd -t)'
+# sshd -t reports errors on stderr; with EAP=Stop, 2>&1 wraps stderr into an
+# exception (PS 5.1 NativeCommandError), so relax it during validation to make
+# sure the backup gets restored on failure
 $prevEap = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 $sshdCheck = & $SshdExe -t 2>&1
@@ -219,15 +225,15 @@ $sshdCheckCode = $LASTEXITCODE
 $ErrorActionPreference = $prevEap
 $sshdCheck | ForEach-Object { Write-Host "    $_" }
 if ($sshdCheckCode -ne 0) {
-    Write-Err 'sshd 配置校验失败，恢复备份'
+    Write-Err 'sshd config validation failed, restoring the backup'
     Copy-Item $backupPath $SshdConfig -Force
     exit 1
 }
-Write-Info '配置校验通过，重启 sshd'
+Write-Info 'Config validation passed, restarting sshd'
 Restart-Service -Name sshd
 
 # ---------------------------------------------------------------- ~/.ssh + ACL
-Write-Info '准备 %USERPROFILE%\.ssh 目录并收紧 ACL'
+Write-Info 'Preparing %USERPROFILE%\.ssh and tightening its ACLs'
 if (-not (Test-Path $SshDir)) { New-Item -ItemType Directory -Path $SshDir | Out-Null }
 if (-not (Test-Path $AuthKeys)) { New-Item -ItemType File -Path $AuthKeys | Out-Null }
 Set-StrictAcl -Path $SshDir -Directory
@@ -244,34 +250,34 @@ if ($ServerPublicKey) {
         $keyCheckCode = $LASTEXITCODE
         $ErrorActionPreference = $prevEap
         if ($keyCheckCode -ne 0) {
-            Write-Err '粘贴的内容不是合法的 SSH public key，请检查后重新运行'
+            Write-Err 'The pasted content is not a valid SSH public key; please check and re-run'
             exit 1
         }
     } finally {
         Remove-Item $tmp -ErrorAction SilentlyContinue
     }
     $blob = ($ServerPublicKey -split '\s+' | Where-Object { $_ -like 'AAAA*' } | Select-Object -First 1)
-    if (-not $blob) { Write-Err '无法从 public key 中解析 key 数据'; exit 1 }
+    if (-not $blob) { Write-Err 'Could not parse the key data from the public key'; exit 1 }
     $existing = Get-Content -Raw $AuthKeys -ErrorAction SilentlyContinue
     if ($existing -and $existing.Contains($blob)) {
-        Write-Info '该 public key 已在 authorized_keys 中，跳过'
+        Write-Info 'This public key is already in authorized_keys, skipping'
     } else {
         $entry = "from=`"127.0.0.1,::1`",no-agent-forwarding,no-X11-forwarding $ServerPublicKey"
         Add-Content -Path $AuthKeys -Value $entry -Encoding ascii
-        Write-Info '已写入 authorized_keys（限制为仅可从 loopback 登录）'
+        Write-Info 'Written to authorized_keys (restricted to loopback logins only)'
     }
 } else {
-    Write-Warn "未提供服务器侧 public key。之后可将其追加到 $AuthKeys，"
-    Write-Warn '建议格式: from="127.0.0.1,::1",no-agent-forwarding,no-X11-forwarding <public-key>'
+    Write-Warn "No server-side public key provided. You can append it to $AuthKeys later,"
+    Write-Warn 'recommended format: from="127.0.0.1,::1",no-agent-forwarding,no-X11-forwarding <public-key>'
 }
 
 # ---------------------------------------------------------------- local tunnel key
 if ((Test-Path $KeyPath) -and (Test-Path "$KeyPath.pub")) {
-    Write-Info "本地隧道 key 已存在: $KeyPath"
+    Write-Info "Local tunnel key already exists: $KeyPath"
 } else {
-    Write-Info "生成本地连接服务器用的 SSH key: $KeyPath"
+    Write-Info "Generating the SSH key used to connect to the server: $KeyPath"
     & $SshKeygenExe -t ed25519 -f $KeyPath -N '""' -C 'claude-tunnel' | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-Err 'ssh-keygen 失败'; exit 1 }
+    if ($LASTEXITCODE -ne 0) { Write-Err 'ssh-keygen failed'; exit 1 }
 }
 Set-StrictAcl -Path $KeyPath
 
@@ -298,27 +304,27 @@ if ($null -eq $configRaw) { $configRaw = '' }
 
 $writeBlock = $true
 if ($configRaw.Contains($BeginMark)) {
-    if (Read-YesNo "~\.ssh\config 中已有 $TunnelAlias 配置块，是否更新" $true) {
+    if (Read-YesNo "~\.ssh\config already contains a $TunnelAlias block, update it" $true) {
         Copy-Item $SshConfig "$SshConfig.claude-bak-$Ts"
-        Write-Info "已备份 ssh config -> $SshConfig.claude-bak-$Ts"
+        Write-Info "Backed up ssh config -> $SshConfig.claude-bak-$Ts"
         $escBegin = [regex]::Escape($BeginMark)
         $escEnd   = [regex]::Escape($EndMark)
         $configRaw = [regex]::Replace($configRaw, "(?s)$escBegin.*?$escEnd(\r?\n)?", '')
     } else {
-        Write-Warn '保留现有配置块，跳过写入'
+        Write-Warn 'Keeping the existing block, skipping the write'
         $writeBlock = $false
     }
 } else {
     if ($configRaw -match "(?m)^\s*Host\s+.*\b$TunnelAlias\b") {
-        Write-Warn "~\.ssh\config 中存在非本工具管理的 'Host $TunnelAlias' 配置块。"
-        Write-Warn 'ssh 采用先到先得，靠前的旧配置会覆盖本工具写入的内容。'
-        if (-not (Read-YesNo '仍然继续写入 (建议先手动清理旧配置块)' $false)) {
-            Write-Err "已中止。请手动移除旧的 Host $TunnelAlias 块后重新运行"
+        Write-Warn "~\.ssh\config contains a 'Host $TunnelAlias' block that is not managed by this tool."
+        Write-Warn 'ssh uses first-match-wins, so the earlier block would override what this tool writes.'
+        if (-not (Read-YesNo 'Write the block anyway (cleaning up the old block manually is recommended)' $false)) {
+            Write-Err "Aborted. Please remove the old Host $TunnelAlias block and re-run"
             exit 1
         }
     }
     Copy-Item $SshConfig "$SshConfig.claude-bak-$Ts"
-    Write-Info "已备份 ssh config -> $SshConfig.claude-bak-$Ts"
+    Write-Info "Backed up ssh config -> $SshConfig.claude-bak-$Ts"
 }
 
 if ($writeBlock) {
@@ -326,29 +332,29 @@ if ($writeBlock) {
     if ($configRaw) { $configRaw += "`r`n`r`n" }
     $configRaw += $configBlock.Replace("`r`n", "`n").Replace("`n", "`r`n") + "`r`n"
     [System.IO.File]::WriteAllText($SshConfig, $configRaw)
-    Write-Info "已写入 Host $TunnelAlias 到 $SshConfig"
+    Write-Info "Wrote Host $TunnelAlias to $SshConfig"
 }
 Set-StrictAcl -Path $SshConfig
 
 # ---------------------------------------------------------------- copy key to server (optional)
 Write-Host ''
-Write-Info "本地隧道 public key（需要加入服务器上 $ServerUser 的 ~/.ssh/authorized_keys）："
+Write-Info "Local tunnel public key (add it to ~/.ssh/authorized_keys of $ServerUser on the server):"
 Write-Host ''
 Get-Content "$KeyPath.pub" | Write-Host
 Write-Host ''
-if (Read-YesNo '现在自动上传到服务器 (相当于 ssh-copy-id，需要输入服务器密码或已有可用认证)' $false) {
+if (Read-YesNo 'Upload it to the server now (ssh-copy-id equivalent, needs the server password or existing working auth)' $false) {
     $pub = (Get-Content "$KeyPath.pub" -Raw).Trim()
     $remoteCmd = "mkdir -p ~/.ssh && chmod 700 ~/.ssh && grep -qF '$pub' ~/.ssh/authorized_keys 2>/dev/null || echo '$pub' >> ~/.ssh/authorized_keys; chmod 600 ~/.ssh/authorized_keys"
     & $SshExe -p $ServerPort "$ServerUser@$ServerHost" $remoteCmd
-    if ($LASTEXITCODE -eq 0) { Write-Info '已上传' }
-    else { Write-Warn '上传失败，请手动将上述 public key 追加到服务器的 ~/.ssh/authorized_keys' }
+    if ($LASTEXITCODE -eq 0) { Write-Info 'Uploaded' }
+    else { Write-Warn 'Upload failed; please append the public key above to ~/.ssh/authorized_keys on the server manually' }
 }
 
 # ---------------------------------------------------------------- Scheduled Task (optional)
 Write-Host ''
-$autostart = Read-YesNo '注册计划任务，登录后自动拉起并保持 tunnel (可选)' $false
+$autostart = Read-YesNo 'Register a Scheduled Task to start and keep the tunnel up after logon (optional)' $false
 if ($autostart) {
-    # keepalive 脚本：ssh 断开后等待 15 秒自动重连
+    # keepalive script: reconnect 15 seconds after ssh exits
     $keepAlive = @"
 `$ssh = '$SshExe'
 while (`$true) {
@@ -369,10 +375,10 @@ while (`$true) {
         -RestartCount 10 -RestartInterval (New-TimeSpan -Minutes 1)
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
         -Settings $settings -Description 'Keep the claude-dev-tunnel reverse SSH tunnel alive' -Force | Out-Null
-    Write-Info "计划任务已注册: $TaskName（下次登录自动启动）"
-    if (Read-YesNo '现在就启动计划任务' $true) {
+    Write-Info "Scheduled Task registered: $TaskName (starts automatically at next logon)"
+    if (Read-YesNo 'Start the Scheduled Task now' $true) {
         Start-ScheduledTask -TaskName $TaskName
-        Write-Info '计划任务已启动'
+        Write-Info 'Scheduled Task started'
     }
 }
 
@@ -380,26 +386,27 @@ while (`$true) {
 Write-Host @"
 
 ==========================================================
- 完成！后续步骤
+ Done! Next steps
 ==========================================================
-1. 确认本地隧道 public key 已加入服务器 (~$ServerUser/.ssh/authorized_keys)：
+1. Make sure the local tunnel public key is added on the server
+   (~$ServerUser/.ssh/authorized_keys):
      $KeyPath.pub
 
-2. 手动启动 tunnel（前台保持运行）：
+2. Start the tunnel manually (keeps running in the foreground):
      ssh -N $TunnelAlias
 
-3. 只要 tunnel 保持连接，在远程服务器上 Claude / Codex 即可用：
+3. While the tunnel stays connected, Claude / Codex on the server can use:
      ssh -i ~/.ssh/claude_to_local_ed25519 -p $ReversePort $LocalUser@127.0.0.1
-   （-i 指向服务器上那把反连 key 的私钥路径，按实际情况调整）
+   (point -i at the actual private key path of the connect-back key on the server)
 "@
 if ($autostart) {
     Write-Host @"
-tunnel 已配置为登录自启（计划任务 $TaskName）。停止方式：
+The tunnel is set to start at logon (Scheduled Task $TaskName). To stop it:
      Stop-ScheduledTask -TaskName $TaskName
      Unregister-ScheduledTask -TaskName $TaskName -Confirm:`$false
 "@
 } else {
-    Write-Host '如需登录自启，重新运行脚本并在计划任务步骤选择 yes。'
+    Write-Host 'For start-at-logon, re-run this script and answer yes at the Scheduled Task step.'
 }
 Write-Host ''
-Write-Host '回滚方法见 README.md 的 “删除 / 回滚” 一节。'
+Write-Host "See the 'Removal / rollback' section of README.md for rollback instructions."

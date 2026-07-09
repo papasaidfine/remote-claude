@@ -1,57 +1,59 @@
 # reverse-ssh-bootstrap
 
-让远程服务器上的 Claude / Codex 通过**反向 SSH 隧道**回到你的本地电脑（Windows / macOS），在本地项目目录中进行开发。
+English | [中文](README.zh-CN.md)
 
-本仓库提供一个本地运行的 bootstrap 命令行工具，自动完成：本地 sshd 安装与加固、SSH key 生成、`~/.ssh/config` 写入、`authorized_keys` 写入、以及可选的 tunnel 开机自启。
+Let Claude / Codex running on a remote server SSH back into your local machine (Windows / macOS) through a **reverse SSH tunnel** and develop inside your local project directory.
 
-## 整体架构
+This repo provides a locally-run bootstrap CLI tool that automates: local sshd installation and hardening, SSH key generation, `~/.ssh/config` writing, `authorized_keys` writing, and optional start-at-login for the tunnel.
+
+## Architecture
 
 ```
 ┌──────────────┐   ① ssh -N claude-dev-tunnel    ┌──────────────┐
-│  本地电脑     │ ───────────────────────────────▶ │  远程服务器   │
+│  local PC    │ ───────────────────────────────▶ │ remote server│
 │ (Win / mac)  │                                  │              │
-│              │   ② RemoteForward 反向隧道        │              │
+│              │   ② RemoteForward reverse tunnel │              │
 │ 127.0.0.1:22 │ ◀─────────────────────────────── │ 127.0.0.1:   │
-│  (本地 sshd)  │                                  │ <reverse_port>│
+│ (local sshd) │                                  │ <reverse_port>│
 └──────────────┘                                  └──────┬───────┘
                                                          │ ③ Claude / Codex:
                                                          │ ssh -p <reverse_port>
                                                          │     <local_user>@127.0.0.1
 ```
 
-1. 本地电脑主动 SSH 到远程服务器，并带上 `RemoteForward`；
-2. 服务器上的 `127.0.0.1:<reverse_port>` 被转发到本地电脑的 `127.0.0.1:22`；
-3. 服务器上的 Claude / Codex 通过 `ssh -p <reverse_port> <local_user>@127.0.0.1` 反连回本地电脑。
+1. The local machine SSHes to the remote server with a `RemoteForward`;
+2. `127.0.0.1:<reverse_port>` on the server is forwarded to `127.0.0.1:22` on the local machine;
+3. Claude / Codex on the server connects back with `ssh -p <reverse_port> <local_user>@127.0.0.1`.
 
-因为两端都只绑定 `127.0.0.1`，隧道两侧都不会暴露到局域网或公网。
+Because both ends bind `127.0.0.1` only, neither side of the tunnel is exposed to the LAN or the internet.
 
-## 什么是 RemoteForward
+## What RemoteForward means
 
-`~/.ssh/config` 中的这一行：
+This line in `~/.ssh/config`:
 
 ```
 RemoteForward 127.0.0.1:<reverse_port> 127.0.0.1:22
 ```
 
-含义是：在**远程服务器**上监听 `127.0.0.1:<reverse_port>`；任何连到这个端口的连接，都会经由这条 SSH 连接转发到**本地电脑**的 `127.0.0.1:22`（本地 sshd）。
+means: listen on `127.0.0.1:<reverse_port>` **on the remote server**; any connection to that port is forwarded over this SSH connection to `127.0.0.1:22` on the **local machine** (the local sshd).
 
-- 第一段地址是服务器侧的监听地址，**必须**写成 `127.0.0.1:<port>`，否则可能受服务器 `GatewayPorts` 配置影响暴露到公网；
-- 第二段地址是本地侧的目标地址，指向本地 sshd。
+- The first address is the server-side listen address. It **must** be `127.0.0.1:<port>`, otherwise the reverse port could be exposed publicly depending on the server's `GatewayPorts` setting;
+- The second address is the local-side target, pointing at the local sshd.
 
-只要 `ssh -N claude-dev-tunnel` 这条连接保持存活，反向通道就一直有效。
+The reverse channel stays available for as long as the `ssh -N claude-dev-tunnel` connection is alive.
 
-## 为什么需要两组 SSH key
+## Why two SSH key pairs
 
-方向不同，信任关系不同，所以是两把互不相关的 key：
+Different directions, different trust relationships — so two unrelated keys:
 
-| Key | 位置 | 用途 |
+| Key | Lives on | Purpose |
 |---|---|---|
-| `~/.ssh/claude_tunnel_ed25519` | **本地电脑** | 本地 → 服务器，用来建立隧道。它的 `.pub` 要加到**服务器**的 `~/.ssh/authorized_keys` |
-| `~/.ssh/claude_to_local_ed25519`（名字随意） | **远程服务器** | 服务器上的 Claude / Codex → 本地电脑（走隧道）。它的 `.pub` 要加到**本地电脑**的 `~/.ssh/authorized_keys`（bootstrap 工具会帮你写入） |
+| `~/.ssh/claude_tunnel_ed25519` | **local machine** | local → server, establishes the tunnel. Its `.pub` goes into the **server's** `~/.ssh/authorized_keys` |
+| `~/.ssh/claude_to_local_ed25519` (name is up to you) | **remote server** | Claude / Codex on the server → local machine (through the tunnel). Its `.pub` goes into the **local machine's** `~/.ssh/authorized_keys` (the bootstrap tool writes it for you) |
 
-不要复用同一把 key：本地 key 泄漏不应等价于"任何人可以登录你的电脑"，反之亦然。私钥永远不离开它所在的机器。
+Do not reuse one key for both: a leaked local key should not mean "anyone can log into your computer", and vice versa. Private keys never leave the machine they were created on.
 
-## 快速开始
+## Quick start
 
 ### macOS
 
@@ -60,170 +62,171 @@ chmod +x bootstrap-macos.sh
 ./bootstrap-macos.sh
 ```
 
-脚本会交互式询问服务器地址、用户、端口、反向端口、服务器侧 public key 等，然后完成全部本地配置（系统级修改需要 sudo）。
+The script interactively asks for the server address, user, port, reverse port, the server-side public key, etc., then performs all local configuration (system-level changes require sudo).
 
 ### Windows
 
-以**管理员身份**打开 PowerShell：
+Open PowerShell **as Administrator**:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass -Force
 .\bootstrap-windows.ps1
 ```
 
-也支持参数化调用（跳过对应交互）：
+Parameters are also supported (skips the corresponding prompts):
 
 ```powershell
 .\bootstrap-windows.ps1 -ServerHost 1.2.3.4 -ServerUser dev -ServerPort 22 -ReversePort 2222
 ```
 
-### 服务器侧准备
+### Server-side preparation
 
-1. 在服务器上为 Claude / Codex 生成反连 key（如果还没有）：
+1. Generate the connect-back key for Claude / Codex on the server (if you don't have one yet):
 
    ```bash
    ssh-keygen -t ed25519 -f ~/.ssh/claude_to_local_ed25519 -N "" -C "claude-to-local"
-   cat ~/.ssh/claude_to_local_ed25519.pub   # 把这行粘贴给 bootstrap 工具
+   cat ~/.ssh/claude_to_local_ed25519.pub   # paste this line into the bootstrap tool
    ```
 
-2. 把 bootstrap 工具打印的**本地隧道 public key**（`claude_tunnel_ed25519.pub`）加入服务器的 `~/.ssh/authorized_keys`（工具也提供 ssh-copy-id 式的自动上传选项）。
+2. Add the **local tunnel public key** printed by the bootstrap tool (`claude_tunnel_ed25519.pub`) to the server's `~/.ssh/authorized_keys` (the tool also offers an ssh-copy-id-style automatic upload).
 
-### 启动隧道
+### Start the tunnel
 
-在本地电脑上：
+On the local machine:
 
 ```bash
 ssh -N claude-dev-tunnel
 ```
 
-保持这条连接，然后在服务器上（Claude / Codex 执行）：
+Keep that connection alive, then on the server (run by Claude / Codex):
 
 ```bash
 ssh -i ~/.ssh/claude_to_local_ed25519 -p <reverse_port> <local_user>@127.0.0.1
 ```
 
-即可回到本地电脑的 shell / 项目目录。
+and you're back in a shell / project directory on the local machine.
 
-## Windows administrators_authorized_keys 的坑
+## The Windows administrators_authorized_keys pitfall
 
-Windows OpenSSH Server 的默认 `sshd_config` 末尾有：
+The default Windows OpenSSH Server `sshd_config` ends with:
 
 ```
 Match Group administrators
        AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys
 ```
 
-这段配置的效果是：**只要当前用户属于 Administrators 组**，sshd 就不看 `%USERPROFILE%\.ssh\authorized_keys`，而是只看全局的 `%ProgramData%\ssh\administrators_authorized_keys`。很多"key 加了却 Permission denied"的问题就来自这里。
+Effect: **whenever the current user belongs to the Administrators group**, sshd ignores `%USERPROFILE%\.ssh\authorized_keys` and only consults the global `%ProgramData%\ssh\administrators_authorized_keys`. A lot of "I added the key but still get Permission denied" cases come from exactly this.
 
-bootstrap 工具的处理方式：把这两行加上 `# claude-bootstrap disabled:` 前缀注释掉，使管理员用户也回到标准的 `.ssh/authorized_keys` 路径。修改前会备份 `sshd_config`，修改后先 `sshd -t` 校验再重启服务；重复运行是幂等的（已注释的行不会被二次处理）。
+How the bootstrap tool handles it: it comments out those two lines with a `# claude-bootstrap disabled:` prefix, so administrator users fall back to the standard `.ssh/authorized_keys` path. The `sshd_config` is backed up before the change, validated with `sshd -t` afterwards, and only then is the service restarted; re-runs are idempotent (already-commented lines are not processed again).
 
-## 工具做的安全加固
+## Security hardening applied by the tool
 
-- 服务器侧反向端口只监听 `127.0.0.1`（`RemoteForward 127.0.0.1:<port> ...`）；
-- 本地 sshd 默认只监听 `127.0.0.1`（可选，交互中可关闭）；
-- 默认禁用密码登录，仅允许 public key（可选）；
-- 写入 `authorized_keys` 的服务器侧 key 带限制前缀：
+- The server-side reverse port only listens on `127.0.0.1` (`RemoteForward 127.0.0.1:<port> ...`);
+- The local sshd listens on `127.0.0.1` only by default (optional, can be turned off interactively);
+- Password login is disabled by default, public key only (optional);
+- The server-side key written into `authorized_keys` carries a restriction prefix:
 
   ```
   from="127.0.0.1,::1",no-agent-forwarding,no-X11-forwarding ssh-ed25519 AAAA...
   ```
 
-  即这把 key **只能**通过反向隧道从本机 loopback 登录，从局域网/公网直接拿着私钥也登不进来；
-- 不开启 agent forwarding（`ForwardAgent no`）；
-- 所有被修改的系统文件先备份（`*.claude-bak-<时间戳>`）；
-- 私钥从不打印到终端或日志。
+  i.e. this key can **only** log in from local loopback through the reverse tunnel — holding the private key on the LAN / internet is not enough to log in directly;
+- No agent forwarding (`ForwardAgent no`);
+- Every modified system file is backed up first (`*.claude-bak-<timestamp>`);
+- Private keys are never printed to the terminal or written to logs.
 
-## 手动测试
+## Manual testing
 
-按顺序验证，出问题时能快速定位在哪一跳：
+Verify hop by hop so problems can be localized quickly:
 
 ```bash
-# 1. 本地 -> 服务器（隧道那一跳）能通
+# 1. local -> server (the tunnel hop) works
 ssh -i ~/.ssh/claude_tunnel_ed25519 -p <server_port> <server_user>@<server_host> 'echo ok'
 
-# 2. 本地 sshd 正常（在本地电脑上自测回环登录）
+# 2. the local sshd works (loopback self-test on the local machine)
 ssh -p 22 <local_user>@127.0.0.1 'echo ok'
 
-# 3. 建立隧道（加 -v 看 RemoteForward 是否成功）
+# 3. establish the tunnel (-v shows whether the RemoteForward succeeded)
 ssh -v -N claude-dev-tunnel
 
-# 4. 在服务器上测反连
+# 4. test the connect-back from the server
 ssh -i ~/.ssh/claude_to_local_ed25519 -p <reverse_port> <local_user>@127.0.0.1 'echo ok'
 ```
 
-更多排查见 [TROUBLESHOOTING.md](TROUBLESHOOTING.md)。
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for more.
 
-## 如何停止 tunnel
+## Stopping the tunnel
 
-- 前台运行的：`Ctrl-C` 即可；
-- macOS LaunchAgent：
+- Foreground run: just `Ctrl-C`;
+- macOS LaunchAgent:
 
   ```bash
   launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.claude.dev-tunnel.plist
   ```
 
-- Windows 计划任务：
+- Windows Scheduled Task:
 
   ```powershell
   Stop-ScheduledTask -TaskName ClaudeDevTunnel
-  Get-Process ssh -ErrorAction SilentlyContinue | Stop-Process   # 结束残留 ssh 进程
+  Get-Process ssh -ErrorAction SilentlyContinue | Stop-Process   # kill leftover ssh processes
   ```
 
-## 删除 / 回滚
+## Removal / rollback
 
-所有修改都可以逐项撤销：
+Every change can be undone individually:
 
-### 通用（两个平台）
+### Common (both platforms)
 
-1. **`~/.ssh/config`**：删除 `# >>> claude-dev-tunnel ... # <<< claude-dev-tunnel <<<` 标记之间的整块；或直接用备份 `~/.ssh/config.claude-bak-<时间戳>` 覆盖回去。
-2. **`~/.ssh/authorized_keys`**：删除以 `from="127.0.0.1,::1",no-agent-forwarding,no-X11-forwarding` 开头、对应服务器侧 key 的那一行。
-3. **本地隧道 key**：删除 `~/.ssh/claude_tunnel_ed25519{,.pub}`，并从服务器的 `~/.ssh/authorized_keys` 移除对应公钥。
+1. **`~/.ssh/config`**: delete the whole block between the `# >>> claude-dev-tunnel ... # <<< claude-dev-tunnel <<<` markers; or restore the backup `~/.ssh/config.claude-bak-<timestamp>`.
+2. **`~/.ssh/authorized_keys`**: delete the line starting with `from="127.0.0.1,::1",no-agent-forwarding,no-X11-forwarding` that carries the server-side key.
+3. **Local tunnel key**: delete `~/.ssh/claude_tunnel_ed25519{,.pub}` and remove the corresponding public key from the server's `~/.ssh/authorized_keys`.
 
 ### macOS
 
 ```bash
-# 还原 sshd 配置（drop-in 方案直接删文件即可）
+# restore the sshd config (with the drop-in approach, deleting the file is enough)
 sudo rm -f /etc/ssh/sshd_config.d/100-claude-dev-tunnel.conf
-# 老系统（直接编辑主配置的情况）：
-#   sudo cp /etc/ssh/sshd_config.claude-bak-<时间戳> /etc/ssh/sshd_config
+# older systems (where the main config was edited directly):
+#   sudo cp /etc/ssh/sshd_config.claude-bak-<timestamp> /etc/ssh/sshd_config
 sudo /usr/sbin/sshd -t && sudo launchctl kickstart -k system/com.openssh.sshd
 
-# 关闭 Remote Login（如果之前是关的）
+# turn Remote Login off (if it was off before)
 sudo systemsetup -setremotelogin off
 
-# 移除自启动
+# remove the autostart
 launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.claude.dev-tunnel.plist
 rm -f ~/Library/LaunchAgents/com.claude.dev-tunnel.plist
 ```
 
-### Windows（管理员 PowerShell）
+### Windows (elevated PowerShell)
 
 ```powershell
-# 还原 sshd 配置
-Copy-Item "$env:ProgramData\ssh\sshd_config.claude-bak-<时间戳>" "$env:ProgramData\ssh\sshd_config" -Force
+# restore the sshd config
+Copy-Item "$env:ProgramData\ssh\sshd_config.claude-bak-<timestamp>" "$env:ProgramData\ssh\sshd_config" -Force
 Restart-Service sshd
 
-# 如果想完全停用 / 卸载 sshd
+# to fully disable / uninstall sshd
 Stop-Service sshd
 Set-Service sshd -StartupType Disabled
 # Remove-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
 
-# 移除自启动
+# remove the autostart
 Unregister-ScheduledTask -TaskName ClaudeDevTunnel -Confirm:$false
 Remove-Item "$env:USERPROFILE\.ssh\claude-dev-tunnel-keepalive.ps1" -ErrorAction SilentlyContinue
 ```
 
-## 目录结构
+## Repository layout
 
 ```
-bootstrap-macos.sh                      macOS bootstrap 脚本 (bash)
-bootstrap-windows.ps1                   Windows bootstrap 脚本 (PowerShell)
-README.md                               本文档
-TROUBLESHOOTING.md                      故障排查
+bootstrap-macos.sh                      macOS bootstrap script (bash)
+bootstrap-windows.ps1                   Windows bootstrap script (PowerShell)
+README.md / README.zh-CN.md             this document (English / Chinese)
+TROUBLESHOOTING.md /
+  TROUBLESHOOTING.zh-CN.md              troubleshooting guide (English / Chinese)
 examples/
-  ssh_config.example                    写入 ~/.ssh/config 的 Host 块示例
-  authorized_keys.example               带 from= 限制的 authorized_keys 行示例
-  sshd_config.macos.conf                macOS sshd drop-in 配置示例
-  sshd_config.windows.snippet           Windows sshd_config 修改点示例
-  com.claude.dev-tunnel.plist.example   macOS LaunchAgent 示例
+  ssh_config.example                    Host block written into ~/.ssh/config
+  authorized_keys.example               authorized_keys line with the from= restriction
+  sshd_config.macos.conf                macOS sshd drop-in config example
+  sshd_config.windows.snippet           Windows sshd_config changes example
+  com.claude.dev-tunnel.plist.example   macOS LaunchAgent example
 ```
