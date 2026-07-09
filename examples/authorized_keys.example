@@ -1,0 +1,14 @@
+# Example line the bootstrap tool appends to the LOCAL machine's
+# ~/.ssh/authorized_keys (Windows: %USERPROFILE%\.ssh\authorized_keys).
+#
+# This is the public key of the key pair that lives ON THE SERVER and that
+# Claude / Codex uses to SSH back into the local machine through the tunnel.
+#
+# The options restrict what this key can do:
+#   from="127.0.0.1,::1"   only accepted when the connection arrives from
+#                          loopback, i.e. only through the reverse tunnel —
+#                          never directly from LAN / internet
+#   no-agent-forwarding    no SSH agent forwarding
+#   no-X11-forwarding      no X11 forwarding
+
+from="127.0.0.1,::1",no-agent-forwarding,no-X11-forwarding ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExampl claude-to-local

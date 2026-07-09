@@ -1,0 +1,24 @@
+# Example of the managed block that the bootstrap tool writes into
+# ~/.ssh/config (Windows: %USERPROFILE%\.ssh\config).
+#
+# The >>> / <<< markers are how the tool finds and updates its own block on
+# re-runs — keep them if you edit the block by hand.
+
+# >>> claude-dev-tunnel (managed by reverse-ssh-bootstrap) >>>
+Host claude-dev-tunnel
+    HostName server.example.com
+    User devuser
+    Port 22
+    IdentityFile ~/.ssh/claude_tunnel_ed25519
+    IdentitiesOnly yes
+    # Reverse tunnel: server 127.0.0.1:2222 -> local 127.0.0.1:22.
+    # The first address MUST be 127.0.0.1:<port> so the reverse port is
+    # never exposed beyond the server's loopback.
+    RemoteForward 127.0.0.1:2222 127.0.0.1:22
+    # Exit instead of silently running without the forward if the port is taken.
+    ExitOnForwardFailure yes
+    # Detect dead connections within ~90s so auto-restart can reconnect.
+    ServerAliveInterval 30
+    ServerAliveCountMax 3
+    ForwardAgent no
+# <<< claude-dev-tunnel <<<
