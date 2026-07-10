@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-让远程服务器上的 Claude / Codex 通过反向 SSH 隧道回到你的本地电脑（Windows / macOS / Linux），在本地项目目录中干活。全程只走 `127.0.0.1`，不暴露到局域网或公网。
+让远程服务器上的 Claude / Codex 通过反向 SSH 隧道回到你的本地电脑（Windows / macOS / Linux），在本地项目目录中干活。隧道两端都只绑定 `127.0.0.1`——反向端口绝不暴露到局域网或公网，服务器侧的 key 也只能通过隧道使用。
 
 ```
 你（本地）        : ssh -N remote-claude        （保持运行）

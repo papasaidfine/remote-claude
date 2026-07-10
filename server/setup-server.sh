@@ -16,9 +16,6 @@
 #      round-trips or an sshfs mount. Seeds an agent-maintained "my-device
 #      facts" section (OS, one line per project, mount mappings) so new
 #      sessions do not rediscover them.
-#   4. Retires what earlier versions installed (~/.local/bin wrappers and
-#      the ~/.config/claude-local/env defaults file) — the facts section
-#      replaced them.
 #
 # Everything is user-level: no sudo required, idempotent, safe to re-run.
 #
@@ -33,9 +30,6 @@ KEY_NAME="id_ed25519"
 SSH_DIR="$HOME/.ssh"
 KEY_PATH="$SSH_DIR/$KEY_NAME"
 SSH_CONFIG="$SSH_DIR/config"
-BIN_DIR="$HOME/.local/bin"
-CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-local"
-CONF_FILE="$CONF_DIR/env"
 TS="$(date +%Y%m%d-%H%M%S)"
 
 BEGIN_MARK="# >>> ${LOCAL_ALIAS} (managed by reverse-ssh-bootstrap) >>>"
@@ -166,21 +160,6 @@ write_ssh_config_block
 # ---------------------------------------------------------------- scratch dir
 # The agent instructions point at ~/tmp for scratch files; make sure it exists.
 mkdir -p "$HOME/tmp"
-
-# ---------------------------------------------------------------- legacy cleanup
-# Earlier versions installed shell wrappers into ~/.local/bin and a defaults
-# file; the agent now works through plain ssh/scp/sshfs plus the CLAUDE.md
-# facts memory, so re-runs retire the leftovers.
-for stale in claude-local-shell claude-my-device claude-local claude-local-mount; do
-  if [[ -f "$BIN_DIR/$stale" ]]; then
-    rm -f "$BIN_DIR/$stale"
-    log "Removed obsolete wrapper: $BIN_DIR/$stale"
-  fi
-done
-if [[ -f "$CONF_FILE" ]]; then
-  mv "$CONF_FILE" "$CONF_FILE.claude-bak-$TS"
-  log "Retired the defaults file (backed up to $CONF_FILE.claude-bak-$TS)"
-fi
 
 # ---------------------------------------------------------------- CLAUDE.md (optional)
 # Global agent memory telling Claude Code to do ALL project work through

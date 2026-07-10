@@ -10,9 +10,8 @@
 #
 # What it does (idempotent, safe to re-run):
 #   1. Enables Remote Login (sshd) via systemsetup.
-#   2. Hardens sshd: pubkey auth on, password auth off (optional),
-#      loopback-only listen (optional). Backs up config, validates with
-#      `sshd -t` before restarting.
+#   2. Hardens sshd: pubkey auth on, password auth off (optional). Backs up
+#      config, validates with `sshd -t` before restarting.
 #   3. Creates ~/.ssh + authorized_keys with correct permissions.
 #   4. Appends the server-side public key to authorized_keys with a
 #      from="127.0.0.1,::1" restriction (dedup by key blob).
@@ -110,11 +109,6 @@ if ask_yn "Disable password login for the local sshd (recommended, public key on
   DISABLE_PASSWORD=1
 else
   DISABLE_PASSWORD=0
-fi
-if ask_yn "Make the local sshd listen on 127.0.0.1 only (recommended; note: direct SSH from the LAN will stop working)" "Y"; then
-  LOOPBACK_ONLY=1
-else
-  LOOPBACK_ONLY=0
 fi
 
 # ---------------------------------------------------------------- ~/.ssh
@@ -254,9 +248,6 @@ AuthorizedKeysFile .ssh/authorized_keys"
   if [[ "$DISABLE_PASSWORD" -eq 1 ]]; then
     settings+=$'\nPasswordAuthentication no\nKbdInteractiveAuthentication no'
   fi
-  if [[ "$LOOPBACK_ONLY" -eq 1 ]]; then
-    settings+=$'\nListenAddress 127.0.0.1\nListenAddress ::1'
-  fi
 
   if [[ "$use_dropin" -eq 1 ]]; then
     log "Writing sshd drop-in config: $SSHD_DROPIN"
@@ -264,9 +255,6 @@ AuthorizedKeysFile .ssh/authorized_keys"
       sudo cp "$SSHD_DROPIN" "$SSHD_DROPIN.claude-bak-$TS"
     fi
     printf '%s\n' "$settings" | sudo tee "$SSHD_DROPIN" >/dev/null
-    if [[ "$LOOPBACK_ONLY" -eq 1 ]] && sudo grep -qE '^[[:space:]]*ListenAddress[[:space:]]' "$SSHD_CONFIG"; then
-      warn "$SSHD_CONFIG already contains ListenAddress directives; ListenAddress is additive, please verify the final listen addresses yourself"
-    fi
     if ! sudo /usr/sbin/sshd -t; then
       err "sshd config validation failed, rolling back the drop-in"
       sudo rm -f "$SSHD_DROPIN"
@@ -290,9 +278,6 @@ AuthorizedKeysFile .ssh/authorized_keys"
     if [[ "$DISABLE_PASSWORD" -eq 1 ]]; then
       set_sshd_option "PasswordAuthentication" "no"
       set_sshd_option "KbdInteractiveAuthentication" "no"
-    fi
-    if [[ "$LOOPBACK_ONLY" -eq 1 ]]; then
-      set_sshd_option "ListenAddress" "127.0.0.1"
     fi
     if ! sudo /usr/sbin/sshd -t; then
       err "sshd config validation failed, restoring the backup"
@@ -320,7 +305,12 @@ log "  ssh-copy-id -i $KEY_PATH.pub -p $SERVER_PORT $SERVER_USER@$SERVER_HOST"
 
 # ---------------------------------------------------------------- LaunchAgent (optional)
 echo
-if ask_yn "Install a LaunchAgent to start and keep the tunnel up after login (optional)" "N"; then
+echo "Optional: auto-connect the TUNNEL at login. A LaunchAgent would run"
+echo "'ssh -N $TUNNEL_ALIAS' at every login, dialing OUT to the server and keeping"
+echo "the connection alive. This is NOT about sshd — Remote Login (sshd) is"
+echo "already enabled at boot. Answer no to connect only when you choose to,"
+echo "by running: ssh -N $TUNNEL_ALIAS"
+if ask_yn "Auto-connect the tunnel at login (LaunchAgent)" "N"; then
   mkdir -p "$(dirname "$LAUNCH_AGENT_PLIST")" "$LOG_DIR"
   if [[ -f "$LAUNCH_AGENT_PLIST" ]]; then
     cp "$LAUNCH_AGENT_PLIST" "$LAUNCH_AGENT_PLIST.claude-bak-$TS"

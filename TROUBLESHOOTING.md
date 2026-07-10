@@ -97,16 +97,6 @@ macOS spawns sshd on demand via launchd, so a new config applies to **new connec
 sudo launchctl kickstart -k system/com.openssh.sshd
 ```
 
-### Linux: ListenAddress has no effect (Ubuntu 23.10+)
-
-Recent Ubuntu uses systemd **socket activation** (`ssh.socket`) for sshd; in that mode the socket unit decides the listen address and `ListenAddress` in sshd_config is ignored. Either switch back to the service:
-
-```bash
-sudo systemctl disable --now ssh.socket && sudo systemctl enable --now ssh.service
-```
-
-or override the socket: `sudo systemctl edit ssh.socket` and set `ListenStream=` then `ListenStream=127.0.0.1:22`. The bootstrap script warns when it detects this situation.
-
 ### Windows: `Add-WindowsCapability` fails (0x800f0954 etc.)
 
 Usually WSUS / group policy blocks Features-on-Demand downloads. Ask an admin to allow "Specify settings for optional component installation", or install OpenSSH Server offline (Microsoft's Win32-OpenSSH releases: `https://github.com/PowerShell/openssh-portable/releases`).
@@ -170,6 +160,7 @@ If you did NOT expect the machine behind the tunnel to change, stop and check wh
 # on the server: the reverse port must listen on 127.0.0.1 only
 ss -tln | grep <reverse_port>        # expect 127.0.0.1:<reverse_port>, never 0.0.0.0
 
-# locally: sshd should listen on 127.0.0.1 only (if loopback-only was chosen)
-# try ssh to port 22 of this machine from another machine on the LAN — it must be refused
+# locally: the server-side key must only work through the tunnel — check that
+# its authorized_keys line carries the from="127.0.0.1,::1" restriction
+grep 'from="127.0.0.1' ~/.ssh/authorized_keys
 ```

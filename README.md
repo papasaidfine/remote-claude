@@ -2,7 +2,7 @@
 
 English | [中文](README.zh-CN.md)
 
-Let Claude / Codex on a remote server SSH back into your local machine (Windows / macOS / Linux) through a reverse tunnel, and work in your local project directory. Everything stays on `127.0.0.1` — nothing is exposed to the LAN or internet.
+Let Claude / Codex on a remote server SSH back into your local machine (Windows / macOS / Linux) through a reverse tunnel, and work in your local project directory. The tunnel stays on `127.0.0.1` at both ends — the reverse port is never exposed to the LAN or internet, and the server-side key only works through it.
 
 ```
 you                      : ssh -N remote-claude        (keep it running)

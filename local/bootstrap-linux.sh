@@ -11,9 +11,8 @@
 # What it does (idempotent, safe to re-run):
 #   1. Installs openssh-server if missing (apt/dnf/yum/pacman/zypper),
 #      enables and starts the sshd systemd service.
-#   2. Hardens sshd: pubkey auth on, password auth off (optional),
-#      loopback-only listen (optional). Backs up config, validates with
-#      `sshd -t` before restarting.
+#   2. Hardens sshd: pubkey auth on, password auth off (optional). Backs up
+#      config, validates with `sshd -t` before restarting.
 #   3. Creates ~/.ssh + authorized_keys with correct permissions.
 #   4. Appends the server-side public key to authorized_keys with a
 #      from="127.0.0.1,::1" restriction (dedup by key blob).
@@ -110,20 +109,6 @@ if ask_yn "Disable password login for the local sshd (recommended, public key on
   DISABLE_PASSWORD=1
 else
   DISABLE_PASSWORD=0
-fi
-
-# If this session itself came in over SSH, loopback-only would lock the user
-# out of this machine after the next reconnect — default to No in that case.
-LOOPBACK_DEFAULT="Y"
-if [[ -n "${SSH_CONNECTION:-}" ]]; then
-  warn "You appear to be logged into this machine over SSH (SSH_CONNECTION is set)."
-  warn "Restricting sshd to 127.0.0.1 would prevent you from SSHing back in remotely."
-  LOOPBACK_DEFAULT="N"
-fi
-if ask_yn "Make the local sshd listen on 127.0.0.1 only (recommended for desktops; note: direct SSH from the LAN will stop working)" "$LOOPBACK_DEFAULT"; then
-  LOOPBACK_ONLY=1
-else
-  LOOPBACK_ONLY=0
 fi
 
 # ---------------------------------------------------------------- ~/.ssh
@@ -302,9 +287,6 @@ AuthorizedKeysFile .ssh/authorized_keys"
   if [[ "$DISABLE_PASSWORD" -eq 1 ]]; then
     settings+=$'\nPasswordAuthentication no\nKbdInteractiveAuthentication no'
   fi
-  if [[ "$LOOPBACK_ONLY" -eq 1 ]]; then
-    settings+=$'\nListenAddress 127.0.0.1\nListenAddress ::1'
-  fi
 
   if [[ "$use_dropin" -eq 1 ]]; then
     log "Writing sshd drop-in config: $SSHD_DROPIN"
@@ -312,9 +294,6 @@ AuthorizedKeysFile .ssh/authorized_keys"
       sudo cp "$SSHD_DROPIN" "$SSHD_DROPIN.claude-bak-$TS"
     fi
     printf '%s\n' "$settings" | sudo tee "$SSHD_DROPIN" >/dev/null
-    if [[ "$LOOPBACK_ONLY" -eq 1 ]] && sudo grep -qE '^[[:space:]]*ListenAddress[[:space:]]' "$SSHD_CONFIG"; then
-      warn "$SSHD_CONFIG already contains ListenAddress directives; ListenAddress is additive, please verify the final listen addresses yourself"
-    fi
     if ! sudo "$SSHD_BIN" -t; then
       err "sshd config validation failed, rolling back the drop-in"
       sudo rm -f "$SSHD_DROPIN"
@@ -339,9 +318,6 @@ AuthorizedKeysFile .ssh/authorized_keys"
       set_sshd_option "PasswordAuthentication" "no"
       set_sshd_option "KbdInteractiveAuthentication" "no"
     fi
-    if [[ "$LOOPBACK_ONLY" -eq 1 ]]; then
-      set_sshd_option "ListenAddress" "127.0.0.1"
-    fi
     if ! sudo "$SSHD_BIN" -t; then
       err "sshd config validation failed, restoring the backup"
       sudo cp "$SSHD_CONFIG.claude-bak-$TS" "$SSHD_CONFIG"
@@ -349,16 +325,6 @@ AuthorizedKeysFile .ssh/authorized_keys"
     fi
   fi
   log "sshd config validation passed"
-
-  # Ubuntu 23.10+ uses systemd socket activation for sshd; the socket unit,
-  # not sshd_config, decides the listen address in that mode.
-  if [[ "$LOOPBACK_ONLY" -eq 1 ]] && command -v systemctl >/dev/null \
-     && systemctl is-enabled ssh.socket >/dev/null 2>&1; then
-    warn "ssh.socket (systemd socket activation) is enabled on this system."
-    warn "In that mode the ListenAddress directive is IGNORED; the socket unit decides the address."
-    warn "Either 'sudo systemctl disable --now ssh.socket && sudo systemctl enable --now ssh.service',"
-    warn "or add a socket override: sudo systemctl edit ssh.socket  (set ListenStream=127.0.0.1:22)"
-  fi
 
   if [[ -n "$SSHD_UNIT" ]]; then
     sudo systemctl restart "$SSHD_UNIT.service"
@@ -382,7 +348,12 @@ log "  ssh-copy-id -i $KEY_PATH.pub -p $SERVER_PORT $SERVER_USER@$SERVER_HOST"
 echo
 AUTOSTART_INSTALLED=0
 if command -v systemctl >/dev/null && [[ -d /run/systemd/system ]]; then
-  if ask_yn "Install a systemd user service to start and keep the tunnel up (optional)" "N"; then
+  echo "Optional: auto-connect the TUNNEL at login. A systemd user service would"
+  echo "run 'ssh -N $TUNNEL_ALIAS', dialing OUT to the server and keeping the"
+  echo "connection alive. This is NOT about sshd — the sshd service is already"
+  echo "enabled at boot. Answer no to connect only when you choose to, by"
+  echo "running: ssh -N $TUNNEL_ALIAS"
+  if ask_yn "Auto-connect the tunnel at login (systemd user service)" "N"; then
     mkdir -p "$USER_UNIT_DIR"
     if [[ -f "$USER_UNIT" ]]; then
       cp "$USER_UNIT" "$USER_UNIT.claude-bak-$TS"

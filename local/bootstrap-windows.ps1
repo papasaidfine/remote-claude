@@ -12,8 +12,8 @@
   What it does (idempotent, safe to re-run):
     1. Installs OpenSSH Server if missing, starts sshd, sets it to auto-start.
     2. Hardens %ProgramData%\ssh\sshd_config: pubkey auth on, password auth
-       off (optional), loopback-only listen (optional), and comments out the
-       "Match Group administrators" block so admin users also use their own
+       off (optional), and comments out the "Match Group administrators"
+       block so admin users also use their own
        %USERPROFILE%\.ssh\authorized_keys. Backs up the config and validates
        with `sshd -t` before restarting.
     3. Creates %USERPROFILE%\.ssh + authorized_keys with strict ACLs.
@@ -143,7 +143,6 @@ Write-Host "(paste the whole line, e.g. 'ssh-ed25519 AAAA... comment'; leave emp
 if (-not $ServerPublicKey) { $ServerPublicKey = Read-Default 'Server-side public key' '' }
 
 $DisablePassword = Read-YesNo 'Disable password login for the local sshd (recommended, public key only)' $true
-$LoopbackOnly    = Read-YesNo 'Make the local sshd listen on 127.0.0.1 only (recommended; note: direct SSH from the LAN will stop working)' $true
 
 # ---------------------------------------------------------------- OpenSSH Server install
 Write-Info 'Checking whether OpenSSH Server is installed'
@@ -208,9 +207,6 @@ $raw = Set-SshdDirective $raw 'PubkeyAuthentication' 'yes'
 $raw = Set-SshdDirective $raw 'AuthorizedKeysFile' '.ssh/authorized_keys'
 if ($DisablePassword) {
     $raw = Set-SshdDirective $raw 'PasswordAuthentication' 'no'
-}
-if ($LoopbackOnly) {
-    $raw = Set-SshdDirective $raw 'ListenAddress' '127.0.0.1'
 }
 
 [System.IO.File]::WriteAllText($SshdConfig, $raw)
@@ -365,7 +361,12 @@ Write-Info "  type `$env:USERPROFILE\.ssh\id_ed25519.pub | ssh -p $ServerPort $S
 
 # ---------------------------------------------------------------- Scheduled Task (optional)
 Write-Host ''
-$autostart = Read-YesNo 'Register a Scheduled Task to start and keep the tunnel up after logon (optional)' $false
+Write-Host "Optional: auto-connect the TUNNEL at logon. A Scheduled Task would run"
+Write-Host "'ssh -N $TunnelAlias', dialing OUT to the server and keeping the connection"
+Write-Host "alive. This is NOT about the sshd service - that is already set to start"
+Write-Host "at boot. Answer no to connect only when you choose to, by running:"
+Write-Host "ssh -N $TunnelAlias"
+$autostart = Read-YesNo 'Auto-connect the tunnel at logon (Scheduled Task)' $false
 if ($autostart) {
     # keepalive script: reconnect 15 seconds after ssh exits
     $keepAlive = @"
