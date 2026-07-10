@@ -14,14 +14,14 @@
 **macOS / Linux** — 运行后按提示回答（配置 sshd 需要 sudo）：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/bootstrap-macos.sh)   # macOS
-bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/bootstrap-linux.sh)   # Linux
+bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-macos.sh)   # macOS
+bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-linux.sh)   # Linux
 ```
 
 **Windows** — 在**管理员** PowerShell 中：
 
 ```powershell
-irm https://raw.githubusercontent.com/papasaidfine/remote-claude/main/bootstrap-windows.ps1 -OutFile bootstrap-windows.ps1
+irm https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-windows.ps1 -OutFile bootstrap-windows.ps1
 Set-ExecutionPolicy -Scope Process Bypass -Force
 .\bootstrap-windows.ps1
 ```
