@@ -5,7 +5,7 @@
 # Prepares this Mac so a remote server's Claude / Codex agent can SSH back
 # into it through a reverse tunnel:
 #
-#   local mac  ── ssh -N claude-dev-tunnel ──▶  remote server
+#   local mac  ── ssh -N remote-claude ──▶  remote server
 #   remote server 127.0.0.1:<reverse_port>  ──▶  local mac 127.0.0.1:22
 #
 # What it does (idempotent, safe to re-run):
@@ -17,7 +17,7 @@
 #   4. Appends the server-side public key to authorized_keys with a
 #      from="127.0.0.1,::1" restriction (dedup by key blob).
 #   5. Generates ~/.ssh/claude_tunnel_ed25519 for the local→server hop.
-#   6. Writes a managed "Host claude-dev-tunnel" block into ~/.ssh/config.
+#   6. Writes a managed "Host remote-claude" block into ~/.ssh/config.
 #   7. Optionally installs a LaunchAgent that keeps the tunnel up at login.
 #
 # Usage:  ./bootstrap-macos.sh
@@ -26,7 +26,7 @@
 
 set -euo pipefail
 
-TUNNEL_ALIAS="claude-dev-tunnel"
+TUNNEL_ALIAS="remote-claude"
 KEY_NAME="claude_tunnel_ed25519"
 SSH_DIR="$HOME/.ssh"
 KEY_PATH="$SSH_DIR/$KEY_NAME"
@@ -34,7 +34,7 @@ SSH_CONFIG="$SSH_DIR/config"
 AUTH_KEYS="$SSH_DIR/authorized_keys"
 SSHD_CONFIG="/etc/ssh/sshd_config"
 SSHD_DROPIN_DIR="/etc/ssh/sshd_config.d"
-SSHD_DROPIN="$SSHD_DROPIN_DIR/100-claude-dev-tunnel.conf"
+SSHD_DROPIN="$SSHD_DROPIN_DIR/100-remote-claude.conf"
 LAUNCH_AGENT_LABEL="com.claude.dev-tunnel"
 LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_AGENT_LABEL.plist"
 LOG_DIR="$HOME/Library/Logs"
@@ -375,7 +375,7 @@ cat <<EOF
    (point -i at the actual private key path of the connect-back key on the server)
 
    Tip: run server/setup-server.sh on the server to install the
-   claude-local ssh alias and the claude-local-shell SHELL wrapper.
+   my-device ssh alias and the claude-local-shell SHELL wrapper.
 
 EOF
 if [[ "$AUTOSTART_INSTALLED" -eq 1 ]]; then

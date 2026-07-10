@@ -6,7 +6,7 @@
   Prepares this Windows machine so a remote server's Claude / Codex agent can
   SSH back into it through a reverse tunnel:
 
-    local PC  -- ssh -N claude-dev-tunnel -->  remote server
+    local PC  -- ssh -N remote-claude -->  remote server
     remote server 127.0.0.1:<reverse_port>  -->  local PC 127.0.0.1:22
 
   What it does (idempotent, safe to re-run):
@@ -21,7 +21,7 @@
        from="127.0.0.1,::1" restriction (dedup by key blob).
     5. Generates %USERPROFILE%\.ssh\claude_tunnel_ed25519 for the
        local -> server hop.
-    6. Writes a managed "Host claude-dev-tunnel" block into
+    6. Writes a managed "Host remote-claude" block into
        %USERPROFILE%\.ssh\config.
     7. Optionally registers a Scheduled Task that keeps the tunnel up after
        logon (hidden window, auto-reconnect loop).
@@ -45,7 +45,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$TunnelAlias  = 'claude-dev-tunnel'
+$TunnelAlias  = 'remote-claude'
 $KeyName      = 'claude_tunnel_ed25519'
 $SshDir       = Join-Path $env:USERPROFILE '.ssh'
 $KeyPath      = Join-Path $SshDir $KeyName
@@ -56,7 +56,7 @@ $SshdExe      = Join-Path $env:SystemRoot 'System32\OpenSSH\sshd.exe'
 $SshExe       = Join-Path $env:SystemRoot 'System32\OpenSSH\ssh.exe'
 $SshKeygenExe = Join-Path $env:SystemRoot 'System32\OpenSSH\ssh-keygen.exe'
 $TaskName     = 'ClaudeDevTunnel'
-$KeepAlivePs1 = Join-Path $SshDir 'claude-dev-tunnel-keepalive.ps1'
+$KeepAlivePs1 = Join-Path $SshDir 'remote-claude-keepalive.ps1'
 $Ts           = Get-Date -Format 'yyyyMMdd-HHmmss'
 
 $BeginMark = "# >>> $TunnelAlias (managed by reverse-ssh-bootstrap) >>>"
@@ -374,7 +374,7 @@ while (`$true) {
         -ExecutionTimeLimit (New-TimeSpan -Seconds 0) `
         -RestartCount 10 -RestartInterval (New-TimeSpan -Minutes 1)
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
-        -Settings $settings -Description 'Keep the claude-dev-tunnel reverse SSH tunnel alive' -Force | Out-Null
+        -Settings $settings -Description 'Keep the remote-claude reverse SSH tunnel alive' -Force | Out-Null
     Write-Info "Scheduled Task registered: $TaskName (starts automatically at next logon)"
     if (Read-YesNo 'Start the Scheduled Task now' $true) {
         Start-ScheduledTask -TaskName $TaskName
@@ -400,7 +400,7 @@ Write-Host @"
    (point -i at the actual private key path of the connect-back key on the server)
 
    Tip: run server/setup-server.sh on the server to install the
-   claude-local ssh alias and the claude-local-shell SHELL wrapper.
+   my-device ssh alias and the claude-local-shell SHELL wrapper.
 "@
 if ($autostart) {
     Write-Host @"

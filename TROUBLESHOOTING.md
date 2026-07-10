@@ -5,13 +5,13 @@ English | [中文](TROUBLESHOOTING.zh-CN.md)
 Debug layer by layer along the data path: **local → server (tunnel hop) → reverse port on the server → local sshd**.
 The "Manual testing" section of `README.md` gives an independent test command for each hop — run those four steps first to find out which layer is broken.
 
-## 1. The tunnel won't come up (`ssh -N claude-dev-tunnel` fails)
+## 1. The tunnel won't come up (`ssh -N remote-claude` fails)
 
 ### `Permission denied (publickey)` (connecting to the server)
 
 - The local tunnel key's public key was not added to the server's `~/.ssh/authorized_keys`;
 - Permissions on that file/directory on the server are too loose: `chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys`;
-- Confirm the tunnel key is actually used: `ssh -v claude-dev-tunnel` and look for `Offering public key: ~/.ssh/claude_tunnel_ed25519`.
+- Confirm the tunnel key is actually used: `ssh -v remote-claude` and look for `Offering public key: ~/.ssh/claude_tunnel_ed25519`.
 
 ### `remote port forwarding failed for listen port <reverse_port>`
 
@@ -33,7 +33,7 @@ Because `ExitOnForwardFailure yes` is configured, ssh exits immediately when the
 
 ### `Connection refused` (`ssh -p <reverse_port> ... 127.0.0.1`)
 
-- The tunnel isn't actually up: check on the local machine that the `ssh -N claude-dev-tunnel` process is alive;
+- The tunnel isn't actually up: check on the local machine that the `ssh -N remote-claude` process is alive;
 - The local sshd isn't running:
   - macOS: `sudo launchctl print system/com.openssh.sshd`; check System Settings → Sharing → Remote Login;
   - Linux: `systemctl status sshd` (Debian/Ubuntu: `ssh`), then `sudo systemctl start sshd` if needed;
@@ -67,7 +67,7 @@ The user in the connect-back command is the **local machine's username** (the "L
 
 - `ServerAliveInterval 30` / `ServerAliveCountMax 3` are configured (a dead connection is detected and exits within ~90 seconds);
 - The autostart mechanisms reconnect automatically: `KeepAlive` for the macOS LaunchAgent, the reconnect loop in the Windows keepalive script;
-- If you run it manually in the foreground, wrap it yourself: `while true; do ssh -N claude-dev-tunnel; sleep 15; done`;
+- If you run it manually in the foreground, wrap it yourself: `while true; do ssh -N remote-claude; sleep 15; done`;
 - Laptop sleep kills the TCP connection; after waking, wait for the auto-reconnect (up to ~90s + 15s).
 
 ## 4. sshd configuration issues
@@ -121,7 +121,7 @@ The ssh client validates the config file ACL too. Re-run the bootstrap tool, or 
 
 ```bash
 launchctl print gui/$(id -u)/com.claude.dev-tunnel     # state and last exit code
-cat ~/Library/Logs/claude-dev-tunnel.err.log            # ssh error output
+cat ~/Library/Logs/remote-claude.err.log            # ssh error output
 ```
 
 Common cause: the key wasn't added on the server yet (Permission denied retry loop; note `ThrottleInterval 30` limits the retry rate).
@@ -133,13 +133,13 @@ Get-ScheduledTaskInfo -TaskName ClaudeDevTunnel    # LastRunTime / LastTaskResul
 ```
 
 - The task runs "only when the user is logged on" by default, so the tunnel stops after logout — this is expected (the key's ACL belongs to that user);
-- Verify the keepalive script manually: `powershell -File $env:USERPROFILE\.ssh\claude-dev-tunnel-keepalive.ps1` (runs in the foreground so you see ssh's output directly).
+- Verify the keepalive script manually: `powershell -File $env:USERPROFILE\.ssh\remote-claude-keepalive.ps1` (runs in the foreground so you see ssh's output directly).
 
 ### Linux systemd user service doesn't start / stops after logout
 
 ```bash
-systemctl --user status claude-dev-tunnel.service
-journalctl --user -u claude-dev-tunnel -f
+systemctl --user status remote-claude.service
+journalctl --user -u remote-claude -f
 ```
 
 - User services stop when your last session ends; enable lingering to keep the tunnel up: `sudo loginctl enable-linger $USER`;
@@ -147,13 +147,13 @@ journalctl --user -u claude-dev-tunnel -f
 
 ## 6. Server-side wrapper issues (claude-local / claude-local-shell)
 
-### `ssh claude-local` says `Host key verification failed` / `REMOTE HOST IDENTIFICATION HAS CHANGED`
+### `ssh my-device` says `Host key verification failed` / `REMOTE HOST IDENTIFICATION HAS CHANGED`
 
 The host key of whatever answers on `127.0.0.1:<reverse_port>` changed — usually because a *different* local machine now holds the tunnel (or the local machine was reinstalled). If that change is expected:
 
 ```bash
-rm ~/.ssh/known_hosts.claude-local     # the alias uses a dedicated known-hosts file
-ssh claude-local 'echo ok'             # accept-new stores the new key
+rm ~/.ssh/known_hosts.my-device     # the alias uses a dedicated known-hosts file
+ssh my-device 'echo ok'             # accept-new stores the new key
 ```
 
 If you did NOT expect the machine behind the tunnel to change, stop and check what is actually listening on the reverse port first.
@@ -180,7 +180,7 @@ Note the directory must exist on the **local** machine.
 ### `claude-local-mount` fails
 
 - `sshfs` must be installed on the server (`apt install sshfs` etc.);
-- The tunnel must be up (`ssh claude-local 'echo ok'` first);
+- The tunnel must be up (`ssh my-device 'echo ok'` first);
 - Stale mount after a tunnel drop: `claude-local-mount -u` then mount again (the mount uses `-o reconnect`, but a long outage can still wedge it).
 
 ## 7. Everything works, but you want to verify the security posture

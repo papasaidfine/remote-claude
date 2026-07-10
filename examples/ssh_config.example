@@ -4,8 +4,8 @@
 # The >>> / <<< markers are how the tool finds and updates its own block on
 # re-runs — keep them if you edit the block by hand.
 
-# >>> claude-dev-tunnel (managed by reverse-ssh-bootstrap) >>>
-Host claude-dev-tunnel
+# >>> remote-claude (managed by reverse-ssh-bootstrap) >>>
+Host remote-claude
     HostName server.example.com
     User devuser
     Port 22
@@ -21,4 +21,4 @@ Host claude-dev-tunnel
     ServerAliveInterval 30
     ServerAliveCountMax 3
     ForwardAgent no
-# <<< claude-dev-tunnel <<<
+# <<< remote-claude <<<

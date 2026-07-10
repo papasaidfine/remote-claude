@@ -5,8 +5,8 @@ English | [中文](README.zh-CN.md)
 Let Claude / Codex on a remote server SSH back into your local machine (Windows / macOS / Linux) through a reverse tunnel, and work in your local project directory. Everything stays on `127.0.0.1` — nothing is exposed to the LAN or internet.
 
 ```
-you                      : ssh -N claude-dev-tunnel        (keep it running)
-agent on the server      : ssh claude-local                (lands on your machine)
+you                      : ssh -N remote-claude        (keep it running)
+agent on the server      : ssh my-device                (lands on your machine)
 ```
 
 ## 1. Set up your local machine
@@ -45,13 +45,13 @@ Also make sure the **local** key the bootstrap printed (`claude_tunnel_ed25519.p
 On your local machine (keep it running; both bootstraps also offer autostart):
 
 ```bash
-ssh -N claude-dev-tunnel
+ssh -N remote-claude
 ```
 
 On the server:
 
 ```bash
-ssh claude-local 'echo ok'      # test: should print ok
+ssh my-device 'echo ok'      # test: should print ok
 claude-local                    # interactive shell on your machine
 claude-local git status         # run one command on your machine
 
@@ -64,7 +64,7 @@ SHELL=~/.local/bin/claude-local-shell claude
 
 - Stop the tunnel: `Ctrl-C`, or if autostart was enabled:
   - macOS: `launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.claude.dev-tunnel.plist`
-  - Linux: `systemctl --user disable --now claude-dev-tunnel.service`
+  - Linux: `systemctl --user disable --now remote-claude.service`
   - Windows: `Stop-ScheduledTask -TaskName ClaudeDevTunnel`
 - Everything the scripts change is backed up first (`*.claude-bak-<timestamp>`) and marked with `claude` in the file/block name, so it's easy to find and remove. Ask your AI assistant to walk you through a full rollback, or just point it at the scripts in this repo.
 

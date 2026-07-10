@@ -7,7 +7,7 @@
 #
 #   1. Generates ~/.ssh/claude_to_local_ed25519 (the connect-back key) and
 #      prints its public key — paste it into the local bootstrap script.
-#   2. Writes a managed "Host claude-local" block into ~/.ssh/config that
+#   2. Writes a managed "Host my-device" block into ~/.ssh/config that
 #      points at the reverse tunnel (127.0.0.1:<reverse_port>).
 #   3. Installs wrappers into ~/.local/bin:
 #        claude-local        open a shell / run a command on the local machine
@@ -27,7 +27,7 @@
 
 set -euo pipefail
 
-LOCAL_ALIAS="claude-local"
+LOCAL_ALIAS="my-device"
 KEY_NAME="claude_to_local_ed25519"
 SSH_DIR="$HOME/.ssh"
 KEY_PATH="$SSH_DIR/$KEY_NAME"
@@ -72,7 +72,7 @@ ask_yn() { # ask_yn <prompt> <Y|N>  -> exit status 0 = yes
 cat <<'EOF'
 ==========================================================
  Reverse SSH bootstrap — SERVER side
- Installs the claude-local alias + SHELL wrappers so agents
+ Installs the my-device ssh alias + SHELL wrappers so agents
  on this server can work on your local machine.
 ==========================================================
 EOF
@@ -190,7 +190,7 @@ install_wrapper "claude-local-shell" <<'WRAPPER'
 #   SHELL=~/.local/bin/claude-local-shell claude
 #
 # Configuration (env vars beat ~/.config/claude-local/env):
-#   CLAUDE_LOCAL_HOST  ssh Host alias to use            (default: claude-local)
+#   CLAUDE_LOCAL_HOST  ssh Host alias to use            (default: my-device)
 #   CLAUDE_LOCAL_DIR   directory on the local machine to run commands in
 #                      (default: empty = the local user's home directory)
 #
@@ -211,7 +211,7 @@ if [ -f "$CONF_FILE" ]; then
 fi
 [ -n "$env_host" ] && CLAUDE_LOCAL_HOST="$env_host"
 [ -n "$env_dir_set" ] && CLAUDE_LOCAL_DIR="$env_dir"
-TARGET="${CLAUDE_LOCAL_HOST:-claude-local}"
+TARGET="${CLAUDE_LOCAL_HOST:-my-device}"
 DIR="${CLAUDE_LOCAL_DIR:-}"
 
 # The remote command string is interpreted by the local user's login shell,
@@ -298,7 +298,7 @@ if [ -f "$CONF_FILE" ]; then
 fi
 [ -n "$env_host" ] && CLAUDE_LOCAL_HOST="$env_host"
 [ -n "$env_dir_set" ] && CLAUDE_LOCAL_DIR="$env_dir"
-TARGET="${CLAUDE_LOCAL_HOST:-claude-local}"
+TARGET="${CLAUDE_LOCAL_HOST:-my-device}"
 DIR="${CLAUDE_LOCAL_DIR:-}"
 
 unmount=0
@@ -346,7 +346,7 @@ cat <<EOF
 $(cat "$KEY_PATH.pub")
 
 2. Start the tunnel on the LOCAL machine:
-     ssh -N claude-dev-tunnel
+     ssh -N remote-claude
 
 3. Test the connect-back from this server:
      ssh $LOCAL_ALIAS 'echo ok'

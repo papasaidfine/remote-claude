@@ -5,13 +5,13 @@
 按数据路径分层排查：**本地 → 服务器（隧道跳） → 服务器上的反向端口 → 本地 sshd**。
 `README.zh-CN.md` 的"手动测试"一节给出了每一跳的独立测试命令，先跑那四步确定断在哪一层。
 
-## 1. 隧道建不起来（`ssh -N claude-dev-tunnel` 失败）
+## 1. 隧道建不起来（`ssh -N remote-claude` 失败）
 
 ### `Permission denied (publickey)`（连服务器时）
 
 - 本地隧道 key 的公钥没有加入服务器的 `~/.ssh/authorized_keys`；
 - 服务器上该文件/目录权限过宽：`chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys`；
-- 确认使用的是隧道 key：`ssh -v claude-dev-tunnel` 观察 `Offering public key: ~/.ssh/claude_tunnel_ed25519`。
+- 确认使用的是隧道 key：`ssh -v remote-claude` 观察 `Offering public key: ~/.ssh/claude_tunnel_ed25519`。
 
 ### `remote port forwarding failed for listen port <reverse_port>`
 
@@ -33,7 +33,7 @@ ss -tlnp | grep <reverse_port>
 
 ### `Connection refused`（`ssh -p <reverse_port> ... 127.0.0.1`）
 
-- 隧道其实没在：本地检查 `ssh -N claude-dev-tunnel` 进程是否存活；
+- 隧道其实没在：本地检查 `ssh -N remote-claude` 进程是否存活；
 - 本地 sshd 没起来：
   - macOS：`sudo launchctl print system/com.openssh.sshd`；系统设置 → 共享 → 远程登录是否开启；
   - Linux：`systemctl status sshd`（Debian/Ubuntu 是 `ssh`），必要时 `sudo systemctl start sshd`；
@@ -67,7 +67,7 @@ ss -tlnp | grep <reverse_port>
 
 - 已配置 `ServerAliveInterval 30` / `ServerAliveCountMax 3`（约 90 秒发现死连接并退出）；
 - 自启动方案会自动重连：macOS LaunchAgent 的 `KeepAlive`，Windows keepalive 脚本的重连循环；
-- 若手动前台跑，可以自己包一层循环：`while true; do ssh -N claude-dev-tunnel; sleep 15; done`；
+- 若手动前台跑，可以自己包一层循环：`while true; do ssh -N remote-claude; sleep 15; done`；
 - 笔记本睡眠后 TCP 会断，唤醒后等自动重连（最多约 90s + 15s）。
 
 ## 4. sshd 配置类问题
@@ -121,7 +121,7 @@ ssh 客户端也校验 config 文件 ACL。重跑 bootstrap 工具，或对 `%US
 
 ```bash
 launchctl print gui/$(id -u)/com.claude.dev-tunnel     # 查看状态和上次退出码
-cat ~/Library/Logs/claude-dev-tunnel.err.log            # 看 ssh 报错
+cat ~/Library/Logs/remote-claude.err.log            # 看 ssh 报错
 ```
 
 常见原因：key 尚未加到服务器（Permission denied 循环重试，注意 `ThrottleInterval 30` 会限制重试频率）。
@@ -133,13 +133,13 @@ Get-ScheduledTaskInfo -TaskName ClaudeDevTunnel    # LastRunTime / LastTaskResul
 ```
 
 - 任务默认"仅当用户登录时运行"，注销后 tunnel 会停止——这是预期行为（key 的 ACL 属于该用户）；
-- 手动验证 keepalive 脚本：`powershell -File $env:USERPROFILE\.ssh\claude-dev-tunnel-keepalive.ps1`（前台跑，直接看 ssh 输出）。
+- 手动验证 keepalive 脚本：`powershell -File $env:USERPROFILE\.ssh\remote-claude-keepalive.ps1`（前台跑，直接看 ssh 输出）。
 
 ### Linux systemd user service 没启动 / 注销后停止
 
 ```bash
-systemctl --user status claude-dev-tunnel.service
-journalctl --user -u claude-dev-tunnel -f
+systemctl --user status remote-claude.service
+journalctl --user -u remote-claude -f
 ```
 
 - user service 会在最后一个会话结束时停止；开启 lingering 可让 tunnel 持续运行：`sudo loginctl enable-linger $USER`；
@@ -147,13 +147,13 @@ journalctl --user -u claude-dev-tunnel -f
 
 ## 6. 服务器端 wrapper 问题（claude-local / claude-local-shell）
 
-### `ssh claude-local` 报 `Host key verification failed` / `REMOTE HOST IDENTIFICATION HAS CHANGED`
+### `ssh my-device` 报 `Host key verification failed` / `REMOTE HOST IDENTIFICATION HAS CHANGED`
 
 `127.0.0.1:<reverse_port>` 背后应答的主机 key 变了——通常是因为现在持有隧道的是*另一台*本地机器（或本地重装了系统）。如果这个变化是你预期的：
 
 ```bash
-rm ~/.ssh/known_hosts.claude-local     # 该别名使用独立的 known-hosts 文件
-ssh claude-local 'echo ok'             # accept-new 会存下新 key
+rm ~/.ssh/known_hosts.my-device     # 该别名使用独立的 known-hosts 文件
+ssh my-device 'echo ok'             # accept-new 会存下新 key
 ```
 
 如果你**没有**预期隧道背后的机器发生变化，先停下来检查反向端口上实际监听的是什么。
@@ -180,7 +180,7 @@ wrapper 在每条命令前 `cd` 进 `CLAUDE_LOCAL_DIR`（来自环境变量或 `
 ### `claude-local-mount` 失败
 
 - 服务器上必须装有 `sshfs`（`apt install sshfs` 等）；
-- 隧道必须在线（先 `ssh claude-local 'echo ok'`）；
+- 隧道必须在线（先 `ssh my-device 'echo ok'`）；
 - 隧道断开后挂载点卡死：`claude-local-mount -u` 卸载后重新挂载（挂载带 `-o reconnect`，但长时间中断仍可能卡住）。
 
 ## 7. 一切正常但想确认安全性

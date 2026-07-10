@@ -5,8 +5,8 @@
 让远程服务器上的 Claude / Codex 通过反向 SSH 隧道回到你的本地电脑（Windows / macOS / Linux），在本地项目目录中干活。全程只走 `127.0.0.1`，不暴露到局域网或公网。
 
 ```
-你（本地）        : ssh -N claude-dev-tunnel        （保持运行）
-服务器上的 agent  : ssh claude-local                （落到你的电脑上）
+你（本地）        : ssh -N remote-claude        （保持运行）
+服务器上的 agent  : ssh my-device                （落到你的电脑上）
 ```
 
 ## 1. 配置本地电脑
@@ -45,13 +45,13 @@ bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/m
 在本地电脑上（保持运行；两侧 bootstrap 都提供开机自启选项）：
 
 ```bash
-ssh -N claude-dev-tunnel
+ssh -N remote-claude
 ```
 
 在服务器上：
 
 ```bash
-ssh claude-local 'echo ok'      # 测试：应打印 ok
+ssh my-device 'echo ok'      # 测试：应打印 ok
 claude-local                    # 打开你电脑上的交互 shell
 claude-local git status         # 在你电脑上跑一条命令
 
@@ -64,7 +64,7 @@ SHELL=~/.local/bin/claude-local-shell claude
 
 - 停止隧道：`Ctrl-C`；如果开了自启：
   - macOS：`launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.claude.dev-tunnel.plist`
-  - Linux：`systemctl --user disable --now claude-dev-tunnel.service`
+  - Linux：`systemctl --user disable --now remote-claude.service`
   - Windows：`Stop-ScheduledTask -TaskName ClaudeDevTunnel`
 - 脚本改动的所有文件都先备份（`*.claude-bak-<时间戳>`），且文件名/配置块里都带 `claude` 标记，很容易找到并删除。需要完整回滚时，直接让你的 AI 助手读本仓库的脚本带你操作即可。
 

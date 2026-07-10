@@ -21,7 +21,7 @@
         <string>-N</string>
         <string>-o</string>
         <string>ExitOnForwardFailure=yes</string>
-        <string>claude-dev-tunnel</string>
+        <string>remote-claude</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -30,8 +30,8 @@
     <key>ThrottleInterval</key>
     <integer>30</integer>
     <key>StandardOutPath</key>
-    <string>/Users/YOUR_USER/Library/Logs/claude-dev-tunnel.log</string>
+    <string>/Users/YOUR_USER/Library/Logs/remote-claude.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/YOUR_USER/Library/Logs/claude-dev-tunnel.err.log</string>
+    <string>/Users/YOUR_USER/Library/Logs/remote-claude.err.log</string>
 </dict>
 </plist>
