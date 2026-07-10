@@ -36,7 +36,7 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/server/setup-server.sh)
 ```
 
-它会打印一个公钥——粘贴到本地 bootstrap 询问 "server-side public key" 的地方。两边的反向端口要填一样的。它还会询问是否安装 `~/.claude/CLAUDE.md` 指令，让 Claude Code 的所有项目操作都走 `ssh my-device`，而不是读写服务器本地文件；同一文件里还会种下一节由 agent 自己维护的 "my-device facts" 记忆（你机器的操作系统、各项目路径、挂载点），新会话不用每次重新摸索。
+它会打印一个公钥——粘贴到本地 bootstrap 询问 "server-side public key" 的地方。两边的反向端口要填一样的。它还会询问是否安装 `~/.claude/CLAUDE.md` 指令，让 Claude Code 的所有项目操作都走 `ssh my-device`，而不是读写服务器本地文件；另外还会种下一个由 agent 自己维护的 facts 文件（`~/.config/remote-claude/facts.json`——你机器的操作系统、各项目路径和简介），agent 每次会话开始先读它、学到新事实就更新，新会话不用每次重新摸索。
 
 如果当时跳过了 CLAUDE.md 那一步（或只想要这份指令、不装其他东西），可以直接下载：
 

@@ -135,7 +135,7 @@ journalctl --user -u remote-claude -f
 - User services stop when your last session ends; enable lingering to keep the tunnel up: `sudo loginctl enable-linger $USER`;
 - After editing the unit file, run `systemctl --user daemon-reload`.
 
-## 6. Server-side issues (ssh my-device / sshfs mounts)
+## 6. Server-side issues (ssh my-device)
 
 ### `ssh my-device` says `Host key verification failed` / `REMOTE HOST IDENTIFICATION HAS CHANGED`
 
@@ -147,12 +147,6 @@ ssh my-device 'echo ok'             # accept-new stores the new key
 ```
 
 If you did NOT expect the machine behind the tunnel to change, stop and check what is actually listening on the reverse port first.
-
-### The sshfs mount fails or turns into a zombie
-
-- `sshfs` must be installed on the server (`apt install sshfs` etc.);
-- The tunnel must be up (`ssh my-device 'echo ok'` first);
-- Stale mount after a tunnel drop ("Transport endpoint is not connected"): `fusermount -u <mountpoint>` then mount again (mounting with `-o reconnect` helps, but a long outage can still wedge it).
 
 ## 7. Everything works, but you want to verify the security posture
 

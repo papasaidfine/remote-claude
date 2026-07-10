@@ -36,7 +36,7 @@ On the remote server (no sudo needed):
 bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/server/setup-server.sh)
 ```
 
-It prints a public key — paste it into the local bootstrap when asked for the "server-side public key". Use the same reverse port on both sides. It also offers to install `~/.claude/CLAUDE.md` instructions so Claude Code does all project work through `ssh my-device` instead of touching this server's filesystem, and seeds an agent-maintained "my-device facts" memory in the same file (your machine's OS, project paths, mount points) so new sessions skip the rediscovery.
+It prints a public key — paste it into the local bootstrap when asked for the "server-side public key". Use the same reverse port on both sides. It also offers to install `~/.claude/CLAUDE.md` instructions so Claude Code does all project work through `ssh my-device` instead of touching this server's filesystem, and seeds an agent-maintained facts file (`~/.config/remote-claude/facts.json` — your machine's OS, project paths and descriptions) that Claude reads at session start and keeps updated, so new sessions skip the rediscovery.
 
 If you skipped that CLAUDE.md prompt (or just want the instructions without the rest), fetch them directly:
 
