@@ -17,7 +17,7 @@
 #   3. Creates ~/.ssh + authorized_keys with correct permissions.
 #   4. Appends the server-side public key to authorized_keys with a
 #      from="127.0.0.1,::1" restriction (dedup by key blob).
-#   5. Generates ~/.ssh/claude_tunnel_ed25519 for the local→server hop.
+#   5. Uses (or generates) the default ~/.ssh/id_ed25519 for the local→server hop.
 #   6. Writes a managed "Host remote-claude" block into ~/.ssh/config.
 #   7. Optionally installs a systemd user service that keeps the tunnel up.
 #
@@ -28,7 +28,7 @@
 set -euo pipefail
 
 TUNNEL_ALIAS="remote-claude"
-KEY_NAME="claude_tunnel_ed25519"
+KEY_NAME="id_ed25519"
 SSH_DIR="$HOME/.ssh"
 KEY_PATH="$SSH_DIR/$KEY_NAME"
 SSH_CONFIG="$SSH_DIR/config"
@@ -82,7 +82,7 @@ cat <<'EOF'
 ==========================================================
 This will modify:
   - openssh-server install / sshd service / sshd_config (requires sudo)
-  - ~/.ssh/{config,authorized_keys,claude_tunnel_ed25519}
+  - ~/.ssh/{config,authorized_keys,id_ed25519}
 All modified system files are backed up first.
 EOF
 echo
@@ -133,19 +133,18 @@ touch "$AUTH_KEYS"
 chmod 600 "$AUTH_KEYS"
 
 # ---------------------------------------------------------------- local key
-# Prefer an existing key over generating yet another one: a dedicated key
-# from a previous run first, then the user's default id_ed25519 (opt-in).
-DEFAULT_KEY="$SSH_DIR/id_ed25519"
-if [[ -f "$KEY_PATH" && -f "$KEY_PATH.pub" ]]; then
-  log "Local tunnel key already exists: $KEY_PATH"
-elif [[ -f "$DEFAULT_KEY" && -f "$DEFAULT_KEY.pub" ]] \
-     && ask_yn "Found $DEFAULT_KEY — use it for the tunnel instead of generating a dedicated key" "Y"; then
-  KEY_PATH="$DEFAULT_KEY"
-  KEY_NAME="id_ed25519"
-  warn "If this key has a passphrase, tunnel autostart will need an ssh-agent to work"
+# Use the default SSH key; generate it only when it does not exist yet.
+if [[ -f "$KEY_PATH" ]]; then
+  if [[ ! -f "$KEY_PATH.pub" ]]; then
+    ssh-keygen -y -P "" -f "$KEY_PATH" > "$KEY_PATH.pub" 2>/dev/null \
+      || die "$KEY_PATH exists but $KEY_PATH.pub is missing and could not be derived (passphrase-protected?); please fix and re-run"
+  fi
+  log "Using existing SSH key: $KEY_PATH"
+  ssh-keygen -y -P "" -f "$KEY_PATH" >/dev/null 2>&1 \
+    || warn "This key appears to be passphrase-protected; tunnel autostart will need an ssh-agent to work"
 else
-  log "Generating the SSH key used to connect to the server: $KEY_PATH"
-  ssh-keygen -t ed25519 -f "$KEY_PATH" -N "" -C "claude-tunnel" >/dev/null
+  log "Generating the default SSH key: $KEY_PATH"
+  ssh-keygen -t ed25519 -f "$KEY_PATH" -N "" >/dev/null
 fi
 chmod 600 "$KEY_PATH"
 
@@ -432,7 +431,7 @@ cat <<EOF
      ssh -N $TUNNEL_ALIAS
 
 3. While the tunnel stays connected, Claude / Codex on the server can use:
-     ssh -i ~/.ssh/claude_to_local_ed25519 -p $REVERSE_PORT $LOCAL_USER@127.0.0.1
+     ssh -i ~/.ssh/id_ed25519 -p $REVERSE_PORT $LOCAL_USER@127.0.0.1
    (point -i at the actual private key path of the connect-back key on the server)
 
    Tip: run server/setup-server.sh on the server to install the

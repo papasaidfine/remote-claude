@@ -9,8 +9,7 @@ Host remote-claude
     HostName server.example.com
     User devuser
     Port 22
-    # (or ~/.ssh/id_ed25519 if you chose to reuse your default key)
-    IdentityFile ~/.ssh/claude_tunnel_ed25519
+    IdentityFile ~/.ssh/id_ed25519
     IdentitiesOnly yes
     # Reverse tunnel: server 127.0.0.1:2222 -> local 127.0.0.1:22.
     # The first address MUST be 127.0.0.1:<port> so the reverse port is

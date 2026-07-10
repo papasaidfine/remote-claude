@@ -5,7 +5,7 @@
 # Prepares the server side of the reverse SSH setup so Claude / Codex running
 # on the server can work on the LOCAL machine through the reverse tunnel:
 #
-#   1. Generates ~/.ssh/claude_to_local_ed25519 (the connect-back key) and
+#   1. Uses (or generates) the default ~/.ssh/id_ed25519 as the connect-back key and
 #      prints its public key — paste it into the local bootstrap script.
 #   2. Writes a managed "Host my-device" block into ~/.ssh/config that
 #      points at the reverse tunnel (127.0.0.1:<reverse_port>).
@@ -28,7 +28,7 @@
 set -euo pipefail
 
 LOCAL_ALIAS="my-device"
-KEY_NAME="claude_to_local_ed25519"
+KEY_NAME="id_ed25519"
 SSH_DIR="$HOME/.ssh"
 KEY_PATH="$SSH_DIR/$KEY_NAME"
 SSH_CONFIG="$SSH_DIR/config"
@@ -92,19 +92,18 @@ LOCAL_PROJECT_DIR="${LOCAL_PROJECT_DIR:-$(ask 'Local project directory (empty = 
 # ---------------------------------------------------------------- connect-back key
 mkdir -p "$SSH_DIR"
 chmod 700 "$SSH_DIR"
-# Prefer an existing key over generating yet another one: a dedicated key
-# from a previous run first, then the user's default id_ed25519 (opt-in).
-DEFAULT_KEY="$SSH_DIR/id_ed25519"
-if [[ -f "$KEY_PATH" && -f "$KEY_PATH.pub" ]]; then
-  log "Connect-back key already exists: $KEY_PATH"
-elif [[ -f "$DEFAULT_KEY" && -f "$DEFAULT_KEY.pub" ]] \
-     && ask_yn "Found $DEFAULT_KEY — use it for the connect-back instead of generating a dedicated key" "Y"; then
-  KEY_PATH="$DEFAULT_KEY"
-  KEY_NAME="id_ed25519"
-  warn "If this key has a passphrase, agents will be prompted for it on every command unless an ssh-agent is running"
+# Use the default SSH key; generate it only when it does not exist yet.
+if [[ -f "$KEY_PATH" ]]; then
+  if [[ ! -f "$KEY_PATH.pub" ]]; then
+    ssh-keygen -y -P "" -f "$KEY_PATH" > "$KEY_PATH.pub" 2>/dev/null \
+      || die "$KEY_PATH exists but $KEY_PATH.pub is missing and could not be derived (passphrase-protected?); please fix and re-run"
+  fi
+  log "Using existing SSH key: $KEY_PATH"
+  ssh-keygen -y -P "" -f "$KEY_PATH" >/dev/null 2>&1 \
+    || warn "This key appears to be passphrase-protected; agents will need a running ssh-agent to use it non-interactively"
 else
-  log "Generating the connect-back key: $KEY_PATH"
-  ssh-keygen -t ed25519 -f "$KEY_PATH" -N "" -C "claude-to-local" >/dev/null
+  log "Generating the default SSH key: $KEY_PATH"
+  ssh-keygen -t ed25519 -f "$KEY_PATH" -N "" >/dev/null
 fi
 chmod 600 "$KEY_PATH"
 

@@ -19,8 +19,8 @@
     3. Creates %USERPROFILE%\.ssh + authorized_keys with strict ACLs.
     4. Appends the server-side public key to authorized_keys with a
        from="127.0.0.1,::1" restriction (dedup by key blob).
-    5. Generates %USERPROFILE%\.ssh\claude_tunnel_ed25519 for the
-       local -> server hop.
+    5. Uses (or generates) the default %USERPROFILE%\.ssh\id_ed25519 for
+       the local -> server hop.
     6. Writes a managed "Host remote-claude" block into
        %USERPROFILE%\.ssh\config.
     7. Optionally registers a Scheduled Task that keeps the tunnel up after
@@ -46,7 +46,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $TunnelAlias  = 'remote-claude'
-$KeyName      = 'claude_tunnel_ed25519'
+$KeyName      = 'id_ed25519'
 $SshDir       = Join-Path $env:USERPROFILE '.ssh'
 $KeyPath      = Join-Path $SshDir $KeyName
 $SshConfig    = Join-Path $SshDir 'config'
@@ -122,7 +122,7 @@ Write-Host @'
 ==========================================================
 This will modify:
   - OpenSSH Server install / sshd service / sshd_config
-  - %USERPROFILE%\.ssh\{config,authorized_keys,claude_tunnel_ed25519}
+  - %USERPROFILE%\.ssh\{config,authorized_keys,id_ed25519}
 All modified system files are backed up first.
 '@
 
@@ -272,19 +272,28 @@ if ($ServerPublicKey) {
 }
 
 # ---------------------------------------------------------------- local tunnel key
-# Prefer an existing key over generating yet another one: a dedicated key
-# from a previous run first, then the user's default id_ed25519 (opt-in).
-$DefaultKey = Join-Path $SshDir 'id_ed25519'
-if ((Test-Path $KeyPath) -and (Test-Path "$KeyPath.pub")) {
-    Write-Info "Local tunnel key already exists: $KeyPath"
-} elseif ((Test-Path $DefaultKey) -and (Test-Path "$DefaultKey.pub") -and
-          (Read-YesNo "Found $DefaultKey — use it for the tunnel instead of generating a dedicated key" $true)) {
-    $KeyPath = $DefaultKey
-    $KeyName = 'id_ed25519'
-    Write-Warn 'If this key has a passphrase, tunnel autostart will need an ssh-agent to work'
+# Use the default SSH key; generate it only when it does not exist yet.
+if (Test-Path $KeyPath) {
+    # ssh-keygen -y with an empty passphrase succeeds only on unprotected keys
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $derivedPub = & $SshKeygenExe -y -P '""' -f $KeyPath 2>$null
+    $keyProbeCode = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    if (-not (Test-Path "$KeyPath.pub")) {
+        if ($keyProbeCode -ne 0) {
+            Write-Err "$KeyPath exists but $KeyPath.pub is missing and could not be derived (passphrase-protected?); please fix and re-run"
+            exit 1
+        }
+        [System.IO.File]::WriteAllText("$KeyPath.pub", ($derivedPub -join "`n") + "`n")
+    }
+    Write-Info "Using existing SSH key: $KeyPath"
+    if ($keyProbeCode -ne 0) {
+        Write-Warn 'This key appears to be passphrase-protected; tunnel autostart will need an ssh-agent to work'
+    }
 } else {
-    Write-Info "Generating the SSH key used to connect to the server: $KeyPath"
-    & $SshKeygenExe -t ed25519 -f $KeyPath -N '""' -C 'claude-tunnel' | Out-Null
+    Write-Info "Generating the default SSH key: $KeyPath"
+    & $SshKeygenExe -t ed25519 -f $KeyPath -N '""' | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Err 'ssh-keygen failed'; exit 1 }
 }
 Set-StrictAcl -Path $KeyPath
@@ -404,7 +413,7 @@ Write-Host @"
      ssh -N $TunnelAlias
 
 3. While the tunnel stays connected, Claude / Codex on the server can use:
-     ssh -i ~/.ssh/claude_to_local_ed25519 -p $ReversePort $LocalUser@127.0.0.1
+     ssh -i ~/.ssh/id_ed25519 -p $ReversePort $LocalUser@127.0.0.1
    (point -i at the actual private key path of the connect-back key on the server)
 
    Tip: run server/setup-server.sh on the server to install the
