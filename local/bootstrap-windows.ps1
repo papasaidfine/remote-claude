@@ -356,7 +356,8 @@ Write-Info "Local public key — add it to ~/.ssh/authorized_keys of $ServerUser
 Write-Host ''
 Get-Content "$KeyPath.pub" | Write-Host
 Write-Host ''
-Write-Info 'Add it however you normally reach the server, e.g. from a shell that can:'
+Write-Info 'Paste it into server/setup-server.sh when it asks for the local machine'
+Write-Info 'public key (re-run it there if needed), or add it manually, e.g.:'
 Write-Info "  type `$env:USERPROFILE\.ssh\id_ed25519.pub | ssh -p $ServerPort $ServerUser@$ServerHost `"cat >> ~/.ssh/authorized_keys`""
 
 # ---------------------------------------------------------------- Scheduled Task (optional)

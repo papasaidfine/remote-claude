@@ -300,7 +300,8 @@ log "Local public key — add it to ~/.ssh/authorized_keys of $SERVER_USER on th
 echo
 cat "$KEY_PATH.pub"
 echo
-log "Add it however you normally reach the server, e.g.:"
+log "Paste it into server/setup-server.sh when it asks for the local machine"
+log "public key (re-run it there if needed), or add it manually, e.g.:"
 log "  ssh-copy-id -i $KEY_PATH.pub -p $SERVER_PORT $SERVER_USER@$SERVER_HOST"
 
 # ---------------------------------------------------------------- LaunchAgent (optional)

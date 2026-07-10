@@ -46,7 +46,7 @@ mkdir -p ~/.claude && curl -fsSL https://raw.githubusercontent.com/papasaidfine/
 
 这是追加写入，已有的 `~/.claude/CLAUDE.md` 内容会保留——但重复执行会追加出重复内容，而且 setup 脚本的受管安装不会识别这种手动加入的副本。两种安装方式选一种即可。
 
-另外把本地 bootstrap 打印的**本地公钥**自行加入服务器的 `~/.ssh/authorized_keys`（例如 `ssh-copy-id -i ~/.ssh/id_ed25519.pub <user>@<server>`，或通过你惯用的控制台粘贴）。
+它还会询问**本地机器的公钥**（本地 bootstrap 结束时会打印；也可以在你电脑上 `cat ~/.ssh/id_ed25519.pub`），粘贴后写入服务器的 `~/.ssh/authorized_keys`——这一步授权的就是隧道登录。当时留空的话，重跑一遍脚本粘贴，或改用 `ssh-copy-id`。
 
 ## 3. 启动隧道，开始使用
 

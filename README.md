@@ -46,7 +46,7 @@ mkdir -p ~/.claude && curl -fsSL https://raw.githubusercontent.com/papasaidfine/
 
 This appends, so an existing `~/.claude/CLAUDE.md` keeps its content — but running it twice duplicates the block, and the setup script's managed install won't deduplicate a copy added this way. Pick one method and stick with it.
 
-Also add the **local** public key the bootstrap printed to the server's `~/.ssh/authorized_keys` yourself (e.g. `ssh-copy-id -i ~/.ssh/id_ed25519.pub <user>@<server>`, or paste it over your usual console access).
+It also asks for the **local** machine's public key (the local bootstrap prints it at the end; or `cat ~/.ssh/id_ed25519.pub` on your machine) and adds it to this server's `~/.ssh/authorized_keys` — that is what authorizes the tunnel login. Left it empty? Re-run the script and paste it, or use `ssh-copy-id`.
 
 ## 3. Start the tunnel and use it
 

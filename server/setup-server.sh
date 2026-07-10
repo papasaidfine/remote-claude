@@ -7,9 +7,12 @@
 #
 #   1. Uses (or generates) the default ~/.ssh/id_ed25519 as the connect-back key and
 #      prints its public key — paste it into the local bootstrap script.
-#   2. Writes a managed "Host my-device" block into ~/.ssh/config that
+#   2. Asks for the LOCAL machine's public key and appends it to this
+#      server's ~/.ssh/authorized_keys (dedup by key blob) — that is what
+#      authorizes the tunnel login (ssh -N remote-claude).
+#   3. Writes a managed "Host my-device" block into ~/.ssh/config that
 #      points at the reverse tunnel (127.0.0.1:<reverse_port>).
-#   3. Optionally installs agent instructions into ~/.claude/CLAUDE.md telling
+#   4. Optionally installs agent instructions into ~/.claude/CLAUDE.md telling
 #      Claude Code to run all project work through `ssh my-device`, keep this
 #      server to lightweight script drafting (no data, no toolchains; scratch
 #      in ~/tmp), and reach project files with the file tools only via scp
@@ -21,7 +24,7 @@
 #
 # Usage:  ./setup-server.sh
 # Non-interactive overrides via env vars: REVERSE_PORT, LOCAL_USER,
-# LOCAL_PROJECT_DIR.
+# LOCAL_PUBKEY, LOCAL_PROJECT_DIR.
 
 set -euo pipefail
 
@@ -80,6 +83,12 @@ REVERSE_PORT="${REVERSE_PORT:-$(ask 'Reverse SSH port on this server (must match
 LOCAL_USER="${LOCAL_USER:-$(ask 'Username on the LOCAL machine')}"
 [[ -n "$LOCAL_USER" ]] || die "Local username must not be empty"
 echo
+echo "Public key of the LOCAL machine: the .pub of the key the tunnel"
+echo "(ssh -N remote-claude) logs in to this server with. The local bootstrap"
+echo "prints it at the end, or run: cat ~/.ssh/id_ed25519.pub  on your machine."
+echo "(paste the whole line; leave empty to skip and authorize it yourself later)"
+LOCAL_PUBKEY="${LOCAL_PUBKEY:-$(ask 'Local machine public key' '')}"
+echo
 echo "Optional: a project directory on the LOCAL machine to pre-record in the"
 echo "agent's memory (the my-device facts section). You can always just tell"
 echo "the agent which project to work on per session."
@@ -102,6 +111,37 @@ else
   ssh-keygen -t ed25519 -f "$KEY_PATH" -N "" >/dev/null
 fi
 chmod 600 "$KEY_PATH"
+
+# ---------------------------------------------------------------- authorized_keys (tunnel login)
+AUTH_KEYS="$SSH_DIR/authorized_keys"
+add_authorized_key() { # add_authorized_key <pubkey line>
+  local pubkey="$1" tmp blob
+  tmp="$(mktemp)"
+  printf '%s\n' "$pubkey" > "$tmp"
+  if ! ssh-keygen -lf "$tmp" >/dev/null 2>&1; then
+    rm -f "$tmp"
+    die "The pasted content is not a valid SSH public key; please check and re-run"
+  fi
+  rm -f "$tmp"
+  blob="$(awk '{for (i = 1; i <= NF; i++) if ($i ~ /^AAAA/) { print $i; exit }}' <<<"$pubkey")"
+  [[ -n "$blob" ]] || die "Could not parse the key data from the public key"
+  touch "$AUTH_KEYS"
+  chmod 600 "$AUTH_KEYS"
+  if grep -qF "$blob" "$AUTH_KEYS"; then
+    log "This public key is already in authorized_keys, skipping"
+    return 0
+  fi
+  printf '%s\n' "$pubkey" >> "$AUTH_KEYS"
+  log "Added the local machine's key to ~/.ssh/authorized_keys (authorizes the tunnel login)"
+}
+
+if [[ -n "$LOCAL_PUBKEY" ]]; then
+  add_authorized_key "$LOCAL_PUBKEY"
+else
+  warn "No local public key provided — the tunnel login is not authorized yet."
+  warn "Re-run this script and paste it, or run on the LOCAL machine:"
+  warn "  ssh-copy-id -i ~/.ssh/id_ed25519.pub <your user>@<this server>"
+fi
 
 # ---------------------------------------------------------------- ~/.ssh/config
 write_ssh_config_block() {
@@ -378,3 +418,10 @@ $(cat "$KEY_PATH.pub")
    through 'ssh my-device' — simply tell it which local project to use${LOCAL_PROJECT_DIR:+
    (pre-recorded in its memory: $LOCAL_PROJECT_DIR)}.
 EOF
+
+if [[ -z "$LOCAL_PUBKEY" ]]; then
+  echo
+  warn "Reminder: the tunnel login (step 2) is NOT authorized yet — no local"
+  warn "public key was pasted. Re-run this script and paste it, or from the"
+  warn "local machine: ssh-copy-id -i ~/.ssh/id_ed25519.pub $USER@<this server>"
+fi
