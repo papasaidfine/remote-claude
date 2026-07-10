@@ -137,25 +137,10 @@ if (-not $LocalUser)   { $LocalUser   = Read-Default 'Local username (used when 
 
 Write-Host ''
 Write-Host 'Server-side public key: the .pub of the key that Claude / Codex on the'
-Write-Host 'server will use to SSH back into this machine.'
-if (-not $ServerPublicKey -and (Test-Path $SshExe) -and
-    (Read-YesNo 'Fetch it from the server automatically over SSH (generates the server''s id_ed25519 if missing; you may be asked for the server password)' $true)) {
-    $fetchCmd = 'cat ~/.ssh/id_ed25519.pub 2>/dev/null || { mkdir -p ~/.ssh && chmod 700 ~/.ssh && ssh-keygen -q -t ed25519 -f ~/.ssh/id_ed25519 -N '''' </dev/null >/dev/null 2>&1 && cat ~/.ssh/id_ed25519.pub; }'
-    $prevEap = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    $fetched = & $SshExe -n -p $ServerPort -o StrictHostKeyChecking=accept-new "$ServerUser@$ServerHost" $fetchCmd 2>$null
-    $ErrorActionPreference = $prevEap
-    $ServerPublicKey = @($fetched) | Where-Object { $_ -match '^ssh-ed25519 ' } | Select-Object -First 1
-    if ($ServerPublicKey) {
-        Write-Info "Fetched server-side public key: $ServerPublicKey"
-    } else {
-        Write-Warn 'Could not fetch the key automatically; paste it manually below'
-    }
-}
-if (-not $ServerPublicKey) {
-    Write-Host "(paste the whole line, e.g. 'ssh-ed25519 AAAA... comment'; leave empty to skip)"
-    $ServerPublicKey = Read-Default 'Server-side public key' ''
-}
+Write-Host 'server will use to SSH back into this machine (printed by'
+Write-Host 'server/setup-server.sh, or: cat ~/.ssh/id_ed25519.pub on the server).'
+Write-Host "(paste the whole line, e.g. 'ssh-ed25519 AAAA... comment'; leave empty to skip and re-run later)"
+if (-not $ServerPublicKey) { $ServerPublicKey = Read-Default 'Server-side public key' '' }
 
 $DisablePassword = Read-YesNo 'Disable password login for the local sshd (recommended, public key only)' $true
 $LoopbackOnly    = Read-YesNo 'Make the local sshd listen on 127.0.0.1 only (recommended; note: direct SSH from the LAN will stop working)' $true
@@ -369,19 +354,14 @@ if ($writeBlock) {
 }
 Set-StrictAcl -Path $SshConfig
 
-# ---------------------------------------------------------------- copy key to server (optional)
+# ---------------------------------------------------------------- local pubkey handoff
 Write-Host ''
-Write-Info "Local tunnel public key (add it to ~/.ssh/authorized_keys of $ServerUser on the server):"
+Write-Info "Local public key — add it to ~/.ssh/authorized_keys of $ServerUser on the server:"
 Write-Host ''
 Get-Content "$KeyPath.pub" | Write-Host
 Write-Host ''
-if (Read-YesNo 'Upload it to the server now (ssh-copy-id equivalent, needs the server password or existing working auth)' $false) {
-    $pub = (Get-Content "$KeyPath.pub" -Raw).Trim()
-    $remoteCmd = "mkdir -p ~/.ssh && chmod 700 ~/.ssh && grep -qF '$pub' ~/.ssh/authorized_keys 2>/dev/null || echo '$pub' >> ~/.ssh/authorized_keys; chmod 600 ~/.ssh/authorized_keys"
-    & $SshExe -p $ServerPort "$ServerUser@$ServerHost" $remoteCmd
-    if ($LASTEXITCODE -eq 0) { Write-Info 'Uploaded' }
-    else { Write-Warn 'Upload failed; please append the public key above to ~/.ssh/authorized_keys on the server manually' }
-}
+Write-Info 'Add it however you normally reach the server, e.g. from a shell that can:'
+Write-Info "  type `$env:USERPROFILE\.ssh\id_ed25519.pub | ssh -p $ServerPort $ServerUser@$ServerHost `"cat >> ~/.ssh/authorized_keys`""
 
 # ---------------------------------------------------------------- Scheduled Task (optional)
 Write-Host ''

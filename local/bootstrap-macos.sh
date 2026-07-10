@@ -101,22 +101,10 @@ LOCAL_USER="${LOCAL_USER:-$(ask 'Local username (used when connecting back from 
 
 echo
 echo "Server-side public key: the .pub of the key that Claude / Codex on the"
-echo "server will use to SSH back into this machine."
-if [[ -z "${SERVER_PUBKEY:-}" ]] \
-   && ask_yn "Fetch it from the server automatically over SSH (generates the server's id_ed25519 if missing; you may be asked for the server password)" "Y"; then
-  SERVER_PUBKEY="$(ssh -n -p "$SERVER_PORT" -o StrictHostKeyChecking=accept-new "$SERVER_USER@$SERVER_HOST" \
-    'cat ~/.ssh/id_ed25519.pub 2>/dev/null || { mkdir -p ~/.ssh && chmod 700 ~/.ssh && ssh-keygen -q -t ed25519 -f ~/.ssh/id_ed25519 -N "" </dev/null >/dev/null 2>&1 && cat ~/.ssh/id_ed25519.pub; }' \
-    2>/dev/null | grep -E '^ssh-ed25519 ' | head -n 1 || true)"
-  if [[ -n "$SERVER_PUBKEY" ]]; then
-    log "Fetched server-side public key: $SERVER_PUBKEY"
-  else
-    warn "Could not fetch the key automatically; paste it manually below"
-  fi
-fi
-if [[ -z "${SERVER_PUBKEY:-}" ]]; then
-  echo "(paste the whole line, e.g. 'ssh-ed25519 AAAA... comment'; leave empty to skip)"
-  SERVER_PUBKEY="$(ask 'Server-side public key' '')"
-fi
+echo "server will use to SSH back into this machine (printed by server/setup-server.sh,"
+echo "or: cat ~/.ssh/id_ed25519.pub on the server)."
+echo "(paste the whole line, e.g. 'ssh-ed25519 AAAA... comment'; leave empty to skip and re-run later)"
+SERVER_PUBKEY="${SERVER_PUBKEY:-$(ask 'Server-side public key' '')}"
 
 if ask_yn "Disable password login for the local sshd (recommended, public key only)" "Y"; then
   DISABLE_PASSWORD=1
@@ -321,16 +309,14 @@ AuthorizedKeysFile .ssh/authorized_keys"
 }
 configure_sshd
 
-# ---------------------------------------------------------------- copy key to server (optional)
+# ---------------------------------------------------------------- local pubkey handoff
 echo
-log "Local tunnel public key (add it to ~/.ssh/authorized_keys of $SERVER_USER on the server):"
+log "Local public key — add it to ~/.ssh/authorized_keys of $SERVER_USER on the server:"
 echo
 cat "$KEY_PATH.pub"
 echo
-if ask_yn "Upload it to the server now via ssh-copy-id (needs the server password or existing working auth)" "N"; then
-  ssh-copy-id -i "$KEY_PATH.pub" -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
-    || warn "ssh-copy-id failed; please append the public key above to ~/.ssh/authorized_keys on the server manually"
-fi
+log "Add it however you normally reach the server, e.g.:"
+log "  ssh-copy-id -i $KEY_PATH.pub -p $SERVER_PORT $SERVER_USER@$SERVER_HOST"
 
 # ---------------------------------------------------------------- LaunchAgent (optional)
 echo

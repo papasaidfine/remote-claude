@@ -26,7 +26,7 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 .\bootstrap-windows.ps1
 ```
 
-脚本会询问服务器地址/用户/端口和反向端口（默认 2222）。服务器侧公钥可以自动通过 SSH 从服务器抓取（没有就自动生成），无需先在服务器上做任何准备；脚本还会提供把本地公钥自动上传到服务器的选项。
+脚本会询问服务器地址/用户/端口、反向端口（默认 2222）、以及第 2 步打印的服务器侧公钥——可以先做第 2 步再粘贴，也可以留空之后重跑。脚本本身不会发起任何 SSH 连接，公钥交换全部通过复制粘贴完成。
 
 ## 2. 配置服务器
 
@@ -38,7 +38,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/m
 
 它会打印一个公钥——粘贴到本地 bootstrap 询问 "server-side public key" 的地方。两边的反向端口要填一样的。它还会询问是否安装 `~/.claude/CLAUDE.md` 指令，让 Claude Code 的所有项目操作都走 `ssh my-device`，而不是读写服务器本地文件。
 
-另外确认本地 bootstrap 打印的**本地公钥**已加入服务器的 `~/.ssh/authorized_keys`——本地脚本提供自动上传选项。
+另外把本地 bootstrap 打印的**本地公钥**自行加入服务器的 `~/.ssh/authorized_keys`（例如 `ssh-copy-id -i ~/.ssh/id_ed25519.pub <user>@<server>`，或通过你惯用的控制台粘贴）。
 
 ## 3. 启动隧道，开始使用
 
