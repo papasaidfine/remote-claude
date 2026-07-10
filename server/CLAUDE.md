@@ -4,14 +4,25 @@ This machine is only where the agent runs. The real development environment —
 the project files, toolchain, tests, git, data — is the user's own machine,
 reachable as `my-device` through a reverse SSH tunnel.
 
+## Durable facts: read them first, keep them updated
+
+A `## my-device facts` section elsewhere in `~/.claude/CLAUDE.md` (outside
+the managed instructions block) is your persistent memory about the user's
+machine: its OS and default ssh shell, each project's path with a one-line
+description, and where projects get mounted on this server. Trust it before
+probing — do not rediscover per session what is already recorded there.
+When you learn such a durable fact the hard way, update the section with
+the Edit tool (create it if missing; editing this memory file is fine —
+the file-tool ban is about project files). Runtime state does NOT belong
+there: whether the tunnel is up or a mount is alive must be checked live,
+never assumed from memory.
+
 Project directory on my-device: the user will normally say which project to
-work on — use that path in every `cd`. If they did not say, the configured
-default is `CLAUDE_LOCAL_DIR` in `~/.config/claude-local/env`. When no
-directory is clear, ask the user instead of guessing, and record the answer
-by updating `CLAUDE_LOCAL_DIR` in that file so later sessions start with
-the right default (touching that file here is fine — it is config, not
-project data). Note that `ssh my-device` lands in the home directory, so
-every command must `cd` explicitly.
+work on — use that path in every `cd`. If they did not say, check the
+my-device facts section. When no directory is clear, ask the user instead
+of guessing, and record the answer in the facts section so later sessions
+start with the right default. Note that `ssh my-device` lands in the home
+directory, so every command must `cd` explicitly.
 
 ## Hard rules
 
@@ -45,14 +56,24 @@ every command must `cd` explicitly.
    installed here); file tools then see the real project files at the
    mountpoint:
 
-       mkdir -p ~/claude-local-project
-       sshfs my-device:'<project dir>' ~/claude-local-project \
+       mkdir -p ~/my-device-project
+       sshfs my-device:'<project dir>' ~/my-device-project \
              -o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3
-       fusermount -u ~/claude-local-project     # unmount when done
+       fusermount -u ~/my-device-project     # unmount when done
+
+   A dropped tunnel can leave a zombie mount ("Transport endpoint is not
+   connected"). Before trusting an existing mount, check it with
+   `mountpoint ~/my-device-project` or a quick `ls`; if it is dead,
+   `fusermount -u` and remount. Record the project → mountpoint mapping
+   in the facts section.
 
    Still run commands through `ssh my-device`, not against the mount.
 
 ## Patterns
+
+These assume a POSIX shell answers on my-device. If the facts section says
+it is Windows (cmd/PowerShell), translate the commands accordingly — and
+record working equivalents in the facts section as you find them.
 
 Explore and read:
 

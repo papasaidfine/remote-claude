@@ -145,7 +145,7 @@ journalctl --user -u remote-claude -f
 - user service 会在最后一个会话结束时停止；开启 lingering 可让 tunnel 持续运行：`sudo loginctl enable-linger $USER`；
 - 改过 unit 文件后要 `systemctl --user daemon-reload`。
 
-## 6. 服务器端辅助命令问题（claude-local / claude-local-mount）
+## 6. 服务器端问题（ssh my-device / sshfs 挂载）
 
 ### `ssh my-device` 报 `Host key verification failed` / `REMOTE HOST IDENTIFICATION HAS CHANGED`
 
@@ -158,25 +158,11 @@ ssh my-device 'echo ok'             # accept-new 会存下新 key
 
 如果你**没有**预期隧道背后的机器发生变化，先停下来检查反向端口上实际监听的是什么。
 
-### `claude-local: command not found`
-
-`~/.local/bin` 不在 PATH 上。在 shell profile 里加 `export PATH="$HOME/.local/bin:$PATH"`，或用完整路径调用。
-
-### `claude-local` 的命令跑在错误的目录里
-
-`claude-local` 在每条命令前 `cd` 进 `CLAUDE_LOCAL_DIR`（来自环境变量或 `~/.config/claude-local/env`）。检查实际生效值：
-
-```bash
-~/.local/bin/claude-local pwd
-```
-
-注意该目录必须在**本地**机器上存在。
-
-### `claude-local-mount` 失败
+### sshfs 挂载失败或变成僵尸
 
 - 服务器上必须装有 `sshfs`（`apt install sshfs` 等）；
 - 隧道必须在线（先 `ssh my-device 'echo ok'`）；
-- 隧道断开后挂载点卡死：`claude-local-mount -u` 卸载后重新挂载（挂载带 `-o reconnect`，但长时间中断仍可能卡住）。
+- 隧道断开后挂载点卡死（"Transport endpoint is not connected"）：`fusermount -u <挂载点>` 后重新挂载（挂载带 `-o reconnect` 有帮助，但长时间中断仍可能卡住）。
 
 ## 7. 一切正常但想确认安全性
 

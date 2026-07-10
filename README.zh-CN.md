@@ -36,7 +36,7 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/server/setup-server.sh)
 ```
 
-它会打印一个公钥——粘贴到本地 bootstrap 询问 "server-side public key" 的地方。两边的反向端口要填一样的。它还会询问是否安装 `~/.claude/CLAUDE.md` 指令，让 Claude Code 的所有项目操作都走 `ssh my-device`，而不是读写服务器本地文件。
+它会打印一个公钥——粘贴到本地 bootstrap 询问 "server-side public key" 的地方。两边的反向端口要填一样的。它还会询问是否安装 `~/.claude/CLAUDE.md` 指令，让 Claude Code 的所有项目操作都走 `ssh my-device`，而不是读写服务器本地文件；同一文件里还会种下一节由 agent 自己维护的 "my-device facts" 记忆（你机器的操作系统、各项目路径、挂载点），新会话不用每次重新摸索。
 
 如果当时跳过了 CLAUDE.md 那一步（或只想要这份指令、不装其他东西），可以直接下载：
 
@@ -58,13 +58,10 @@ ssh -N remote-claude
 
 在服务器上，日常用法就是：像平时一样连上服务器（比如 **VSCode Remote-SSH**），直接启动 `claude`。第 2 步装好的 `~/.claude/CLAUDE.md` 会让它的所有项目操作都走 `ssh my-device` 在你电脑上执行——你只需要告诉它这次在哪个本地项目干活（"在 `~/projects/foo` 上工作"）。
 
-快速测试和终端小工具——这些是给你自己在终端里用的，agent 不需要它们（它直接跑 `ssh my-device`）：
+快速隧道测试：
 
 ```bash
-ssh my-device 'echo ok'                # 隧道测试：应打印 ok
-claude-local                           # 打开你电脑上的交互 shell
-claude-local git status                # 在你电脑上跑一条命令
-claude-local-mount                     # 把本地项目 sshfs 挂载到服务器
+ssh my-device 'echo ok'                # 应打印 ok
 ```
 
 ## 停止 / 卸载

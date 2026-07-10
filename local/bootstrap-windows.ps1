@@ -413,8 +413,7 @@ Write-Host @"
    (point -i at the actual private key path of the connect-back key on the server)
 
    Tip: run server/setup-server.sh on the server to install the
-   my-device ssh alias, the CLAUDE.md agent instructions and the
-   claude-local helper commands.
+   my-device ssh alias and the CLAUDE.md agent instructions.
 "@
 if ($autostart) {
     Write-Host @"

@@ -36,7 +36,7 @@ On the remote server (no sudo needed):
 bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/server/setup-server.sh)
 ```
 
-It prints a public key — paste it into the local bootstrap when asked for the "server-side public key". Use the same reverse port on both sides. It also offers to install `~/.claude/CLAUDE.md` instructions so Claude Code does all project work through `ssh my-device` instead of touching this server's filesystem.
+It prints a public key — paste it into the local bootstrap when asked for the "server-side public key". Use the same reverse port on both sides. It also offers to install `~/.claude/CLAUDE.md` instructions so Claude Code does all project work through `ssh my-device` instead of touching this server's filesystem, and seeds an agent-maintained "my-device facts" memory in the same file (your machine's OS, project paths, mount points) so new sessions skip the rediscovery.
 
 If you skipped that CLAUDE.md prompt (or just want the instructions without the rest), fetch them directly:
 
@@ -58,13 +58,10 @@ ssh -N remote-claude
 
 On the server, the normal workflow is: connect however you usually do (e.g. **VSCode Remote-SSH**) and just start `claude`. The `~/.claude/CLAUDE.md` installed in step 2 makes it do all project work on your machine through `ssh my-device` — simply tell it which local project to work on ("work on `~/projects/foo`").
 
-Quick test and terminal helpers — these are for you at the terminal; the agent itself just runs `ssh my-device` directly:
+Quick tunnel test:
 
 ```bash
-ssh my-device 'echo ok'                # tunnel test: should print ok
-claude-local                           # interactive shell on your machine
-claude-local git status                # run one command on your machine
-claude-local-mount                     # sshfs-mount the project onto the server
+ssh my-device 'echo ok'                # should print ok
 ```
 
 ## Stop / uninstall

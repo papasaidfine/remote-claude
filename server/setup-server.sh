@@ -9,19 +9,16 @@
 #      prints its public key — paste it into the local bootstrap script.
 #   2. Writes a managed "Host my-device" block into ~/.ssh/config that
 #      points at the reverse tunnel (127.0.0.1:<reverse_port>).
-#   3. Installs helper commands into ~/.local/bin — for the human user; the
-#      agent itself just runs `ssh my-device ...` as the CLAUDE.md instructs:
-#        claude-local        open a shell / run a command on the local machine
-#                            (handy for testing the tunnel)
-#        claude-local-mount  mount the local project dir here via sshfs so the
-#                            agent's file tools see the real files (live
-#                            mount — no mutagen-style sync needed)
-#   4. Stores defaults (local project dir) in ~/.config/claude-local/env.
-#   5. Optionally installs agent instructions into ~/.claude/CLAUDE.md telling
+#   3. Optionally installs agent instructions into ~/.claude/CLAUDE.md telling
 #      Claude Code to run all project work through `ssh my-device`, keep this
 #      server to lightweight script drafting (no data, no toolchains; scratch
 #      in ~/tmp), and reach project files with the file tools only via scp
-#      round-trips or an sshfs mount.
+#      round-trips or an sshfs mount. Seeds an agent-maintained "my-device
+#      facts" section (OS, one line per project, mount mappings) so new
+#      sessions do not rediscover them.
+#   4. Retires what earlier versions installed (~/.local/bin wrappers and
+#      the ~/.config/claude-local/env defaults file) — the facts section
+#      replaced them.
 #
 # Everything is user-level: no sudo required, idempotent, safe to re-run.
 #
@@ -76,8 +73,8 @@ ask_yn() { # ask_yn <prompt> <Y|N>  -> exit status 0 = yes
 cat <<'EOF'
 ==========================================================
  Reverse SSH bootstrap — SERVER side
- Installs the my-device ssh alias, agent instructions and
- helper commands so agents on this server can work on your
+ Installs the my-device ssh alias and the CLAUDE.md agent
+ instructions so agents on this server can work on your
  local machine.
 ==========================================================
 EOF
@@ -89,10 +86,10 @@ REVERSE_PORT="${REVERSE_PORT:-$(ask 'Reverse SSH port on this server (must match
 LOCAL_USER="${LOCAL_USER:-$(ask 'Username on the LOCAL machine')}"
 [[ -n "$LOCAL_USER" ]] || die "Local username must not be empty"
 echo
-echo "Optional: DEFAULT project directory on the LOCAL machine. This is only a"
-echo "default — just tell the agent which project to work on per session, or"
-echo "set the CLAUDE_LOCAL_DIR environment variable."
-LOCAL_PROJECT_DIR="${LOCAL_PROJECT_DIR:-$(ask 'Default local project directory (empty = local home directory)' '')}"
+echo "Optional: a project directory on the LOCAL machine to pre-record in the"
+echo "agent's memory (the my-device facts section). You can always just tell"
+echo "the agent which project to work on per session."
+LOCAL_PROJECT_DIR="${LOCAL_PROJECT_DIR:-$(ask 'Local project directory to pre-record (empty = skip)' '')}"
 
 # ---------------------------------------------------------------- connect-back key
 mkdir -p "$SSH_DIR"
@@ -166,155 +163,24 @@ EOF
 }
 write_ssh_config_block
 
-# ---------------------------------------------------------------- defaults file
-mkdir -p "$CONF_DIR"
-if [[ -f "$CONF_FILE" ]]; then
-  cp "$CONF_FILE" "$CONF_FILE.claude-bak-$TS"
-fi
-cat > "$CONF_FILE" <<EOF
-# Defaults for the claude-local wrappers (managed by reverse-ssh-bootstrap).
-# Environment variables set at run time take precedence over this file.
-CLAUDE_LOCAL_HOST="$LOCAL_ALIAS"
-CLAUDE_LOCAL_DIR="$LOCAL_PROJECT_DIR"
-EOF
-log "Wrote defaults to $CONF_FILE"
-
 # ---------------------------------------------------------------- scratch dir
 # The agent instructions point at ~/tmp for scratch files; make sure it exists.
 mkdir -p "$HOME/tmp"
 
-# ---------------------------------------------------------------- wrappers
-mkdir -p "$BIN_DIR"
-
-install_wrapper() { # install_wrapper <name>  (content on stdin)
-  local path="$BIN_DIR/$1"
-  cat > "$path"
-  chmod 755 "$path"
-  log "Installed $path"
-}
-
-install_wrapper "claude-local" <<'WRAPPER'
-#!/usr/bin/env bash
-#
-# claude-local — convenience command for the human user (managed by
-# reverse-ssh-bootstrap). The agent does not need it: it runs
-# `ssh my-device ...` directly, as instructed by ~/.claude/CLAUDE.md.
-#
-#   claude-local              interactive shell on the local machine
-#   claude-local <command>    run the command on the local machine
-#
-# Configuration (env vars beat ~/.config/claude-local/env):
-#   CLAUDE_LOCAL_HOST  ssh Host alias to use            (default: my-device)
-#   CLAUDE_LOCAL_DIR   directory on the local machine to run commands in
-#                      (default: empty = the local user's home directory)
-
-set -u
-
-# Load defaults from the config file; environment variables take precedence.
-CONF_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/claude-local/env"
-env_host="${CLAUDE_LOCAL_HOST:-}"
-env_dir_set="${CLAUDE_LOCAL_DIR+x}"
-env_dir="${CLAUDE_LOCAL_DIR:-}"
-if [ -f "$CONF_FILE" ]; then
-  # shellcheck disable=SC1090
-  . "$CONF_FILE"
-fi
-[ -n "$env_host" ] && CLAUDE_LOCAL_HOST="$env_host"
-[ -n "$env_dir_set" ] && CLAUDE_LOCAL_DIR="$env_dir"
-TARGET="${CLAUDE_LOCAL_HOST:-my-device}"
-DIR="${CLAUDE_LOCAL_DIR:-}"
-
-# The remote command string is interpreted by the local user's login shell,
-# so only the directory needs quoting — the command itself IS shell code.
-qdir=""
-prefix=""
-if [ -n "$DIR" ]; then
-  qdir="$(printf '%q' "$DIR")"
-  prefix="cd $qdir && "
-fi
-
-if [ $# -gt 0 ]; then
-  exec ssh -q -o LogLevel=ERROR "$TARGET" "${prefix}$*"
-fi
-
-# No arguments: open an interactive shell on the local machine.
-if [ -n "$DIR" ]; then
-  exec ssh -t -o LogLevel=ERROR "$TARGET" "cd $qdir && exec \"\$SHELL\" -l"
-fi
-exec ssh -t -o LogLevel=ERROR "$TARGET"
-WRAPPER
-
-install_wrapper "claude-local-mount" <<'WRAPPER'
-#!/usr/bin/env bash
-#
-# claude-local-mount — optional helper (managed by reverse-ssh-bootstrap).
-# Mounts the local project directory on this server via sshfs so file tools
-# (Read/Edit) see the same files that shell commands touch through
-# `ssh my-device`. A live mount — no mutagen-style syncing involved.
-#
-#   claude-local-mount [mountpoint]     default: ~/claude-local-project
-#   claude-local-mount -u [mountpoint]  unmount
-#
-# Requires sshfs on this server and CLAUDE_LOCAL_DIR to be set (or configured
-# in ~/.config/claude-local/env).
-
-set -eu
-
-# Load defaults from the config file; environment variables take precedence.
-CONF_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/claude-local/env"
-env_host="${CLAUDE_LOCAL_HOST:-}"
-env_dir_set="${CLAUDE_LOCAL_DIR+x}"
-env_dir="${CLAUDE_LOCAL_DIR:-}"
-if [ -f "$CONF_FILE" ]; then
-  # shellcheck disable=SC1090
-  . "$CONF_FILE"
-fi
-[ -n "$env_host" ] && CLAUDE_LOCAL_HOST="$env_host"
-[ -n "$env_dir_set" ] && CLAUDE_LOCAL_DIR="$env_dir"
-TARGET="${CLAUDE_LOCAL_HOST:-my-device}"
-DIR="${CLAUDE_LOCAL_DIR:-}"
-
-unmount=0
-if [ "${1:-}" = "-u" ]; then
-  unmount=1
-  shift
-fi
-MOUNTPOINT="${1:-$HOME/claude-local-project}"
-
-if [ "$unmount" -eq 1 ]; then
-  fusermount -u "$MOUNTPOINT" 2>/dev/null || umount "$MOUNTPOINT"
-  echo "Unmounted $MOUNTPOINT"
-  exit 0
-fi
-
-command -v sshfs >/dev/null || {
-  echo "sshfs is not installed on this server (e.g. apt install sshfs)" >&2
-  exit 1
-}
-[ -n "$DIR" ] || {
-  echo "CLAUDE_LOCAL_DIR is not set; set it or configure $CONF_FILE" >&2
-  exit 1
-}
-
-mkdir -p "$MOUNTPOINT"
-sshfs "$TARGET:$DIR" "$MOUNTPOINT" -o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3
-echo "Mounted $TARGET:$DIR at $MOUNTPOINT"
-echo "Unmount with: claude-local-mount -u $MOUNTPOINT"
-WRAPPER
-
-# Remove wrappers installed by older versions of this tool (the SHELL
-# override workflow was dropped in favor of the CLAUDE.md instructions).
-for stale in claude-local-shell claude-my-device; do
+# ---------------------------------------------------------------- legacy cleanup
+# Earlier versions installed shell wrappers into ~/.local/bin and a defaults
+# file; the agent now works through plain ssh/scp/sshfs plus the CLAUDE.md
+# facts memory, so re-runs retire the leftovers.
+for stale in claude-local-shell claude-my-device claude-local claude-local-mount; do
   if [[ -f "$BIN_DIR/$stale" ]]; then
     rm -f "$BIN_DIR/$stale"
     log "Removed obsolete wrapper: $BIN_DIR/$stale"
   fi
 done
-
-case ":$PATH:" in
-  *":$BIN_DIR:"*) ;;
-  *) warn "$BIN_DIR is not on your PATH; add it (e.g. export PATH=\"\$HOME/.local/bin:\$PATH\")" ;;
-esac
+if [[ -f "$CONF_FILE" ]]; then
+  mv "$CONF_FILE" "$CONF_FILE.claude-bak-$TS"
+  log "Retired the defaults file (backed up to $CONF_FILE.claude-bak-$TS)"
+fi
 
 # ---------------------------------------------------------------- CLAUDE.md (optional)
 # Global agent memory telling Claude Code to do ALL project work through
@@ -326,8 +192,7 @@ CLAUDE_MD_BEGIN="<!-- >>> my-device (managed by reverse-ssh-bootstrap) >>> -->"
 CLAUDE_MD_END="<!-- <<< my-device <<< -->"
 
 install_claude_md() {
-  local proj content tmp
-  proj="${LOCAL_PROJECT_DIR:-<none configured yet — ask the user>}"
+  local content tmp
   content="$(cat <<'CLAUDE_MD_EOF'
 # my-device: all project work happens over SSH
 
@@ -335,15 +200,25 @@ This machine is only where the agent runs. The real development environment —
 the project files, toolchain, tests, git, data — is the user's own machine,
 reachable as `my-device` through a reverse SSH tunnel.
 
+## Durable facts: read them first, keep them updated
+
+A `## my-device facts` section elsewhere in `~/.claude/CLAUDE.md` (outside
+the managed instructions block) is your persistent memory about the user's
+machine: its OS and default ssh shell, each project's path with a one-line
+description, and where projects get mounted on this server. Trust it before
+probing — do not rediscover per session what is already recorded there.
+When you learn such a durable fact the hard way, update the section with
+the Edit tool (create it if missing; editing this memory file is fine —
+the file-tool ban is about project files). Runtime state does NOT belong
+there: whether the tunnel is up or a mount is alive must be checked live,
+never assumed from memory.
+
 Project directory on my-device: the user will normally say which project to
-work on — use that path in every `cd`. If they did not say, the configured
-default is `__PROJECT_DIR__` (also `CLAUDE_LOCAL_DIR` in
-`~/.config/claude-local/env`). When no directory is clear, ask the user
-instead of guessing, and record the answer by updating `CLAUDE_LOCAL_DIR`
-in that file so later sessions start with the right default (touching that
-file here is fine — it is config, not project data). Note that
-`ssh my-device` lands in the home directory, so every command must `cd`
-explicitly.
+work on — use that path in every `cd`. If they did not say, check the
+my-device facts section. When no directory is clear, ask the user instead
+of guessing, and record the answer in the facts section so later sessions
+start with the right default. Note that `ssh my-device` lands in the home
+directory, so every command must `cd` explicitly.
 
 ## Hard rules
 
@@ -377,14 +252,24 @@ explicitly.
    installed here); file tools then see the real project files at the
    mountpoint:
 
-       mkdir -p ~/claude-local-project
-       sshfs my-device:'<project dir>' ~/claude-local-project \
+       mkdir -p ~/my-device-project
+       sshfs my-device:'<project dir>' ~/my-device-project \
              -o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3
-       fusermount -u ~/claude-local-project     # unmount when done
+       fusermount -u ~/my-device-project     # unmount when done
+
+   A dropped tunnel can leave a zombie mount ("Transport endpoint is not
+   connected"). Before trusting an existing mount, check it with
+   `mountpoint ~/my-device-project` or a quick `ls`; if it is dead,
+   `fusermount -u` and remount. Record the project → mountpoint mapping
+   in the facts section.
 
    Still run commands through `ssh my-device`, not against the mount.
 
 ## Patterns
+
+These assume a POSIX shell answers on my-device. If the facts section says
+it is Windows (cmd/PowerShell), translate the commands accordingly — and
+record working equivalents in the facts section as you find them.
 
 Explore and read:
 
@@ -430,7 +315,6 @@ When quoting through two shells gets hairy, pipe a whole script instead
   may have changed.
 CLAUDE_MD_EOF
 )"
-  content="${content//__PROJECT_DIR__/$proj}"
 
   mkdir -p "$(dirname "$CLAUDE_MD")"
   touch "$CLAUDE_MD"
@@ -452,9 +336,44 @@ CLAUDE_MD_EOF
   log "Installed agent instructions into $CLAUDE_MD"
 }
 
+# Agent-maintained memory (OS of my-device, project paths, mounts) that the
+# instructions above tell the agent to read first and keep updated. Seeded
+# once, OUTSIDE the managed markers: re-runs replace the instructions block
+# but never touch what the agent has recorded here.
+install_facts_section() {
+  # -x: match the heading line exactly — the instructions block mentions the
+  # literal string "## my-device facts" in prose, which must not count.
+  if grep -qxF "## my-device facts" "$CLAUDE_MD"; then
+    log "my-device facts section already present in $CLAUDE_MD, leaving it as is"
+    return 0
+  fi
+  local projects_seed content
+  projects_seed="  - none recorded yet"
+  [[ -n "$LOCAL_PROJECT_DIR" ]] && projects_seed="  - $LOCAL_PROJECT_DIR — (no description yet)"
+  content="$(cat <<'FACTS_EOF'
+## my-device facts
+
+Agent-maintained memory about the user's machine — keep it updated with the
+Edit tool as facts are learned. setup-server.sh never rewrites this section.
+
+- OS / default ssh shell: unknown — detect on first contact (try
+  `ssh my-device uname -s`; if that errors, likely Windows — try
+  `ssh my-device cmd /c ver`) and record the answer here.
+- Projects (path on my-device — one per line, with a short description):
+__PROJECTS_SEED__
+- Mounts (project on my-device -> mountpoint on this server):
+  - none recorded yet
+FACTS_EOF
+)"
+  content="${content//__PROJECTS_SEED__/$projects_seed}"
+  printf '\n%s\n' "$content" >> "$CLAUDE_MD"
+  log "Seeded the my-device facts section in $CLAUDE_MD"
+}
+
 echo
 if ask_yn "Install agent instructions into ~/.claude/CLAUDE.md (tell Claude Code to work on my-device via ssh, not on this server's files)" "Y"; then
   install_claude_md
+  install_facts_section
 fi
 
 # ---------------------------------------------------------------- summary
@@ -478,11 +397,5 @@ $(cat "$KEY_PATH.pub")
    Remote-SSH) and just start 'claude'. With the ~/.claude/CLAUDE.md
    installed by this script, it does all project work on your machine
    through 'ssh my-device' — simply tell it which local project to use${LOCAL_PROJECT_DIR:+
-   (default: $LOCAL_PROJECT_DIR)}.
-
-   Helper commands for YOU at the terminal (the agent does not need them):
-     claude-local                          # interactive shell over there
-     claude-local git status               # run one command over there
-     claude-local-mount                    # sshfs-mount the project here so
-                                           # file tools see the real files
+   (pre-recorded in its memory: $LOCAL_PROJECT_DIR)}.
 EOF
