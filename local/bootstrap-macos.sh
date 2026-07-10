@@ -102,8 +102,21 @@ LOCAL_USER="${LOCAL_USER:-$(ask 'Local username (used when connecting back from 
 echo
 echo "Server-side public key: the .pub of the key that Claude / Codex on the"
 echo "server will use to SSH back into this machine."
-echo "(paste the whole line, e.g. 'ssh-ed25519 AAAA... comment'; leave empty to skip)"
-SERVER_PUBKEY="${SERVER_PUBKEY:-$(ask 'Server-side public key' '')}"
+if [[ -z "${SERVER_PUBKEY:-}" ]] \
+   && ask_yn "Fetch it from the server automatically over SSH (generates the server's id_ed25519 if missing; you may be asked for the server password)" "Y"; then
+  SERVER_PUBKEY="$(ssh -n -p "$SERVER_PORT" -o StrictHostKeyChecking=accept-new "$SERVER_USER@$SERVER_HOST" \
+    'cat ~/.ssh/id_ed25519.pub 2>/dev/null || { mkdir -p ~/.ssh && chmod 700 ~/.ssh && ssh-keygen -q -t ed25519 -f ~/.ssh/id_ed25519 -N "" </dev/null >/dev/null 2>&1 && cat ~/.ssh/id_ed25519.pub; }' \
+    2>/dev/null | grep -E '^ssh-ed25519 ' | head -n 1 || true)"
+  if [[ -n "$SERVER_PUBKEY" ]]; then
+    log "Fetched server-side public key: $SERVER_PUBKEY"
+  else
+    warn "Could not fetch the key automatically; paste it manually below"
+  fi
+fi
+if [[ -z "${SERVER_PUBKEY:-}" ]]; then
+  echo "(paste the whole line, e.g. 'ssh-ed25519 AAAA... comment'; leave empty to skip)"
+  SERVER_PUBKEY="$(ask 'Server-side public key' '')"
+fi
 
 if ask_yn "Disable password login for the local sshd (recommended, public key only)" "Y"; then
   DISABLE_PASSWORD=1

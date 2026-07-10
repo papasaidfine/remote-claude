@@ -26,7 +26,7 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 .\bootstrap-windows.ps1
 ```
 
-It will ask for your server's address/user/port, a reverse port (default 2222), and the server-side public key from step 2 — you can also run step 2 first and paste, or leave it empty and re-run later.
+It will ask for your server's address/user/port and a reverse port (default 2222). The server-side public key can be fetched (and generated) from the server automatically over SSH — you don't need to prepare anything on the server first — and the script also offers to upload your local public key there.
 
 ## 2. Set up the server
 

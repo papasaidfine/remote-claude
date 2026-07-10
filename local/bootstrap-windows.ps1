@@ -138,8 +138,24 @@ if (-not $LocalUser)   { $LocalUser   = Read-Default 'Local username (used when 
 Write-Host ''
 Write-Host 'Server-side public key: the .pub of the key that Claude / Codex on the'
 Write-Host 'server will use to SSH back into this machine.'
-Write-Host "(paste the whole line, e.g. 'ssh-ed25519 AAAA... comment'; leave empty to skip)"
-if (-not $ServerPublicKey) { $ServerPublicKey = Read-Default 'Server-side public key' '' }
+if (-not $ServerPublicKey -and (Test-Path $SshExe) -and
+    (Read-YesNo 'Fetch it from the server automatically over SSH (generates the server''s id_ed25519 if missing; you may be asked for the server password)' $true)) {
+    $fetchCmd = 'cat ~/.ssh/id_ed25519.pub 2>/dev/null || { mkdir -p ~/.ssh && chmod 700 ~/.ssh && ssh-keygen -q -t ed25519 -f ~/.ssh/id_ed25519 -N '''' </dev/null >/dev/null 2>&1 && cat ~/.ssh/id_ed25519.pub; }'
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $fetched = & $SshExe -n -p $ServerPort -o StrictHostKeyChecking=accept-new "$ServerUser@$ServerHost" $fetchCmd 2>$null
+    $ErrorActionPreference = $prevEap
+    $ServerPublicKey = @($fetched) | Where-Object { $_ -match '^ssh-ed25519 ' } | Select-Object -First 1
+    if ($ServerPublicKey) {
+        Write-Info "Fetched server-side public key: $ServerPublicKey"
+    } else {
+        Write-Warn 'Could not fetch the key automatically; paste it manually below'
+    }
+}
+if (-not $ServerPublicKey) {
+    Write-Host "(paste the whole line, e.g. 'ssh-ed25519 AAAA... comment'; leave empty to skip)"
+    $ServerPublicKey = Read-Default 'Server-side public key' ''
+}
 
 $DisablePassword = Read-YesNo 'Disable password login for the local sshd (recommended, public key only)' $true
 $LoopbackOnly    = Read-YesNo 'Make the local sshd listen on 127.0.0.1 only (recommended; note: direct SSH from the LAN will stop working)' $true
