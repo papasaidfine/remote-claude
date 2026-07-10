@@ -51,13 +51,14 @@ ssh -N remote-claude
 On the server:
 
 ```bash
-ssh my-device 'echo ok'      # test: should print ok
-claude-local                    # interactive shell on your machine
-claude-local git status         # run one command on your machine
+ssh my-device 'echo ok'                # test: should print ok
+claude-local                           # interactive shell on your machine
+claude-local git status                # run one command on your machine
 
-# let Claude Code run all its shell commands on your machine,
-# inside the project directory you configured:
-SHELL=~/.local/bin/claude-local-shell claude
+# launch Claude Code with all its shell commands running on your machine,
+# in whichever local project you pick for this session:
+claude-my-device ~/projects/foo
+claude-my-device                       # default dir from the server setup
 ```
 
 ## Stop / uninstall

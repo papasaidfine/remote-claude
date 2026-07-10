@@ -51,13 +51,14 @@ ssh -N remote-claude
 在服务器上：
 
 ```bash
-ssh my-device 'echo ok'      # 测试：应打印 ok
-claude-local                    # 打开你电脑上的交互 shell
-claude-local git status         # 在你电脑上跑一条命令
+ssh my-device 'echo ok'                # 测试：应打印 ok
+claude-local                           # 打开你电脑上的交互 shell
+claude-local git status                # 在你电脑上跑一条命令
 
-# 让 Claude Code 的所有 shell 命令都在你的电脑上、
-# 配置好的项目目录里执行：
-SHELL=~/.local/bin/claude-local-shell claude
+# 启动 Claude Code，所有 shell 命令都在你电脑上执行，
+# 每次会话可以指定不同的本地项目目录：
+claude-my-device ~/projects/foo
+claude-my-device                       # 用 server setup 时配置的默认目录
 ```
 
 ## 停止 / 卸载

@@ -10,6 +10,8 @@
 #   2. Writes a managed "Host my-device" block into ~/.ssh/config that
 #      points at the reverse tunnel (127.0.0.1:<reverse_port>).
 #   3. Installs wrappers into ~/.local/bin:
+#        claude-my-device    launch Claude Code working on the local machine:
+#                            claude-my-device [local-project-dir] [args...]
 #        claude-local        open a shell / run a command on the local machine
 #        claude-local-shell  SHELL-compatible wrapper: point Claude Code /
 #                            Codex at it (SHELL=~/.local/bin/claude-local-shell)
@@ -87,10 +89,10 @@ REVERSE_PORT="${REVERSE_PORT:-$(ask 'Reverse SSH port on this server (must match
 LOCAL_USER="${LOCAL_USER:-$(ask 'Username on the LOCAL machine')}"
 [[ -n "$LOCAL_USER" ]] || die "Local username must not be empty"
 echo
-echo "Optional: default project directory on the LOCAL machine. When set, the"
-echo "SHELL wrapper runs every command inside it (override per-run with the"
-echo "CLAUDE_LOCAL_DIR environment variable)."
-LOCAL_PROJECT_DIR="${LOCAL_PROJECT_DIR:-$(ask 'Local project directory (empty = local home directory)' '')}"
+echo "Optional: DEFAULT project directory on the LOCAL machine. This is only a"
+echo "default — pick a different project per session with"
+echo "'claude-my-device <dir>' or the CLAUDE_LOCAL_DIR environment variable."
+LOCAL_PROJECT_DIR="${LOCAL_PROJECT_DIR:-$(ask 'Default local project directory (empty = local home directory)' '')}"
 
 # ---------------------------------------------------------------- connect-back key
 mkdir -p "$SSH_DIR"
@@ -281,6 +283,40 @@ fi
 exec "$SELF_DIR/claude-local-shell" -c "$*"
 WRAPPER
 
+install_wrapper "claude-my-device" <<'WRAPPER'
+#!/usr/bin/env bash
+#
+# claude-my-device — launch Claude Code working on my-device (managed by
+# reverse-ssh-bootstrap).
+#
+#   claude-my-device [local-project-dir] [agent args...]
+#
+# The first argument, when it is a path rather than an option, selects the
+# project directory ON THE LOCAL MACHINE for this session; without it the
+# default from ~/.config/claude-local/env applies. Every Bash-tool command
+# the agent runs then executes in that directory through the reverse tunnel.
+#
+# Override the agent binary with CLAUDE_LOCAL_AGENT (default: claude).
+
+set -u
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
+  CLAUDE_LOCAL_DIR="$1"
+  export CLAUDE_LOCAL_DIR
+  shift
+  # fail fast with a clear message instead of every agent command failing
+  if ! "$SELF_DIR/claude-local-shell" -c ":"; then
+    echo "Cannot reach $CLAUDE_LOCAL_DIR on my-device — is the tunnel up and the path correct?" >&2
+    exit 1
+  fi
+fi
+
+SHELL="$SELF_DIR/claude-local-shell"
+export SHELL
+exec "${CLAUDE_LOCAL_AGENT:-claude}" "$@"
+WRAPPER
+
 install_wrapper "claude-local-mount" <<'WRAPPER'
 #!/usr/bin/env bash
 #
@@ -363,7 +399,9 @@ This machine is only where the agent runs. The real development environment —
 the project files, toolchain, tests, git — is the user's own machine,
 reachable as `my-device` through a reverse SSH tunnel.
 
-Project directory on my-device: `__PROJECT_DIR__`
+Project directory on my-device: session-dependent — verify the effective one
+with `~/.local/bin/claude-local-shell -c pwd` (selected per session via
+`claude-my-device <dir>` or CLAUDE_LOCAL_DIR; default: `__PROJECT_DIR__`)
 
 ## Hard rules
 
@@ -460,11 +498,12 @@ $(cat "$KEY_PATH.pub")
      ssh $LOCAL_ALIAS 'echo ok'
 
 4. Let agents on this server work on the local machine:
+     claude-my-device ~/projects/foo       # Claude Code working in that dir
+                                           # on your machine (pick any project
+                                           # per session)
+     claude-my-device                      # same, default dir${LOCAL_PROJECT_DIR:+: $LOCAL_PROJECT_DIR}
      claude-local                          # interactive shell over there
      claude-local git status               # run one command over there
-     SHELL=$BIN_DIR/claude-local-shell claude
-         # every Bash-tool command now runs on the local machine
-         # (in CLAUDE_LOCAL_DIR${LOCAL_PROJECT_DIR:+ = $LOCAL_PROJECT_DIR})
 
    Note: with the SHELL wrapper, the agent's file tools (Read/Edit) still
    operate on THIS server's filesystem. Either let the agent do file work

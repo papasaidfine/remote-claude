@@ -4,7 +4,10 @@ This machine is only where the agent runs. The real development environment —
 the project files, toolchain, tests, git — is the user's own machine,
 reachable as `my-device` through a reverse SSH tunnel.
 
-Project directory on my-device: `<project dir — see CLAUDE_LOCAL_DIR in ~/.config/claude-local/env>`
+Project directory on my-device: session-dependent — verify the effective one
+with `~/.local/bin/claude-local-shell -c pwd` (selected per session via
+`claude-my-device <dir>` or CLAUDE_LOCAL_DIR; the default lives in
+`~/.config/claude-local/env`)
 
 ## Hard rules
 
