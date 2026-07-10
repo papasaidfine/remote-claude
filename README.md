@@ -36,7 +36,7 @@ On the remote server (no sudo needed):
 bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/server/setup-server.sh)
 ```
 
-It prints a public key — paste it into the local bootstrap when asked for the "server-side public key". Use the same reverse port on both sides.
+It prints a public key — paste it into the local bootstrap when asked for the "server-side public key". Use the same reverse port on both sides. It also offers to install `~/.claude/CLAUDE.md` instructions so Claude Code does all project work through `ssh my-device` instead of touching this server's filesystem.
 
 Also make sure the **local** public key the bootstrap printed is in the server's `~/.ssh/authorized_keys` — the local bootstrap offers to upload it for you.
 

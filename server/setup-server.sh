@@ -18,6 +18,9 @@
 #        claude-local-mount  optional: mount the local project dir here via
 #                            sshfs (live mount — no mutagen-style sync needed)
 #   4. Stores defaults (local project dir) in ~/.config/claude-local/env.
+#   5. Optionally installs agent instructions into ~/.claude/CLAUDE.md telling
+#      Claude Code to do all project work through `ssh my-device` (no
+#      Read/Edit/Glob on this server's filesystem).
 #
 # Everything is user-level: no sudo required, idempotent, safe to re-run.
 #
@@ -340,6 +343,104 @@ case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *) warn "$BIN_DIR is not on your PATH; add it (e.g. export PATH=\"\$HOME/.local/bin:\$PATH\")" ;;
 esac
+
+# ---------------------------------------------------------------- CLAUDE.md (optional)
+# Global agent memory telling Claude Code to do ALL project work through
+# `ssh my-device` instead of this server's filesystem (no Read/Edit/Glob on
+# project files). Managed as a marker-delimited block, so re-runs update it
+# and user content around it is preserved.
+CLAUDE_MD="$HOME/.claude/CLAUDE.md"
+CLAUDE_MD_BEGIN="<!-- >>> my-device (managed by reverse-ssh-bootstrap) >>> -->"
+CLAUDE_MD_END="<!-- <<< my-device <<< -->"
+
+install_claude_md() {
+  local proj content tmp
+  proj="${LOCAL_PROJECT_DIR:-<ask the user; also see CLAUDE_LOCAL_DIR in ~/.config/claude-local/env>}"
+  content="$(cat <<'CLAUDE_MD_EOF'
+# my-device: all project work happens over SSH
+
+This machine is only where the agent runs. The real development environment —
+the project files, toolchain, tests, git — is the user's own machine,
+reachable as `my-device` through a reverse SSH tunnel.
+
+Project directory on my-device: `__PROJECT_DIR__`
+
+## Hard rules
+
+- Run every project operation through SSH from the Bash tool:
+  `ssh my-device 'cd <project dir> && <command>'`
+- NEVER use Read, Edit, Write, Glob, Grep, or NotebookEdit on project files.
+  Those tools operate on THIS machine's filesystem, which does not contain
+  the project — anything they read is wrong and anything they write is lost.
+- Do not install project toolchains or dependencies on this machine. Build,
+  test, lint, and use git on my-device.
+
+## Patterns
+
+Explore and read:
+
+    ssh my-device 'cd <project dir> && ls -la'
+    ssh my-device 'cd <project dir> && sed -n "1,120p" src/main.py'
+    ssh my-device 'cd <project dir> && grep -rn "pattern" src/'
+
+Run, test, git:
+
+    ssh my-device 'cd <project dir> && make test'
+    ssh my-device 'cd <project dir> && git status'
+
+Write a whole file (pipe a script to bash; quoted delimiters stop local
+expansion):
+
+    ssh my-device 'bash -s' <<'REMOTE'
+    cd <project dir>
+    cat > src/config.py <<'EOF'
+    ...new file content...
+    EOF
+    REMOTE
+
+Small edits — prefer a patch over rewriting the file:
+
+    ssh my-device 'cd <project dir> && git apply' <<'EOF'
+    diff --git a/src/main.py b/src/main.py
+    ...
+    EOF
+
+## When ssh my-device fails
+
+- `Connection refused`: the reverse tunnel is down. Tell the user to start
+  `ssh -N remote-claude` on their machine (or check its autostart). Nothing
+  on this server can fix it — do not retry endlessly or work around it by
+  editing files here.
+- Host key mismatch: stop and tell the user; the machine behind the tunnel
+  may have changed.
+CLAUDE_MD_EOF
+)"
+  content="${content//__PROJECT_DIR__/$proj}"
+
+  mkdir -p "$(dirname "$CLAUDE_MD")"
+  touch "$CLAUDE_MD"
+  if grep -qF "$CLAUDE_MD_BEGIN" "$CLAUDE_MD"; then
+    cp "$CLAUDE_MD" "$CLAUDE_MD.claude-bak-$TS"
+    tmp="$(mktemp)"
+    awk -v begin="$CLAUDE_MD_BEGIN" -v end="$CLAUDE_MD_END" '
+      $0 == begin { skip = 1; next }
+      $0 == end   { skip = 0; next }
+      !skip { print }
+    ' "$CLAUDE_MD" > "$tmp"
+    cat "$tmp" > "$CLAUDE_MD"
+    rm -f "$tmp"
+  elif [[ -s "$CLAUDE_MD" ]]; then
+    cp "$CLAUDE_MD" "$CLAUDE_MD.claude-bak-$TS"
+  fi
+  { [[ -s "$CLAUDE_MD" ]] && [[ "$(tail -c1 "$CLAUDE_MD")" != "" ]] && echo; \
+    printf '%s\n%s\n%s\n' "$CLAUDE_MD_BEGIN" "$content" "$CLAUDE_MD_END"; } >> "$CLAUDE_MD"
+  log "Installed agent instructions into $CLAUDE_MD"
+}
+
+echo
+if ask_yn "Install agent instructions into ~/.claude/CLAUDE.md (tell Claude Code to work on my-device via ssh, not on this server's files)" "Y"; then
+  install_claude_md
+fi
 
 # ---------------------------------------------------------------- summary
 cat <<EOF

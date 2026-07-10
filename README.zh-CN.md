@@ -36,7 +36,7 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/server/setup-server.sh)
 ```
 
-它会打印一个公钥——粘贴到本地 bootstrap 询问 "server-side public key" 的地方。两边的反向端口要填一样的。
+它会打印一个公钥——粘贴到本地 bootstrap 询问 "server-side public key" 的地方。两边的反向端口要填一样的。它还会询问是否安装 `~/.claude/CLAUDE.md` 指令，让 Claude Code 的所有项目操作都走 `ssh my-device`，而不是读写服务器本地文件。
 
 另外确认本地 bootstrap 打印的**本地公钥**已加入服务器的 `~/.ssh/authorized_keys`——本地脚本提供自动上传选项。
 
