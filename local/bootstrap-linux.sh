@@ -434,7 +434,8 @@ cat <<EOF
    (point -i at the actual private key path of the connect-back key on the server)
 
    Tip: run server/setup-server.sh on the server to install the
-   my-device ssh alias and the claude-local-shell SHELL wrapper.
+   my-device ssh alias, the CLAUDE.md agent instructions and the
+   claude-local helper commands.
 
 EOF
 if [[ "$AUTOSTART_INSTALLED" -eq 1 ]]; then

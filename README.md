@@ -50,13 +50,13 @@ ssh -N remote-claude
 
 On the server, the normal workflow is: connect however you usually do (e.g. **VSCode Remote-SSH**) and just start `claude`. The `~/.claude/CLAUDE.md` installed in step 2 makes it do all project work on your machine through `ssh my-device` — simply tell it which local project to work on ("work on `~/projects/foo`").
 
-Quick test and terminal extras:
+Quick test and terminal helpers — these are for you at the terminal; the agent itself just runs `ssh my-device` directly:
 
 ```bash
 ssh my-device 'echo ok'                # tunnel test: should print ok
 claude-local                           # interactive shell on your machine
 claude-local git status                # run one command on your machine
-claude-my-device ~/projects/foo        # optional: claude with its SHELL forced through the tunnel
+claude-local-mount                     # sshfs-mount the project onto the server
 ```
 
 ## Stop / uninstall

@@ -50,13 +50,13 @@ ssh -N remote-claude
 
 在服务器上，日常用法就是：像平时一样连上服务器（比如 **VSCode Remote-SSH**），直接启动 `claude`。第 2 步装好的 `~/.claude/CLAUDE.md` 会让它的所有项目操作都走 `ssh my-device` 在你电脑上执行——你只需要告诉它这次在哪个本地项目干活（"在 `~/projects/foo` 上工作"）。
 
-快速测试和终端下的附加工具：
+快速测试和终端小工具——这些是给你自己在终端里用的，agent 不需要它们（它直接跑 `ssh my-device`）：
 
 ```bash
 ssh my-device 'echo ok'                # 隧道测试：应打印 ok
 claude-local                           # 打开你电脑上的交互 shell
 claude-local git status                # 在你电脑上跑一条命令
-claude-my-device ~/projects/foo        # 可选：强制 claude 的 SHELL 走隧道
+claude-local-mount                     # 把本地项目 sshfs 挂载到服务器
 ```
 
 ## 停止 / 卸载

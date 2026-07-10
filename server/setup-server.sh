@@ -9,20 +9,19 @@
 #      prints its public key — paste it into the local bootstrap script.
 #   2. Writes a managed "Host my-device" block into ~/.ssh/config that
 #      points at the reverse tunnel (127.0.0.1:<reverse_port>).
-#   3. Installs wrappers into ~/.local/bin:
-#        claude-my-device    launch Claude Code working on the local machine:
-#                            claude-my-device [local-project-dir] [args...]
+#   3. Installs helper commands into ~/.local/bin — for the human user; the
+#      agent itself just runs `ssh my-device ...` as the CLAUDE.md instructs:
 #        claude-local        open a shell / run a command on the local machine
-#        claude-local-shell  SHELL-compatible wrapper: point Claude Code /
-#                            Codex at it (SHELL=~/.local/bin/claude-local-shell)
-#                            so every Bash-tool command runs on the local
-#                            machine, optionally inside CLAUDE_LOCAL_DIR
-#        claude-local-mount  optional: mount the local project dir here via
-#                            sshfs (live mount — no mutagen-style sync needed)
+#                            (handy for testing the tunnel)
+#        claude-local-mount  mount the local project dir here via sshfs so the
+#                            agent's file tools see the real files (live
+#                            mount — no mutagen-style sync needed)
 #   4. Stores defaults (local project dir) in ~/.config/claude-local/env.
 #   5. Optionally installs agent instructions into ~/.claude/CLAUDE.md telling
-#      Claude Code to do all project work through `ssh my-device` (no
-#      Read/Edit/Glob on this server's filesystem).
+#      Claude Code to run all project work through `ssh my-device`, keep this
+#      server to lightweight script drafting (no data, no toolchains; scratch
+#      in ~/tmp), and reach project files with the file tools only via scp
+#      round-trips or an sshfs mount.
 #
 # Everything is user-level: no sudo required, idempotent, safe to re-run.
 #
@@ -77,8 +76,9 @@ ask_yn() { # ask_yn <prompt> <Y|N>  -> exit status 0 = yes
 cat <<'EOF'
 ==========================================================
  Reverse SSH bootstrap — SERVER side
- Installs the my-device ssh alias + SHELL wrappers so agents
- on this server can work on your local machine.
+ Installs the my-device ssh alias, agent instructions and
+ helper commands so agents on this server can work on your
+ local machine.
 ==========================================================
 EOF
 echo
@@ -90,8 +90,8 @@ LOCAL_USER="${LOCAL_USER:-$(ask 'Username on the LOCAL machine')}"
 [[ -n "$LOCAL_USER" ]] || die "Local username must not be empty"
 echo
 echo "Optional: DEFAULT project directory on the LOCAL machine. This is only a"
-echo "default — pick a different project per session with"
-echo "'claude-my-device <dir>' or the CLAUDE_LOCAL_DIR environment variable."
+echo "default — just tell the agent which project to work on per session, or"
+echo "set the CLAUDE_LOCAL_DIR environment variable."
 LOCAL_PROJECT_DIR="${LOCAL_PROJECT_DIR:-$(ask 'Default local project directory (empty = local home directory)' '')}"
 
 # ---------------------------------------------------------------- connect-back key
@@ -179,6 +179,10 @@ CLAUDE_LOCAL_DIR="$LOCAL_PROJECT_DIR"
 EOF
 log "Wrote defaults to $CONF_FILE"
 
+# ---------------------------------------------------------------- scratch dir
+# The agent instructions point at ~/tmp for scratch files; make sure it exists.
+mkdir -p "$HOME/tmp"
+
 # ---------------------------------------------------------------- wrappers
 mkdir -p "$BIN_DIR"
 
@@ -189,26 +193,20 @@ install_wrapper() { # install_wrapper <name>  (content on stdin)
   log "Installed $path"
 }
 
-install_wrapper "claude-local-shell" <<'WRAPPER'
+install_wrapper "claude-local" <<'WRAPPER'
 #!/usr/bin/env bash
 #
-# claude-local-shell — SHELL-compatible wrapper (managed by
-# reverse-ssh-bootstrap). Executes commands on the LOCAL machine through the
-# reverse SSH tunnel instead of on this server.
+# claude-local — convenience command for the human user (managed by
+# reverse-ssh-bootstrap). The agent does not need it: it runs
+# `ssh my-device ...` directly, as instructed by ~/.claude/CLAUDE.md.
 #
-# Agents such as Claude Code use the SHELL environment variable for their
-# Bash tool, so pointing SHELL here makes every command run locally:
-#
-#   SHELL=~/.local/bin/claude-local-shell claude
+#   claude-local              interactive shell on the local machine
+#   claude-local <command>    run the command on the local machine
 #
 # Configuration (env vars beat ~/.config/claude-local/env):
 #   CLAUDE_LOCAL_HOST  ssh Host alias to use            (default: my-device)
 #   CLAUDE_LOCAL_DIR   directory on the local machine to run commands in
 #                      (default: empty = the local user's home directory)
-#
-# Invocations handled:
-#   claude-local-shell -c 'command'   run the command on the local machine
-#   claude-local-shell                interactive shell on the local machine
 
 set -u
 
@@ -228,93 +226,22 @@ DIR="${CLAUDE_LOCAL_DIR:-}"
 
 # The remote command string is interpreted by the local user's login shell,
 # so only the directory needs quoting — the command itself IS shell code.
+qdir=""
 prefix=""
 if [ -n "$DIR" ]; then
   qdir="$(printf '%q' "$DIR")"
   prefix="cd $qdir && "
 fi
 
-cmd=""
-have_cmd=0
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -c)
-      shift
-      cmd="${1-}"
-      have_cmd=1
-      break
-      ;;
-    -l|-i|--login|--noprofile|--norc)
-      shift   # ignore login/interactive flags some callers add
-      ;;
-    *)
-      break
-      ;;
-  esac
-done
-
-if [ "$have_cmd" -eq 1 ]; then
-  [ -n "$cmd" ] || cmd=":"   # `shell -c ''` must be a no-op, not a syntax error
-  exec ssh -q -o LogLevel=ERROR "$TARGET" "${prefix}${cmd}"
+if [ $# -gt 0 ]; then
+  exec ssh -q -o LogLevel=ERROR "$TARGET" "${prefix}$*"
 fi
 
-# No -c: open an interactive shell on the local machine.
+# No arguments: open an interactive shell on the local machine.
 if [ -n "$DIR" ]; then
   exec ssh -t -o LogLevel=ERROR "$TARGET" "cd $qdir && exec \"\$SHELL\" -l"
 fi
 exec ssh -t -o LogLevel=ERROR "$TARGET"
-WRAPPER
-
-install_wrapper "claude-local" <<'WRAPPER'
-#!/usr/bin/env bash
-#
-# claude-local — convenience command (managed by reverse-ssh-bootstrap).
-#
-#   claude-local              interactive shell on the local machine
-#   claude-local <command>    run the command on the local machine
-#
-# Respects CLAUDE_LOCAL_HOST / CLAUDE_LOCAL_DIR like claude-local-shell.
-
-set -u
-SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
-if [ $# -eq 0 ]; then
-  exec "$SELF_DIR/claude-local-shell"
-fi
-exec "$SELF_DIR/claude-local-shell" -c "$*"
-WRAPPER
-
-install_wrapper "claude-my-device" <<'WRAPPER'
-#!/usr/bin/env bash
-#
-# claude-my-device — launch Claude Code working on my-device (managed by
-# reverse-ssh-bootstrap).
-#
-#   claude-my-device [local-project-dir] [agent args...]
-#
-# The first argument, when it is a path rather than an option, selects the
-# project directory ON THE LOCAL MACHINE for this session; without it the
-# default from ~/.config/claude-local/env applies. Every Bash-tool command
-# the agent runs then executes in that directory through the reverse tunnel.
-#
-# Override the agent binary with CLAUDE_LOCAL_AGENT (default: claude).
-
-set -u
-SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
-  CLAUDE_LOCAL_DIR="$1"
-  export CLAUDE_LOCAL_DIR
-  shift
-  # fail fast with a clear message instead of every agent command failing
-  if ! "$SELF_DIR/claude-local-shell" -c ":"; then
-    echo "Cannot reach $CLAUDE_LOCAL_DIR on my-device — is the tunnel up and the path correct?" >&2
-    exit 1
-  fi
-fi
-
-SHELL="$SELF_DIR/claude-local-shell"
-export SHELL
-exec "${CLAUDE_LOCAL_AGENT:-claude}" "$@"
 WRAPPER
 
 install_wrapper "claude-local-mount" <<'WRAPPER'
@@ -323,7 +250,7 @@ install_wrapper "claude-local-mount" <<'WRAPPER'
 # claude-local-mount — optional helper (managed by reverse-ssh-bootstrap).
 # Mounts the local project directory on this server via sshfs so file tools
 # (Read/Edit) see the same files that shell commands touch through
-# claude-local-shell. A live mount — no mutagen-style syncing involved.
+# `ssh my-device`. A live mount — no mutagen-style syncing involved.
 #
 #   claude-local-mount [mountpoint]     default: ~/claude-local-project
 #   claude-local-mount -u [mountpoint]  unmount
@@ -375,6 +302,15 @@ echo "Mounted $TARGET:$DIR at $MOUNTPOINT"
 echo "Unmount with: claude-local-mount -u $MOUNTPOINT"
 WRAPPER
 
+# Remove wrappers installed by older versions of this tool (the SHELL
+# override workflow was dropped in favor of the CLAUDE.md instructions).
+for stale in claude-local-shell claude-my-device; do
+  if [[ -f "$BIN_DIR/$stale" ]]; then
+    rm -f "$BIN_DIR/$stale"
+    log "Removed obsolete wrapper: $BIN_DIR/$stale"
+  fi
+done
+
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *) warn "$BIN_DIR is not on your PATH; add it (e.g. export PATH=\"\$HOME/.local/bin:\$PATH\")" ;;
@@ -391,30 +327,62 @@ CLAUDE_MD_END="<!-- <<< my-device <<< -->"
 
 install_claude_md() {
   local proj content tmp
-  proj="${LOCAL_PROJECT_DIR:-<ask the user; also see CLAUDE_LOCAL_DIR in ~/.config/claude-local/env>}"
+  proj="${LOCAL_PROJECT_DIR:-<none configured yet — ask the user>}"
   content="$(cat <<'CLAUDE_MD_EOF'
 # my-device: all project work happens over SSH
 
 This machine is only where the agent runs. The real development environment —
-the project files, toolchain, tests, git — is the user's own machine,
+the project files, toolchain, tests, git, data — is the user's own machine,
 reachable as `my-device` through a reverse SSH tunnel.
 
 Project directory on my-device: the user will normally say which project to
 work on — use that path in every `cd`. If they did not say, the configured
-default is `__PROJECT_DIR__` (also in `~/.config/claude-local/env`; reading
-that file here is fine — it is config, not project data). When no directory
-is clear, ask the user instead of guessing. Note that `ssh my-device` lands
-in the home directory, so every command must `cd` explicitly.
+default is `__PROJECT_DIR__` (also `CLAUDE_LOCAL_DIR` in
+`~/.config/claude-local/env`). When no directory is clear, ask the user
+instead of guessing, and record the answer by updating `CLAUDE_LOCAL_DIR`
+in that file so later sessions start with the right default (touching that
+file here is fine — it is config, not project data). Note that
+`ssh my-device` lands in the home directory, so every command must `cd`
+explicitly.
 
 ## Hard rules
 
-- Run every project operation through SSH from the Bash tool:
+- Everything that touches the project — build, test, lint, git, running any
+  program, generating any data — happens ON MY-DEVICE through the Bash tool:
   `ssh my-device 'cd <project dir> && <command>'`
-- NEVER use Read, Edit, Write, Glob, Grep, or NotebookEdit on project files.
-  Those tools operate on THIS machine's filesystem, which does not contain
-  the project — anything they read is wrong and anything they write is lost.
-- Do not install project toolchains or dependencies on this machine. Build,
-  test, lint, and use git on my-device.
+- This server is for lightweight work only: drafting small scripts and
+  patches, and network tools (WebSearch / WebFetch), which run here and are
+  fine to use directly. Do not generate project data on this machine and do
+  not install project toolchains or dependencies here.
+- Use `~/tmp/` on this server for scratch files.
+- Read, Edit, Write, Glob, Grep, and NotebookEdit operate on THIS machine's
+  filesystem, which does not contain the project. Never point them at
+  project paths directly — anything they read is wrong and anything they
+  write is lost. To use them on project files, set up one of the two
+  arrangements below first.
+
+## Using file tools on project files
+
+1. scp round-trip — copy the file to `~/tmp/`, edit it there with the file
+   tools, copy it back:
+
+       scp my-device:'<project dir>/src/main.py' ~/tmp/
+       (Read / Edit ~/tmp/main.py)
+       scp ~/tmp/main.py my-device:'<project dir>/src/main.py'
+
+   If commands on my-device may have changed the file in between, re-copy
+   it before editing again.
+
+2. sshfs mount — mount the project directory onto this server (needs sshfs
+   installed here); file tools then see the real project files at the
+   mountpoint:
+
+       mkdir -p ~/claude-local-project
+       sshfs my-device:'<project dir>' ~/claude-local-project \
+             -o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3
+       fusermount -u ~/claude-local-project     # unmount when done
+
+   Still run commands through `ssh my-device`, not against the mount.
 
 ## Patterns
 
@@ -429,15 +397,11 @@ Run, test, git:
     ssh my-device 'cd <project dir> && make test'
     ssh my-device 'cd <project dir> && git status'
 
-Write a whole file (pipe a script to bash; quoted delimiters stop local
-expansion):
+Write a script here, ship it, run it over there:
 
-    ssh my-device 'bash -s' <<'REMOTE'
-    cd <project dir>
-    cat > src/config.py <<'EOF'
-    ...new file content...
-    EOF
-    REMOTE
+    (Write ~/tmp/fix.py with the file tools)
+    scp ~/tmp/fix.py my-device:'<project dir>/'
+    ssh my-device 'cd <project dir> && python fix.py'
 
 Small edits — prefer a patch over rewriting the file:
 
@@ -445,6 +409,16 @@ Small edits — prefer a patch over rewriting the file:
     diff --git a/src/main.py b/src/main.py
     ...
     EOF
+
+When quoting through two shells gets hairy, pipe a whole script instead
+(quoted delimiters stop local expansion):
+
+    ssh my-device 'bash -s' <<'REMOTE'
+    cd <project dir>
+    cat > src/config.py <<'EOF'
+    ...new file content...
+    EOF
+    REMOTE
 
 ## When ssh my-device fails
 
@@ -506,15 +480,9 @@ $(cat "$KEY_PATH.pub")
    through 'ssh my-device' — simply tell it which local project to use${LOCAL_PROJECT_DIR:+
    (default: $LOCAL_PROJECT_DIR)}.
 
-   Extras for terminal use:
+   Helper commands for YOU at the terminal (the agent does not need them):
      claude-local                          # interactive shell over there
      claude-local git status               # run one command over there
-     claude-my-device ~/projects/foo       # claude with its SHELL forced
-                                           # through the tunnel (optional)
-
-   Note: with the SHELL wrapper, the agent's file tools (Read/Edit) still
-   operate on THIS server's filesystem. Either let the agent do file work
-   through shell commands too, or mount the local project here first:
-     claude-local-mount                    # requires sshfs
-     cd ~/claude-local-project && SHELL=$BIN_DIR/claude-local-shell claude
+     claude-local-mount                    # sshfs-mount the project here so
+                                           # file tools see the real files
 EOF

@@ -145,7 +145,7 @@ journalctl --user -u remote-claude -f
 - User services stop when your last session ends; enable lingering to keep the tunnel up: `sudo loginctl enable-linger $USER`;
 - After editing the unit file, run `systemctl --user daemon-reload`.
 
-## 6. Server-side wrapper issues (claude-local / claude-local-shell)
+## 6. Server-side helper issues (claude-local / claude-local-mount)
 
 ### `ssh my-device` says `Host key verification failed` / `REMOTE HOST IDENTIFICATION HAS CHANGED`
 
@@ -160,19 +160,14 @@ If you did NOT expect the machine behind the tunnel to change, stop and check wh
 
 ### `claude-local: command not found`
 
-`~/.local/bin` is not on the PATH. Add `export PATH="$HOME/.local/bin:$PATH"` to your shell profile, or call the wrappers by full path.
+`~/.local/bin` is not on the PATH. Add `export PATH="$HOME/.local/bin:$PATH"` to your shell profile, or call the helpers by full path.
 
-### The agent's commands still run on the server despite `SHELL=...`
+### `claude-local` runs commands in the wrong directory
 
-- Make sure the variable is set on the **agent process itself**, e.g. `SHELL=~/.local/bin/claude-local-shell claude` on one line (an `export` in another shell/tab does not apply);
-- Test the wrapper directly first: `~/.local/bin/claude-local-shell -c 'hostname'` should print the **local** machine's hostname.
-
-### Commands run in the wrong directory
-
-The wrapper `cd`s into `CLAUDE_LOCAL_DIR` (from the environment or `~/.config/claude-local/env`) before every command. Check what is effective:
+`claude-local` `cd`s into `CLAUDE_LOCAL_DIR` (from the environment or `~/.config/claude-local/env`) before every command. Check what is effective:
 
 ```bash
-~/.local/bin/claude-local-shell -c 'pwd'
+~/.local/bin/claude-local pwd
 ```
 
 Note the directory must exist on the **local** machine.

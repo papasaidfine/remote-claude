@@ -145,7 +145,7 @@ journalctl --user -u remote-claude -f
 - user service 会在最后一个会话结束时停止；开启 lingering 可让 tunnel 持续运行：`sudo loginctl enable-linger $USER`；
 - 改过 unit 文件后要 `systemctl --user daemon-reload`。
 
-## 6. 服务器端 wrapper 问题（claude-local / claude-local-shell）
+## 6. 服务器端辅助命令问题（claude-local / claude-local-mount）
 
 ### `ssh my-device` 报 `Host key verification failed` / `REMOTE HOST IDENTIFICATION HAS CHANGED`
 
@@ -162,17 +162,12 @@ ssh my-device 'echo ok'             # accept-new 会存下新 key
 
 `~/.local/bin` 不在 PATH 上。在 shell profile 里加 `export PATH="$HOME/.local/bin:$PATH"`，或用完整路径调用。
 
-### 设置了 `SHELL=...` 但 agent 的命令仍在服务器上执行
+### `claude-local` 的命令跑在错误的目录里
 
-- 确认变量设置在 **agent 进程本身**上，例如一行命令 `SHELL=~/.local/bin/claude-local-shell claude`（在另一个 shell/标签页里 `export` 不会生效）；
-- 先直接测试 wrapper：`~/.local/bin/claude-local-shell -c 'hostname'` 应该打印**本地**机器的主机名。
-
-### 命令跑在错误的目录里
-
-wrapper 在每条命令前 `cd` 进 `CLAUDE_LOCAL_DIR`（来自环境变量或 `~/.config/claude-local/env`）。检查实际生效值：
+`claude-local` 在每条命令前 `cd` 进 `CLAUDE_LOCAL_DIR`（来自环境变量或 `~/.config/claude-local/env`）。检查实际生效值：
 
 ```bash
-~/.local/bin/claude-local-shell -c 'pwd'
+~/.local/bin/claude-local pwd
 ```
 
 注意该目录必须在**本地**机器上存在。
