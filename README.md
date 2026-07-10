@@ -38,6 +38,14 @@ bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/m
 
 It prints a public key — paste it into the local bootstrap when asked for the "server-side public key". Use the same reverse port on both sides. It also offers to install `~/.claude/CLAUDE.md` instructions so Claude Code does all project work through `ssh my-device` instead of touching this server's filesystem.
 
+If you skipped that CLAUDE.md prompt (or just want the instructions without the rest), fetch them directly:
+
+```bash
+mkdir -p ~/.claude && curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/server/CLAUDE.md >> ~/.claude/CLAUDE.md
+```
+
+This appends, so an existing `~/.claude/CLAUDE.md` keeps its content — but running it twice duplicates the block, and the setup script's managed install won't deduplicate a copy added this way. Pick one method and stick with it.
+
 Also add the **local** public key the bootstrap printed to the server's `~/.ssh/authorized_keys` yourself (e.g. `ssh-copy-id -i ~/.ssh/id_ed25519.pub <user>@<server>`, or paste it over your usual console access).
 
 ## 3. Start the tunnel and use it

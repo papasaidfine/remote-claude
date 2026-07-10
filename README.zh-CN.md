@@ -38,6 +38,14 @@ bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/m
 
 它会打印一个公钥——粘贴到本地 bootstrap 询问 "server-side public key" 的地方。两边的反向端口要填一样的。它还会询问是否安装 `~/.claude/CLAUDE.md` 指令，让 Claude Code 的所有项目操作都走 `ssh my-device`，而不是读写服务器本地文件。
 
+如果当时跳过了 CLAUDE.md 那一步（或只想要这份指令、不装其他东西），可以直接下载：
+
+```bash
+mkdir -p ~/.claude && curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/server/CLAUDE.md >> ~/.claude/CLAUDE.md
+```
+
+这是追加写入，已有的 `~/.claude/CLAUDE.md` 内容会保留——但重复执行会追加出重复内容，而且 setup 脚本的受管安装不会识别这种手动加入的副本。两种安装方式选一种即可。
+
 另外把本地 bootstrap 打印的**本地公钥**自行加入服务器的 `~/.ssh/authorized_keys`（例如 `ssh-copy-id -i ~/.ssh/id_ed25519.pub <user>@<server>`，或通过你惯用的控制台粘贴）。
 
 ## 3. 启动隧道，开始使用
