@@ -399,9 +399,12 @@ This machine is only where the agent runs. The real development environment —
 the project files, toolchain, tests, git — is the user's own machine,
 reachable as `my-device` through a reverse SSH tunnel.
 
-Project directory on my-device: session-dependent — verify the effective one
-with `~/.local/bin/claude-local-shell -c pwd` (selected per session via
-`claude-my-device <dir>` or CLAUDE_LOCAL_DIR; default: `__PROJECT_DIR__`)
+Project directory on my-device: the user will normally say which project to
+work on — use that path in every `cd`. If they did not say, the configured
+default is `__PROJECT_DIR__` (also in `~/.config/claude-local/env`; reading
+that file here is fine — it is config, not project data). When no directory
+is clear, ask the user instead of guessing. Note that `ssh my-device` lands
+in the home directory, so every command must `cd` explicitly.
 
 ## Hard rules
 
@@ -497,13 +500,17 @@ $(cat "$KEY_PATH.pub")
 3. Test the connect-back from this server:
      ssh $LOCAL_ALIAS 'echo ok'
 
-4. Let agents on this server work on the local machine:
-     claude-my-device ~/projects/foo       # Claude Code working in that dir
-                                           # on your machine (pick any project
-                                           # per session)
-     claude-my-device                      # same, default dir${LOCAL_PROJECT_DIR:+: $LOCAL_PROJECT_DIR}
+4. Normal workflow: connect to this server as usual (e.g. VSCode
+   Remote-SSH) and just start 'claude'. With the ~/.claude/CLAUDE.md
+   installed by this script, it does all project work on your machine
+   through 'ssh my-device' — simply tell it which local project to use${LOCAL_PROJECT_DIR:+
+   (default: $LOCAL_PROJECT_DIR)}.
+
+   Extras for terminal use:
      claude-local                          # interactive shell over there
      claude-local git status               # run one command over there
+     claude-my-device ~/projects/foo       # claude with its SHELL forced
+                                           # through the tunnel (optional)
 
    Note: with the SHELL wrapper, the agent's file tools (Read/Edit) still
    operate on THIS server's filesystem. Either let the agent do file work

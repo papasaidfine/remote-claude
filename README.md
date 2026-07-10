@@ -48,17 +48,15 @@ On your local machine (keep it running; both bootstraps also offer autostart):
 ssh -N remote-claude
 ```
 
-On the server:
+On the server, the normal workflow is: connect however you usually do (e.g. **VSCode Remote-SSH**) and just start `claude`. The `~/.claude/CLAUDE.md` installed in step 2 makes it do all project work on your machine through `ssh my-device` — simply tell it which local project to work on ("work on `~/projects/foo`").
+
+Quick test and terminal extras:
 
 ```bash
-ssh my-device 'echo ok'                # test: should print ok
+ssh my-device 'echo ok'                # tunnel test: should print ok
 claude-local                           # interactive shell on your machine
 claude-local git status                # run one command on your machine
-
-# launch Claude Code with all its shell commands running on your machine,
-# in whichever local project you pick for this session:
-claude-my-device ~/projects/foo
-claude-my-device                       # default dir from the server setup
+claude-my-device ~/projects/foo        # optional: claude with its SHELL forced through the tunnel
 ```
 
 ## Stop / uninstall
