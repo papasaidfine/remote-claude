@@ -124,8 +124,16 @@ touch "$AUTH_KEYS"
 chmod 600 "$AUTH_KEYS"
 
 # ---------------------------------------------------------------- local key
+# Prefer an existing key over generating yet another one: a dedicated key
+# from a previous run first, then the user's default id_ed25519 (opt-in).
+DEFAULT_KEY="$SSH_DIR/id_ed25519"
 if [[ -f "$KEY_PATH" && -f "$KEY_PATH.pub" ]]; then
   log "Local tunnel key already exists: $KEY_PATH"
+elif [[ -f "$DEFAULT_KEY" && -f "$DEFAULT_KEY.pub" ]] \
+     && ask_yn "Found $DEFAULT_KEY — use it for the tunnel instead of generating a dedicated key" "Y"; then
+  KEY_PATH="$DEFAULT_KEY"
+  KEY_NAME="id_ed25519"
+  warn "If this key has a passphrase, tunnel autostart will need an ssh-agent to work"
 else
   log "Generating the SSH key used to connect to the server: $KEY_PATH"
   ssh-keygen -t ed25519 -f "$KEY_PATH" -N "" -C "claude-tunnel" >/dev/null

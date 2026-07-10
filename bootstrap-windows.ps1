@@ -272,8 +272,16 @@ if ($ServerPublicKey) {
 }
 
 # ---------------------------------------------------------------- local tunnel key
+# Prefer an existing key over generating yet another one: a dedicated key
+# from a previous run first, then the user's default id_ed25519 (opt-in).
+$DefaultKey = Join-Path $SshDir 'id_ed25519'
 if ((Test-Path $KeyPath) -and (Test-Path "$KeyPath.pub")) {
     Write-Info "Local tunnel key already exists: $KeyPath"
+} elseif ((Test-Path $DefaultKey) -and (Test-Path "$DefaultKey.pub") -and
+          (Read-YesNo "Found $DefaultKey — use it for the tunnel instead of generating a dedicated key" $true)) {
+    $KeyPath = $DefaultKey
+    $KeyName = 'id_ed25519'
+    Write-Warn 'If this key has a passphrase, tunnel autostart will need an ssh-agent to work'
 } else {
     Write-Info "Generating the SSH key used to connect to the server: $KeyPath"
     & $SshKeygenExe -t ed25519 -f $KeyPath -N '""' -C 'claude-tunnel' | Out-Null

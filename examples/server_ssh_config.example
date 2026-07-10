@@ -10,6 +10,7 @@ Host my-device
     HostName 127.0.0.1
     Port 2222
     User localuser
+    # (or ~/.ssh/id_ed25519 if you chose to reuse your default key)
     IdentityFile ~/.ssh/claude_to_local_ed25519
     IdentitiesOnly yes
     # First connection stores the local machine's host key in a dedicated

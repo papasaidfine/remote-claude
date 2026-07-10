@@ -92,8 +92,16 @@ LOCAL_PROJECT_DIR="${LOCAL_PROJECT_DIR:-$(ask 'Local project directory (empty = 
 # ---------------------------------------------------------------- connect-back key
 mkdir -p "$SSH_DIR"
 chmod 700 "$SSH_DIR"
+# Prefer an existing key over generating yet another one: a dedicated key
+# from a previous run first, then the user's default id_ed25519 (opt-in).
+DEFAULT_KEY="$SSH_DIR/id_ed25519"
 if [[ -f "$KEY_PATH" && -f "$KEY_PATH.pub" ]]; then
   log "Connect-back key already exists: $KEY_PATH"
+elif [[ -f "$DEFAULT_KEY" && -f "$DEFAULT_KEY.pub" ]] \
+     && ask_yn "Found $DEFAULT_KEY — use it for the connect-back instead of generating a dedicated key" "Y"; then
+  KEY_PATH="$DEFAULT_KEY"
+  KEY_NAME="id_ed25519"
+  warn "If this key has a passphrase, agents will be prompted for it on every command unless an ssh-agent is running"
 else
   log "Generating the connect-back key: $KEY_PATH"
   ssh-keygen -t ed25519 -f "$KEY_PATH" -N "" -C "claude-to-local" >/dev/null

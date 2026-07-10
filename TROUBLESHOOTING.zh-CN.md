@@ -11,7 +11,7 @@
 
 - 本地隧道 key 的公钥没有加入服务器的 `~/.ssh/authorized_keys`；
 - 服务器上该文件/目录权限过宽：`chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys`；
-- 确认使用的是隧道 key：`ssh -v remote-claude` 观察 `Offering public key: ~/.ssh/claude_tunnel_ed25519`。
+- 确认使用的是隧道 key：`ssh -v remote-claude` 观察 `Offering public key:` 是否是 remote-claude 块里配置的 IdentityFile（`claude_tunnel_ed25519`，如果复用了默认 key 则是 `id_ed25519`）。
 
 ### `remote port forwarding failed for listen port <reverse_port>`
 

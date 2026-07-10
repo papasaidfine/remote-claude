@@ -11,7 +11,7 @@ The "Manual testing" section of `README.md` gives an independent test command fo
 
 - The local tunnel key's public key was not added to the server's `~/.ssh/authorized_keys`;
 - Permissions on that file/directory on the server are too loose: `chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys`;
-- Confirm the tunnel key is actually used: `ssh -v remote-claude` and look for `Offering public key: ~/.ssh/claude_tunnel_ed25519`.
+- Confirm the tunnel key is actually used: `ssh -v remote-claude` and look for `Offering public key:` with the IdentityFile of the remote-claude block (`claude_tunnel_ed25519`, or `id_ed25519` if you reused your default key).
 
 ### `remote port forwarding failed for listen port <reverse_port>`
 

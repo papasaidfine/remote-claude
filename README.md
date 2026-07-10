@@ -38,7 +38,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/m
 
 It prints a public key — paste it into the local bootstrap when asked for the "server-side public key". Use the same reverse port on both sides.
 
-Also make sure the **local** key the bootstrap printed (`claude_tunnel_ed25519.pub`) is in the server's `~/.ssh/authorized_keys` — the local bootstrap offers to upload it for you.
+Also make sure the **local** public key the bootstrap printed is in the server's `~/.ssh/authorized_keys` — the local bootstrap offers to upload it for you.
 
 ## 3. Start the tunnel and use it
 

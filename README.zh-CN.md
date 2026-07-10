@@ -38,7 +38,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/m
 
 它会打印一个公钥——粘贴到本地 bootstrap 询问 "server-side public key" 的地方。两边的反向端口要填一样的。
 
-另外确认本地 bootstrap 打印的**本地公钥**（`claude_tunnel_ed25519.pub`）已加入服务器的 `~/.ssh/authorized_keys`——本地脚本提供自动上传选项。
+另外确认本地 bootstrap 打印的**本地公钥**已加入服务器的 `~/.ssh/authorized_keys`——本地脚本提供自动上传选项。
 
 ## 3. 启动隧道，开始使用
 
