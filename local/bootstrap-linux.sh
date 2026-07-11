@@ -8,23 +8,26 @@
 #   local linux  ── ssh -N remote-claude ──▶  remote server
 #   remote server 127.0.0.1:<reverse_port>  ──▶  local linux 127.0.0.1:22
 #
-# What it does (idempotent, safe to re-run):
-#   1. Installs openssh-server if missing (apt/dnf/yum/pacman/zypper),
-#      enables and starts the sshd systemd service.
-#   2. Hardens sshd: pubkey auth on, password auth off (optional). Backs up
-#      config, validates with `sshd -t` before restarting.
-#   3. Creates ~/.ssh + authorized_keys with correct permissions.
-#   4. Appends the server-side public key to authorized_keys with a
+# Presents a menu of independent items — each is idempotent, shows whether
+# it is already configured, and can be run (or fail, or be re-run) on its own:
+#
+#   1. Incoming SSH: install openssh-server if missing (apt/dnf/yum/pacman/
+#      zypper), enable and start the service, harden sshd (pubkey auth on,
+#      password auth off optional). Backs up config, validates with
+#      `sshd -t` before restarting. The only item that needs sudo.
+#   2. Ensure the default ~/.ssh/id_ed25519 exists (local→server hop).
+#   3. Append the server-side public key to authorized_keys with a
 #      from="127.0.0.1,::1" restriction (dedup by key blob).
-#   5. Uses (or generates) the default ~/.ssh/id_ed25519 for the local→server hop.
-#   6. Writes a managed "Host remote-claude" block into ~/.ssh/config.
-#   7. Optionally installs a systemd user service that keeps the tunnel up.
+#   4. Write a managed "Host remote-claude" block into ~/.ssh/config.
+#   5. Show the local public key to paste into the server-side setup.
 #
 # Usage:  ./bootstrap-linux.sh
 # Non-interactive overrides via env vars: SERVER_HOST, SERVER_USER,
-# SERVER_PORT, REVERSE_PORT, LOCAL_USER, SERVER_PUBKEY.
+# SERVER_PORT, REVERSE_PORT, SERVER_PUBKEY.
 
-set -euo pipefail
+# No -e at the top level: menu items run in their own `set -e` subshell so a
+# failing item returns to the menu instead of killing the script.
+set -uo pipefail
 
 TUNNEL_ALIAS="remote-claude"
 KEY_NAME="id_ed25519"
@@ -35,8 +38,6 @@ AUTH_KEYS="$SSH_DIR/authorized_keys"
 SSHD_CONFIG="/etc/ssh/sshd_config"
 SSHD_DROPIN_DIR="/etc/ssh/sshd_config.d"
 SSHD_DROPIN="$SSHD_DROPIN_DIR/100-remote-claude.conf"
-USER_UNIT_DIR="$HOME/.config/systemd/user"
-USER_UNIT="$USER_UNIT_DIR/$TUNNEL_ALIAS.service"
 TS="$(date +%Y%m%d-%H%M%S)"
 
 BEGIN_MARK="# >>> ${TUNNEL_ALIAS} (managed by reverse-ssh-bootstrap) >>>"
@@ -79,62 +80,22 @@ cat <<'EOF'
  Reverse SSH bootstrap (Linux)
  local linux  ->  remote server  ->  (reverse tunnel)  -> local linux
 ==========================================================
-This will modify:
-  - openssh-server install / sshd service / sshd_config (requires sudo)
+Pick items from the menu below; each one is independent, idempotent,
+and shows whether it is already configured. Files this can modify:
+  - openssh-server install / sshd service / sshd_config (item 1, sudo)
   - ~/.ssh/{config,authorized_keys,id_ed25519}
-All modified system files are backed up first.
+All modified system files are backed up first (*.claude-bak-<timestamp>).
 EOF
-echo
 
-# ---------------------------------------------------------------- inputs
-SERVER_HOST="${SERVER_HOST:-$(ask 'Remote server hostname / IP')}"
-[[ -n "$SERVER_HOST" ]] || die "Server hostname must not be empty"
-SERVER_USER="${SERVER_USER:-$(ask 'Remote server SSH user')}"
-[[ -n "$SERVER_USER" ]] || die "Server user must not be empty"
-SERVER_PORT="${SERVER_PORT:-$(ask 'Remote server SSH port' '22')}"
-REVERSE_PORT="${REVERSE_PORT:-$(ask 'Reverse SSH port on the server (used by Claude/Codex to connect back)' '2222')}"
-LOCAL_USER="${LOCAL_USER:-$(ask 'Local username (used when connecting back from the server)' "$USER")}"
+# ---------------------------------------------------------------- shared prep
+ensure_ssh_dir() {
+  mkdir -p "$SSH_DIR"
+  chmod 700 "$SSH_DIR"
+  touch "$AUTH_KEYS"
+  chmod 600 "$AUTH_KEYS"
+}
 
-[[ "$SERVER_PORT" =~ ^[0-9]+$ ]] || die "SSH port must be a number"
-[[ "$REVERSE_PORT" =~ ^[0-9]+$ ]] || die "Reverse port must be a number"
-
-echo
-echo "Server-side public key: the .pub of the key that Claude / Codex on the"
-echo "server will use to SSH back into this machine (printed by server/setup-server.sh,"
-echo "or: cat ~/.ssh/id_ed25519.pub on the server)."
-echo "(paste the whole line, e.g. 'ssh-ed25519 AAAA... comment'; leave empty to skip and re-run later)"
-SERVER_PUBKEY="${SERVER_PUBKEY:-$(ask 'Server-side public key' '')}"
-
-if ask_yn "Disable password login for the local sshd (recommended, public key only)" "Y"; then
-  DISABLE_PASSWORD=1
-else
-  DISABLE_PASSWORD=0
-fi
-
-# ---------------------------------------------------------------- ~/.ssh
-log "Preparing ~/.ssh directory and permissions"
-mkdir -p "$SSH_DIR"
-chmod 700 "$SSH_DIR"
-touch "$AUTH_KEYS"
-chmod 600 "$AUTH_KEYS"
-
-# ---------------------------------------------------------------- local key
-# Use the default SSH key; generate it only when it does not exist yet.
-if [[ -f "$KEY_PATH" ]]; then
-  if [[ ! -f "$KEY_PATH.pub" ]]; then
-    ssh-keygen -y -P "" -f "$KEY_PATH" > "$KEY_PATH.pub" 2>/dev/null \
-      || die "$KEY_PATH exists but $KEY_PATH.pub is missing and could not be derived (passphrase-protected?); please fix and re-run"
-  fi
-  log "Using existing SSH key: $KEY_PATH"
-  ssh-keygen -y -P "" -f "$KEY_PATH" >/dev/null 2>&1 \
-    || warn "This key appears to be passphrase-protected; tunnel autostart will need an ssh-agent to work"
-else
-  log "Generating the default SSH key: $KEY_PATH"
-  ssh-keygen -t ed25519 -f "$KEY_PATH" -N "" >/dev/null
-fi
-chmod 600 "$KEY_PATH"
-
-# ---------------------------------------------------------------- server pubkey -> authorized_keys
+# ---------------------------------------------------------------- helpers
 add_authorized_key() {
   local pubkey="$1" tmp blob
   tmp="$(mktemp)"
@@ -154,15 +115,8 @@ add_authorized_key() {
   log "Written to authorized_keys (restricted to loopback logins only)"
 }
 
-if [[ -n "$SERVER_PUBKEY" ]]; then
-  add_authorized_key "$SERVER_PUBKEY"
-else
-  warn "No server-side public key provided. You can append it to $AUTH_KEYS later,"
-  warn "recommended format: from=\"127.0.0.1,::1\",no-agent-forwarding,no-X11-forwarding <public-key>"
-fi
-
-# ---------------------------------------------------------------- ~/.ssh/config
-write_ssh_config_block() {
+write_ssh_config_block() { # <host> <user> <port> <reverse_port>
+  local SERVER_HOST="$1" SERVER_USER="$2" SERVER_PORT="$3" REVERSE_PORT="$4"
   local block tmp
   block="$(cat <<EOF
 $BEGIN_MARK
@@ -213,12 +167,8 @@ EOF
   { [[ -s "$SSH_CONFIG" ]] && [[ "$(tail -c1 "$SSH_CONFIG")" != "" ]] && echo; printf '%s\n' "$block"; } >> "$SSH_CONFIG"
   log "Wrote Host $TUNNEL_ALIAS to ~/.ssh/config"
 }
-write_ssh_config_block
 
-# ---------------------------------------------------------------- sshd (needs sudo)
-echo
-log "Configuring the system sshd next (requires sudo)"
-
+# ---------------------------------------------------------------- sshd helpers
 find_sshd_bin() {
   local p
   for p in /usr/sbin/sshd /usr/bin/sshd /usr/local/sbin/sshd; do
@@ -248,8 +198,6 @@ install_sshd() {
   fi
   find_sshd_bin >/dev/null || die "openssh-server installation did not provide an sshd binary"
 }
-install_sshd
-SSHD_BIN="$(find_sshd_bin)"
 
 # Debian/Ubuntu name the unit ssh.service; most other distros use sshd.service
 find_sshd_unit() {
@@ -262,17 +210,6 @@ find_sshd_unit() {
   done
   return 1
 }
-
-SSHD_UNIT=""
-if command -v systemctl >/dev/null && [[ -d /run/systemd/system ]]; then
-  SSHD_UNIT="$(find_sshd_unit || true)"
-fi
-if [[ -n "$SSHD_UNIT" ]]; then
-  log "Enabling and starting $SSHD_UNIT.service"
-  sudo systemctl enable --now "$SSHD_UNIT.service"
-else
-  warn "systemd not detected; please make sure sshd is running and enabled with your init system"
-fi
 
 configure_sshd() {
   local use_dropin=0
@@ -333,89 +270,142 @@ AuthorizedKeysFile .ssh/authorized_keys"
     warn "Please restart sshd manually to apply the new configuration"
   fi
 }
-configure_sshd
 
-# ---------------------------------------------------------------- local pubkey handoff
-echo
-log "Local public key — add it to ~/.ssh/authorized_keys of $SERVER_USER on the server:"
-echo
-cat "$KEY_PATH.pub"
-echo
-log "Paste it into server/setup-server.sh when it asks for the local machine"
-log "public key (re-run it there if needed), or add it manually, e.g.:"
-log "  ssh-copy-id -i $KEY_PATH.pub -p $SERVER_PORT $SERVER_USER@$SERVER_HOST"
-
-# ---------------------------------------------------------------- systemd user service (optional)
-echo
-AUTOSTART_INSTALLED=0
-if command -v systemctl >/dev/null && [[ -d /run/systemd/system ]]; then
-  echo "Optional: auto-connect the TUNNEL at login. A systemd user service would"
-  echo "run 'ssh -N $TUNNEL_ALIAS', dialing OUT to the server and keeping the"
-  echo "connection alive. This is NOT about sshd — the sshd service is already"
-  echo "enabled at boot. Answer no to connect only when you choose to, by"
-  echo "running: ssh -N $TUNNEL_ALIAS"
-  if ask_yn "Auto-connect the tunnel at login (systemd user service)" "N"; then
-    mkdir -p "$USER_UNIT_DIR"
-    if [[ -f "$USER_UNIT" ]]; then
-      cp "$USER_UNIT" "$USER_UNIT.claude-bak-$TS"
-    fi
-    SSH_BIN="$(command -v ssh)"
-    cat > "$USER_UNIT" <<EOF
-[Unit]
-Description=$TUNNEL_ALIAS reverse SSH tunnel
-After=network-online.target
-
-[Service]
-ExecStart=$SSH_BIN -N -o ExitOnForwardFailure=yes $TUNNEL_ALIAS
-Restart=always
-RestartSec=15
-
-[Install]
-WantedBy=default.target
-EOF
-    systemctl --user daemon-reload
-    systemctl --user enable --now "$TUNNEL_ALIAS.service"
-    log "systemd user service installed and started: $USER_UNIT"
-    log "Logs: journalctl --user -u $TUNNEL_ALIAS -f"
-    if ask_yn "Enable lingering so the tunnel also runs when you are not logged in (sudo loginctl enable-linger)" "N"; then
-      sudo loginctl enable-linger "$USER" \
-        && log "Lingering enabled for $USER" \
-        || warn "Could not enable lingering; the tunnel will only run while you are logged in"
-    fi
-    AUTOSTART_INSTALLED=1
+# ---------------------------------------------------------------- menu items
+run_sshd() { # item 1: install/enable sshd + harden (sudo)
+  log "This item installs/enables the system sshd and hardens its config (requires sudo)"
+  local DISABLE_PASSWORD
+  if ask_yn "Disable password login for the local sshd (recommended, public key only)" "Y"; then
+    DISABLE_PASSWORD=1
+  else
+    DISABLE_PASSWORD=0
   fi
-else
-  warn "systemd not detected; skipping the autostart option (run 'ssh -N $TUNNEL_ALIAS' manually or use your init system)"
-fi
+  install_sshd
+  SSHD_BIN="$(find_sshd_bin)"
+  SSHD_UNIT=""
+  if command -v systemctl >/dev/null && [[ -d /run/systemd/system ]]; then
+    SSHD_UNIT="$(find_sshd_unit || true)"
+  fi
+  if [[ -n "$SSHD_UNIT" ]]; then
+    log "Enabling and starting $SSHD_UNIT.service"
+    sudo systemctl enable --now "$SSHD_UNIT.service"
+  else
+    warn "systemd not detected; please make sure sshd is running and enabled with your init system"
+  fi
+  configure_sshd
+}
 
-# ---------------------------------------------------------------- summary
-cat <<EOF
+run_key() { # item 2: ensure ~/.ssh/id_ed25519 exists
+  ensure_ssh_dir
+  # Use the default SSH key; generate it only when it does not exist yet.
+  if [[ -f "$KEY_PATH" ]]; then
+    if [[ ! -f "$KEY_PATH.pub" ]]; then
+      ssh-keygen -y -P "" -f "$KEY_PATH" > "$KEY_PATH.pub" 2>/dev/null \
+        || die "$KEY_PATH exists but $KEY_PATH.pub is missing and could not be derived (passphrase-protected?); please fix and re-run"
+    fi
+    log "Using existing SSH key: $KEY_PATH"
+    ssh-keygen -y -P "" -f "$KEY_PATH" >/dev/null 2>&1 \
+      || warn "This key appears to be passphrase-protected; the tunnel will need an ssh-agent to work"
+  else
+    log "Generating the default SSH key: $KEY_PATH"
+    ssh-keygen -t ed25519 -f "$KEY_PATH" -N "" >/dev/null
+  fi
+  chmod 600 "$KEY_PATH"
+}
 
-==========================================================
- Done! Next steps
-==========================================================
-1. Make sure the local tunnel public key is added on the server
-   (~$SERVER_USER/.ssh/authorized_keys):
-     $KEY_PATH.pub
+run_authorize() { # item 3: authorize the server's connect-back key
+  ensure_ssh_dir
+  local pubkey
+  echo "Server-side public key: the .pub of the key that Claude / Codex on the"
+  echo "server will use to SSH back into this machine (setup-server.sh item 1"
+  echo "prints it, or: cat ~/.ssh/id_ed25519.pub on the server)."
+  pubkey="${SERVER_PUBKEY:-$(ask 'Server-side public key' '')}"
+  [[ -n "$pubkey" ]] || die "No key pasted; nothing changed"
+  add_authorized_key "$pubkey"
+}
 
-2. Start the tunnel manually (keeps running in the foreground):
-     ssh -N $TUNNEL_ALIAS
+run_config() { # item 4: Host remote-claude block
+  ensure_ssh_dir
+  local server_host server_user server_port reverse_port
+  server_host="${SERVER_HOST:-$(ask 'Remote server hostname / IP')}"
+  [[ -n "$server_host" ]] || die "Server hostname must not be empty"
+  server_user="${SERVER_USER:-$(ask 'Remote server SSH user')}"
+  [[ -n "$server_user" ]] || die "Server user must not be empty"
+  server_port="${SERVER_PORT:-$(ask 'Remote server SSH port' '22')}"
+  [[ "$server_port" =~ ^[0-9]+$ ]] || die "SSH port must be a number"
+  reverse_port="${REVERSE_PORT:-$(ask 'Reverse SSH port on the server (used by Claude/Codex to connect back)' '2222')}"
+  [[ "$reverse_port" =~ ^[0-9]+$ ]] || die "Reverse port must be a number"
+  write_ssh_config_block "$server_host" "$server_user" "$server_port" "$reverse_port"
+}
 
-3. While the tunnel stays connected, Claude / Codex on the server can use:
-     ssh -i ~/.ssh/id_ed25519 -p $REVERSE_PORT $LOCAL_USER@127.0.0.1
-   (point -i at the actual private key path of the connect-back key on the server)
+run_show_key() { # item 5: print the local public key for the server-side handoff
+  if [[ ! -f "$KEY_PATH.pub" ]]; then
+    if [[ ! -f "$KEY_PATH" ]]; then
+      ask_yn "No local key yet — generate it now" "Y" || die "No key to show"
+    fi
+    run_key
+  fi
+  echo
+  log "Local public key — paste it into server/setup-server.sh (item 2) on the"
+  log "server; that authorizes the tunnel login (ssh -N $TUNNEL_ALIAS):"
+  echo
+  cat "$KEY_PATH.pub"
+  echo
+}
 
-   Tip: run server/setup-server.sh on the server to install the
-   my-device ssh alias and the CLAUDE.md agent instructions.
+# ---------------------------------------------------------------- status checks
+status_sshd() {
+  find_sshd_bin >/dev/null || return 1
+  if command -v systemctl >/dev/null && [[ -d /run/systemd/system ]]; then
+    local unit
+    unit="$(find_sshd_unit || true)"
+    [[ -n "$unit" ]] || return 1
+    systemctl is-active --quiet "$unit.service" || return 1
+  fi
+  [[ -f "$SSHD_DROPIN" ]] && return 0
+  grep -qE '^[[:space:]]*PubkeyAuthentication[[:space:]]+yes' "$SSHD_CONFIG" 2>/dev/null
+}
+status_key()       { [[ -f "$KEY_PATH" ]]; }
+status_authorize() { grep -qF 'from="127.0.0.1,::1"' "$AUTH_KEYS" 2>/dev/null; }
+status_config()    { grep -qF "$BEGIN_MARK" "$SSH_CONFIG" 2>/dev/null; }
 
-EOF
-if [[ "$AUTOSTART_INSTALLED" -eq 1 ]]; then
-  cat <<EOF
-The tunnel is managed by a systemd user service. To stop it:
-     systemctl --user disable --now $TUNNEL_ALIAS.service
-EOF
-else
-  echo "For autostart, re-run this script and answer yes at the systemd user service step."
-fi
+# ---------------------------------------------------------------- menu
+mark() { if "$1"; then printf '[done]'; else printf '[ -  ]'; fi; }
+
+draw_menu() {
+  echo
+  echo "----------------------------------------------------------"
+  printf '  1) %-50s %s\n' 'Incoming SSH — sshd install + harden  [sudo]' "$(mark status_sshd)"
+  printf '  2) %-50s %s\n' 'Local SSH key (~/.ssh/id_ed25519)' "$(mark status_key)"
+  printf '  3) %-50s %s\n' "Authorize the server's connect-back key" "$(mark status_authorize)"
+  printf '  4) %-50s %s\n' 'Tunnel config (Host remote-claude)' "$(mark status_config)"
+  printf '  5) %s\n' 'Show local public key (paste into server setup)'
+  echo   '  q) Quit'
+}
+
+run_item() { # run_item <run-function>; failures return to the menu
+  echo
+  ( set -e; "$1" )
+  local rc=$?
+  if [[ $rc -ne 0 ]]; then
+    err "Item did not complete (see above). Other items are unaffected."
+  fi
+}
+
+while true; do
+  draw_menu
+  read -r -p "Select [1-5, q]: " choice || break
+  case "$choice" in
+    1) run_item run_sshd ;;
+    2) run_item run_key ;;
+    3) run_item run_authorize ;;
+    4) run_item run_config ;;
+    5) run_item run_show_key ;;
+    q|Q) break ;;
+    *) warn "Unknown selection: $choice" ;;
+  esac
+done
+
 echo
-echo "See the 'Removal / rollback' section of README.md for rollback instructions."
+log "Start the tunnel with: ssh -N $TUNNEL_ALIAS   (keep it running)"
+log "Then on the server: ssh my-device 'echo ok' should print ok"
