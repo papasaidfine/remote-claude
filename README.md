@@ -11,7 +11,7 @@ agent on the server      : ssh my-device                (lands on your machine)
 
 ## 1. Set up your local machine
 
-**macOS / Linux** — run and answer the prompts (sudo needed for sshd setup):
+**macOS / Linux** — run it and pick items from the menu; each item is independent, idempotent, and shows whether it is already configured (only the sshd item needs sudo):
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-macos.sh)   # macOS
@@ -26,7 +26,7 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 .\bootstrap-windows.ps1
 ```
 
-It will ask for your server's address/user/port, a reverse port (default 2222), and the server-side public key from step 2 — run step 2 first and paste it, or leave it empty and re-run later. The scripts never SSH anywhere themselves; key exchange is copy-paste.
+The menu items ask only for what they need: the tunnel-config item asks for your server's address/user/port and a reverse port (default 2222); the authorize item asks for the server-side public key from step 2 — run step 2 first and paste it, or skip that item and re-run it later. The scripts never SSH anywhere themselves; key exchange is copy-paste.
 
 ## 2. Set up the server
 
@@ -36,7 +36,7 @@ On the remote server (no sudo needed):
 bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/server/setup-server.sh)
 ```
 
-It prints a public key — paste it into the local bootstrap when asked for the "server-side public key". Use the same reverse port on both sides. It also offers to install `~/.claude/CLAUDE.md` instructions so Claude Code does all project work through `ssh my-device` instead of touching this server's filesystem, and seeds an agent-maintained facts file (`~/.config/remote-claude/facts.json` — your machine's OS, project paths and descriptions) that Claude reads at session start and keeps updated, so new sessions skip the rediscovery.
+It presents the same kind of menu. Its first item prints a public key — paste it into the local bootstrap when asked for the "server-side public key". Use the same reverse port on both sides. Separate menu items install `~/.claude/CLAUDE.md` instructions so Claude Code does all project work through `ssh my-device` instead of touching this server's filesystem, and seed an agent-maintained facts file (`~/.config/remote-claude/facts.json` — your machine's OS, project paths and descriptions) that Claude reads at session start and keeps updated, so new sessions skip the rediscovery.
 
 If you skipped that CLAUDE.md prompt (or just want the instructions without the rest), fetch them directly:
 
@@ -46,11 +46,11 @@ mkdir -p ~/.claude && curl -fsSL https://raw.githubusercontent.com/papasaidfine/
 
 This appends, so an existing `~/.claude/CLAUDE.md` keeps its content — but running it twice duplicates the block, and the setup script's managed install won't deduplicate a copy added this way. Pick one method and stick with it.
 
-It also asks for the **local** machine's public key (the local bootstrap prints it at the end; or `cat ~/.ssh/id_ed25519.pub` on your machine) and adds it to this server's `~/.ssh/authorized_keys` — that is what authorizes the tunnel login. Left it empty? Re-run the script and paste it, or use `ssh-copy-id`.
+Another menu item asks for the **local** machine's public key (the local bootstrap's "show key" item prints it; or `cat ~/.ssh/id_ed25519.pub` on your machine) and adds it to this server's `~/.ssh/authorized_keys` — that is what authorizes the tunnel login. Skipped it? Re-run that item and paste it, or use `ssh-copy-id`.
 
 ## 3. Start the tunnel and use it
 
-On your local machine (keep it running; both bootstraps also offer autostart):
+On your local machine (keep it running):
 
 ```bash
 ssh -N remote-claude
@@ -66,10 +66,7 @@ ssh my-device 'echo ok'                # should print ok
 
 ## Stop / uninstall
 
-- Stop the tunnel: `Ctrl-C`, or if autostart was enabled:
-  - macOS: `launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.claude.dev-tunnel.plist`
-  - Linux: `systemctl --user disable --now remote-claude.service`
-  - Windows: `Stop-ScheduledTask -TaskName ClaudeDevTunnel`
+- Stop the tunnel: `Ctrl-C` in the terminal running `ssh -N remote-claude`.
 - Everything the scripts change is backed up first (`*.claude-bak-<timestamp>`) and marked with `claude` in the file/block name, so it's easy to find and remove. Ask your AI assistant to walk you through a full rollback, or just point it at the scripts in this repo.
 
 ## Something not working?

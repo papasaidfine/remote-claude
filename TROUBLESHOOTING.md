@@ -66,9 +66,8 @@ The user in the connect-back command is the **local machine's username** (the "L
 ## 3. The tunnel keeps dropping
 
 - `ServerAliveInterval 30` / `ServerAliveCountMax 3` are configured (a dead connection is detected and exits within ~90 seconds);
-- The autostart mechanisms reconnect automatically: `KeepAlive` for the macOS LaunchAgent, the reconnect loop in the Windows keepalive script;
-- If you run it manually in the foreground, wrap it yourself: `while true; do ssh -N remote-claude; sleep 15; done`;
-- Laptop sleep kills the TCP connection; after waking, wait for the auto-reconnect (up to ~90s + 15s).
+- To reconnect automatically, wrap the command in a loop: `while true; do ssh -N remote-claude; sleep 15; done`;
+- Laptop sleep kills the TCP connection; after waking, restart the tunnel.
 
 ## 4. sshd configuration issues
 
@@ -105,37 +104,7 @@ Usually WSUS / group policy blocks Features-on-Demand downloads. Ask an admin to
 
 The ssh client validates the config file ACL too. Re-run the bootstrap tool, or apply the same icacls command as for authorized_keys above to `%USERPROFILE%\.ssh\config`.
 
-## 5. Autostart issues
-
-### macOS LaunchAgent doesn't start
-
-```bash
-launchctl print gui/$(id -u)/com.claude.dev-tunnel     # state and last exit code
-cat ~/Library/Logs/remote-claude.err.log            # ssh error output
-```
-
-Common cause: the key wasn't added on the server yet (Permission denied retry loop; note `ThrottleInterval 30` limits the retry rate).
-
-### Windows Scheduled Task doesn't start / flashes and disappears
-
-```powershell
-Get-ScheduledTaskInfo -TaskName ClaudeDevTunnel    # LastRunTime / LastTaskResult
-```
-
-- The task runs "only when the user is logged on" by default, so the tunnel stops after logout — this is expected (the key's ACL belongs to that user);
-- Verify the keepalive script manually: `powershell -File $env:USERPROFILE\.ssh\remote-claude-keepalive.ps1` (runs in the foreground so you see ssh's output directly).
-
-### Linux systemd user service doesn't start / stops after logout
-
-```bash
-systemctl --user status remote-claude.service
-journalctl --user -u remote-claude -f
-```
-
-- User services stop when your last session ends; enable lingering to keep the tunnel up: `sudo loginctl enable-linger $USER`;
-- After editing the unit file, run `systemctl --user daemon-reload`.
-
-## 6. Server-side issues (ssh my-device)
+## 5. Server-side issues (ssh my-device)
 
 ### `ssh my-device` says `Host key verification failed` / `REMOTE HOST IDENTIFICATION HAS CHANGED`
 
@@ -148,7 +117,7 @@ ssh my-device 'echo ok'             # accept-new stores the new key
 
 If you did NOT expect the machine behind the tunnel to change, stop and check what is actually listening on the reverse port first.
 
-## 7. Everything works, but you want to verify the security posture
+## 6. Everything works, but you want to verify the security posture
 
 ```bash
 # on the server: the reverse port must listen on 127.0.0.1 only

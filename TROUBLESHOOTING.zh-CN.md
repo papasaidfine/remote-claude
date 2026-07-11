@@ -66,9 +66,8 @@ ss -tlnp | grep <reverse_port>
 ## 3. 隧道频繁断开
 
 - 已配置 `ServerAliveInterval 30` / `ServerAliveCountMax 3`（约 90 秒发现死连接并退出）；
-- 自启动方案会自动重连：macOS LaunchAgent 的 `KeepAlive`，Windows keepalive 脚本的重连循环；
-- 若手动前台跑，可以自己包一层循环：`while true; do ssh -N remote-claude; sleep 15; done`；
-- 笔记本睡眠后 TCP 会断，唤醒后等自动重连（最多约 90s + 15s）。
+- 想自动重连的话，自己包一层循环：`while true; do ssh -N remote-claude; sleep 15; done`；
+- 笔记本睡眠后 TCP 会断，唤醒后重新启动隧道。
 
 ## 4. sshd 配置类问题
 
@@ -105,37 +104,7 @@ sudo launchctl kickstart -k system/com.openssh.sshd
 
 ssh 客户端也校验 config 文件 ACL。重跑 bootstrap 工具，或对 `%USERPROFILE%\.ssh\config` 执行与上面 authorized_keys 相同的 icacls 命令。
 
-## 5. 自启动问题
-
-### macOS LaunchAgent 没拉起
-
-```bash
-launchctl print gui/$(id -u)/com.claude.dev-tunnel     # 查看状态和上次退出码
-cat ~/Library/Logs/remote-claude.err.log            # 看 ssh 报错
-```
-
-常见原因：key 尚未加到服务器（Permission denied 循环重试，注意 `ThrottleInterval 30` 会限制重试频率）。
-
-### Windows 计划任务没启动 / 一闪而过
-
-```powershell
-Get-ScheduledTaskInfo -TaskName ClaudeDevTunnel    # LastRunTime / LastTaskResult
-```
-
-- 任务默认"仅当用户登录时运行"，注销后 tunnel 会停止——这是预期行为（key 的 ACL 属于该用户）；
-- 手动验证 keepalive 脚本：`powershell -File $env:USERPROFILE\.ssh\remote-claude-keepalive.ps1`（前台跑，直接看 ssh 输出）。
-
-### Linux systemd user service 没启动 / 注销后停止
-
-```bash
-systemctl --user status remote-claude.service
-journalctl --user -u remote-claude -f
-```
-
-- user service 会在最后一个会话结束时停止；开启 lingering 可让 tunnel 持续运行：`sudo loginctl enable-linger $USER`；
-- 改过 unit 文件后要 `systemctl --user daemon-reload`。
-
-## 6. 服务器端问题（ssh my-device）
+## 5. 服务器端问题（ssh my-device）
 
 ### `ssh my-device` 报 `Host key verification failed` / `REMOTE HOST IDENTIFICATION HAS CHANGED`
 
@@ -148,7 +117,7 @@ ssh my-device 'echo ok'             # accept-new 会存下新 key
 
 如果你**没有**预期隧道背后的机器发生变化，先停下来检查反向端口上实际监听的是什么。
 
-## 7. 一切正常但想确认安全性
+## 6. 一切正常但想确认安全性
 
 ```bash
 # 服务器上：反向端口应只监听 127.0.0.1

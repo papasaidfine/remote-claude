@@ -11,7 +11,7 @@
 
 ## 1. 配置本地电脑
 
-**macOS / Linux** — 运行后按提示回答（配置 sshd 需要 sudo）：
+**macOS / Linux** — 运行后从菜单里选要做的项——每一项都相互独立、可重复运行、并显示是否已配置好（只有 sshd 那一项需要 sudo）：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-macos.sh)   # macOS
@@ -26,7 +26,7 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 .\bootstrap-windows.ps1
 ```
 
-脚本会询问服务器地址/用户/端口、反向端口（默认 2222）、以及第 2 步打印的服务器侧公钥——可以先做第 2 步再粘贴，也可以留空之后重跑。脚本本身不会发起任何 SSH 连接，公钥交换全部通过复制粘贴完成。
+各菜单项只询问自己需要的信息：隧道配置项询问服务器地址/用户/端口和反向端口（默认 2222）；授权项询问第 2 步打印的服务器侧公钥——可以先做第 2 步再粘贴，也可以先跳过该项之后重跑。脚本本身不会发起任何 SSH 连接，公钥交换全部通过复制粘贴完成。
 
 ## 2. 配置服务器
 
@@ -36,7 +36,7 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/server/setup-server.sh)
 ```
 
-它会打印一个公钥——粘贴到本地 bootstrap 询问 "server-side public key" 的地方。两边的反向端口要填一样的。它还会询问是否安装 `~/.claude/CLAUDE.md` 指令，让 Claude Code 的所有项目操作都走 `ssh my-device`，而不是读写服务器本地文件；另外还会种下一个由 agent 自己维护的 facts 文件（`~/.config/remote-claude/facts.json`——你机器的操作系统、各项目路径和简介），agent 每次会话开始先读它、学到新事实就更新，新会话不用每次重新摸索。
+它也是同样的菜单形式。第一个菜单项会打印一个公钥——粘贴到本地 bootstrap 询问 "server-side public key" 的地方。两边的反向端口要填一样的。另有独立菜单项负责安装 `~/.claude/CLAUDE.md` 指令，让 Claude Code 的所有项目操作都走 `ssh my-device`，而不是读写服务器本地文件；以及种下一个由 agent 自己维护的 facts 文件（`~/.config/remote-claude/facts.json`——你机器的操作系统、各项目路径和简介），agent 每次会话开始先读它、学到新事实就更新，新会话不用每次重新摸索。
 
 如果当时跳过了 CLAUDE.md 那一步（或只想要这份指令、不装其他东西），可以直接下载：
 
@@ -46,11 +46,11 @@ mkdir -p ~/.claude && curl -fsSL https://raw.githubusercontent.com/papasaidfine/
 
 这是追加写入，已有的 `~/.claude/CLAUDE.md` 内容会保留——但重复执行会追加出重复内容，而且 setup 脚本的受管安装不会识别这种手动加入的副本。两种安装方式选一种即可。
 
-它还会询问**本地机器的公钥**（本地 bootstrap 结束时会打印；也可以在你电脑上 `cat ~/.ssh/id_ed25519.pub`），粘贴后写入服务器的 `~/.ssh/authorized_keys`——这一步授权的就是隧道登录。当时留空的话，重跑一遍脚本粘贴，或改用 `ssh-copy-id`。
+还有一个菜单项询问**本地机器的公钥**（本地 bootstrap 的"显示公钥"项会打印；也可以在你电脑上 `cat ~/.ssh/id_ed25519.pub`），粘贴后写入服务器的 `~/.ssh/authorized_keys`——这一步授权的就是隧道登录。当时跳过的话，重跑对应菜单项粘贴，或改用 `ssh-copy-id`。
 
 ## 3. 启动隧道，开始使用
 
-在本地电脑上（保持运行；两侧 bootstrap 都提供开机自启选项）：
+在本地电脑上（保持运行）：
 
 ```bash
 ssh -N remote-claude
@@ -66,10 +66,7 @@ ssh my-device 'echo ok'                # 应打印 ok
 
 ## 停止 / 卸载
 
-- 停止隧道：`Ctrl-C`；如果开了自启：
-  - macOS：`launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.claude.dev-tunnel.plist`
-  - Linux：`systemctl --user disable --now remote-claude.service`
-  - Windows：`Stop-ScheduledTask -TaskName ClaudeDevTunnel`
+- 停止隧道：在运行 `ssh -N remote-claude` 的终端里 `Ctrl-C`。
 - 脚本改动的所有文件都先备份（`*.claude-bak-<时间戳>`），且文件名/配置块里都带 `claude` 标记，很容易找到并删除。需要完整回滚时，直接让你的 AI 助手读本仓库的脚本带你操作即可。
 
 ## 遇到问题？

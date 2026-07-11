@@ -283,9 +283,8 @@ When quoting through two shells gets hairy, pipe a whole script instead
 ## When ssh my-device fails
 
 - `Connection refused`: the reverse tunnel is down. Tell the user to start
-  `ssh -N remote-claude` on their machine (or check its autostart). Nothing
-  on this server can fix it — do not retry endlessly or work around it by
-  editing files here.
+  `ssh -N remote-claude` on their machine. Nothing on this server can fix
+  it — do not retry endlessly or work around it by editing files here.
 - Host key mismatch: stop and tell the user; the machine behind the tunnel
   may have changed.
 CLAUDE_MD_EOF
