@@ -3,40 +3,52 @@
 # setup-server.sh — run this ON THE REMOTE SERVER.
 #
 # Prepares the server side of the reverse SSH setup so Claude / Codex running
-# on the server can work on the LOCAL machine through the reverse tunnel:
+# on the server can work on the LOCAL machine through the reverse tunnel.
 #
-#   1. Uses (or generates) the default ~/.ssh/id_ed25519 as the connect-back key and
-#      prints its public key — paste it into the local bootstrap script.
-#   2. Asks for the LOCAL machine's public key and appends it to this
-#      server's ~/.ssh/authorized_keys (dedup by key blob) — that is what
-#      authorizes the tunnel login (ssh -N remote-claude).
-#   3. Writes a managed "Host my-device" block into ~/.ssh/config that
-#      points at the reverse tunnel (127.0.0.1:<reverse_port>).
-#   4. Optionally installs agent instructions into ~/.claude/CLAUDE.md telling
-#      Claude Code to run all project work through `ssh my-device`, keep this
-#      server to lightweight script drafting (no data, no toolchains; scratch
-#      in ~/tmp), and reach project files with the file tools only via scp
-#      round-trips. Seeds an agent-maintained facts file
-#      (~/.config/remote-claude/facts.json: OS, project paths/descriptions)
-#      that the agent reads at session start, so nothing is rediscovered.
+# Presents a menu of independent items — each is idempotent, shows whether
+# it is already configured, and can be run (or fail, or be re-run) on its own:
 #
-# Everything is user-level: no sudo required, idempotent, safe to re-run.
+#   1. Ensure the default ~/.ssh/id_ed25519 exists (the connect-back key)
+#      and print its public key — paste it into the local bootstrap.
+#   2. Ask for the LOCAL machine's public key and append it to this server's
+#      ~/.ssh/authorized_keys (dedup by key blob) — that is what authorizes
+#      the tunnel login (ssh -N remote-claude).
+#   3. Write a managed "Host my-device" block into ~/.ssh/config that points
+#      at the reverse tunnel (127.0.0.1:<reverse_port>).
+#   4. Install agent instructions into ~/.claude/CLAUDE.md telling Claude
+#      Code to run all project work through `ssh my-device`, keep this
+#      server to lightweight script drafting (no data, no toolchains;
+#      scratch in ~/tmp), and reach project files only via scp round-trips.
+#   5. Seed the agent-maintained facts file (~/.config/remote-claude/
+#      facts.json: OS, project paths/descriptions) that the agent reads at
+#      session start, so nothing is rediscovered.
+#
+# Everything is user-level: no sudo required.
 #
 # Usage:  ./setup-server.sh
 # Non-interactive overrides via env vars: REVERSE_PORT, LOCAL_USER,
 # LOCAL_PUBKEY, LOCAL_PROJECT_DIR.
 
-set -euo pipefail
+# No -e at the top level: menu items run in their own `set -e` subshell so a
+# failing item returns to the menu instead of killing the script.
+set -uo pipefail
 
 LOCAL_ALIAS="my-device"
 KEY_NAME="id_ed25519"
 SSH_DIR="$HOME/.ssh"
 KEY_PATH="$SSH_DIR/$KEY_NAME"
 SSH_CONFIG="$SSH_DIR/config"
+AUTH_KEYS="$SSH_DIR/authorized_keys"
 TS="$(date +%Y%m%d-%H%M%S)"
 
 BEGIN_MARK="# >>> ${LOCAL_ALIAS} (managed by reverse-ssh-bootstrap) >>>"
 END_MARK="# <<< ${LOCAL_ALIAS} <<<"
+
+CLAUDE_MD="$HOME/.claude/CLAUDE.md"
+CLAUDE_MD_BEGIN="<!-- >>> my-device (managed by reverse-ssh-bootstrap) >>> -->"
+CLAUDE_MD_END="<!-- <<< my-device <<< -->"
+
+FACTS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/remote-claude/facts.json"
 
 log()  { printf '\033[1;32m[+]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*"; }
@@ -70,50 +82,22 @@ ask_yn() { # ask_yn <prompt> <Y|N>  -> exit status 0 = yes
 cat <<'EOF'
 ==========================================================
  Reverse SSH bootstrap — SERVER side
- Installs the my-device ssh alias and the CLAUDE.md agent
+ Sets up the my-device ssh alias and the CLAUDE.md agent
  instructions so agents on this server can work on your
  local machine.
 ==========================================================
+Pick items from the menu below; each one is independent,
+idempotent, and shows whether it is already configured.
+Everything is user-level — no sudo needed.
 EOF
-echo
 
-# ---------------------------------------------------------------- inputs
-REVERSE_PORT="${REVERSE_PORT:-$(ask 'Reverse SSH port on this server (must match the local bootstrap)' '2222')}"
-[[ "$REVERSE_PORT" =~ ^[0-9]+$ ]] || die "Reverse port must be a number"
-LOCAL_USER="${LOCAL_USER:-$(ask 'Username on the LOCAL machine')}"
-[[ -n "$LOCAL_USER" ]] || die "Local username must not be empty"
-echo
-echo "Public key of the LOCAL machine: the .pub of the key the tunnel"
-echo "(ssh -N remote-claude) logs in to this server with. The local bootstrap"
-echo "prints it at the end, or run: cat ~/.ssh/id_ed25519.pub  on your machine."
-echo "(paste the whole line; leave empty to skip and authorize it yourself later)"
-LOCAL_PUBKEY="${LOCAL_PUBKEY:-$(ask 'Local machine public key' '')}"
-echo
-echo "Optional: a project directory on the LOCAL machine to pre-record in the"
-echo "agent's memory (the facts file). You can always just tell the agent"
-echo "which project to work on per session."
-LOCAL_PROJECT_DIR="${LOCAL_PROJECT_DIR:-$(ask 'Local project directory to pre-record (empty = skip)' '')}"
+# ---------------------------------------------------------------- shared prep
+ensure_ssh_dir() {
+  mkdir -p "$SSH_DIR"
+  chmod 700 "$SSH_DIR"
+}
 
-# ---------------------------------------------------------------- connect-back key
-mkdir -p "$SSH_DIR"
-chmod 700 "$SSH_DIR"
-# Use the default SSH key; generate it only when it does not exist yet.
-if [[ -f "$KEY_PATH" ]]; then
-  if [[ ! -f "$KEY_PATH.pub" ]]; then
-    ssh-keygen -y -P "" -f "$KEY_PATH" > "$KEY_PATH.pub" 2>/dev/null \
-      || die "$KEY_PATH exists but $KEY_PATH.pub is missing and could not be derived (passphrase-protected?); please fix and re-run"
-  fi
-  log "Using existing SSH key: $KEY_PATH"
-  ssh-keygen -y -P "" -f "$KEY_PATH" >/dev/null 2>&1 \
-    || warn "This key appears to be passphrase-protected; agents will need a running ssh-agent to use it non-interactively"
-else
-  log "Generating the default SSH key: $KEY_PATH"
-  ssh-keygen -t ed25519 -f "$KEY_PATH" -N "" >/dev/null
-fi
-chmod 600 "$KEY_PATH"
-
-# ---------------------------------------------------------------- authorized_keys (tunnel login)
-AUTH_KEYS="$SSH_DIR/authorized_keys"
+# ---------------------------------------------------------------- helpers
 add_authorized_key() { # add_authorized_key <pubkey line>
   local pubkey="$1" tmp blob
   tmp="$(mktemp)"
@@ -131,20 +115,13 @@ add_authorized_key() { # add_authorized_key <pubkey line>
     log "This public key is already in authorized_keys, skipping"
     return 0
   fi
-  printf '%s\n' "$pubkey" >> "$AUTH_KEYS"
+  # The trailing tag lets the menu detect that this item has been done
+  printf '%s remote-claude-tunnel\n' "$pubkey" >> "$AUTH_KEYS"
   log "Added the local machine's key to ~/.ssh/authorized_keys (authorizes the tunnel login)"
 }
 
-if [[ -n "$LOCAL_PUBKEY" ]]; then
-  add_authorized_key "$LOCAL_PUBKEY"
-else
-  warn "No local public key provided — the tunnel login is not authorized yet."
-  warn "Re-run this script and paste it, or run on the LOCAL machine:"
-  warn "  ssh-copy-id -i ~/.ssh/id_ed25519.pub <your user>@<this server>"
-fi
-
-# ---------------------------------------------------------------- ~/.ssh/config
-write_ssh_config_block() {
+write_ssh_config_block() { # <reverse_port> <local_user>
+  local REVERSE_PORT="$1" LOCAL_USER="$2"
   local block tmp
   block="$(cat <<EOF
 $BEGIN_MARK
@@ -195,21 +172,11 @@ EOF
   { [[ -s "$SSH_CONFIG" ]] && [[ "$(tail -c1 "$SSH_CONFIG")" != "" ]] && echo; printf '%s\n' "$block"; } >> "$SSH_CONFIG"
   log "Wrote Host $LOCAL_ALIAS to ~/.ssh/config"
 }
-write_ssh_config_block
 
-# ---------------------------------------------------------------- scratch dir
-# The agent instructions point at ~/tmp for scratch files; make sure it exists.
-mkdir -p "$HOME/tmp"
-
-# ---------------------------------------------------------------- CLAUDE.md (optional)
 # Global agent memory telling Claude Code to do ALL project work through
 # `ssh my-device` instead of this server's filesystem (no Read/Edit/Glob on
 # project files). Managed as a marker-delimited block, so re-runs update it
 # and user content around it is preserved.
-CLAUDE_MD="$HOME/.claude/CLAUDE.md"
-CLAUDE_MD_BEGIN="<!-- >>> my-device (managed by reverse-ssh-bootstrap) >>> -->"
-CLAUDE_MD_END="<!-- <<< my-device <<< -->"
-
 install_claude_md() {
   local content tmp
   content="$(cat <<'CLAUDE_MD_EOF'
@@ -344,22 +311,14 @@ CLAUDE_MD_EOF
   log "Installed agent instructions into $CLAUDE_MD"
 }
 
-# Agent-maintained memory (OS of my-device, projects) that the
-# instructions above tell the agent to read at session start and keep
-# updated. Seeded once; never overwritten on re-runs — the agent owns it.
-FACTS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/remote-claude/facts.json"
-
-install_facts_file() {
-  if [[ -f "$FACTS_FILE" ]]; then
-    log "Facts file already present, leaving it as is: $FACTS_FILE"
-    return 0
-  fi
+install_facts_file() { # install_facts_file <local project dir or empty>
+  local project_dir="$1"
   local projects="{}"
-  if [[ -n "$LOCAL_PROJECT_DIR" ]]; then
+  if [[ -n "$project_dir" ]]; then
     # JSON-escape backslashes and quotes (think Windows paths)
     local esc name
-    esc="${LOCAL_PROJECT_DIR//\\/\\\\}"; esc="${esc//\"/\\\"}"
-    name="$(basename "${LOCAL_PROJECT_DIR//\\//}")"
+    esc="${project_dir//\\/\\\\}"; esc="${esc//\"/\\\"}"
+    name="$(basename "${project_dir//\\//}")"
     name="${name//\"/\\\"}"
     projects="{ \"$name\": { \"path\": \"$esc\", \"desc\": \"\" } }"
   fi
@@ -373,39 +332,115 @@ EOF
   log "Seeded the facts file: $FACTS_FILE"
 }
 
-echo
-if ask_yn "Install agent instructions into ~/.claude/CLAUDE.md (tell Claude Code to work on my-device via ssh, not on this server's files)" "Y"; then
-  install_claude_md
-  install_facts_file
-fi
-
-# ---------------------------------------------------------------- summary
-cat <<EOF
-
-==========================================================
- Done! Next steps
-==========================================================
-1. Paste this public key into the LOCAL bootstrap script when it asks for
-   the "server-side public key" (it adds the loopback-only restriction):
-
-$(cat "$KEY_PATH.pub")
-
-2. Start the tunnel on the LOCAL machine:
-     ssh -N remote-claude
-
-3. Test the connect-back from this server:
-     ssh $LOCAL_ALIAS 'echo ok'
-
-4. Normal workflow: connect to this server as usual (e.g. VSCode
-   Remote-SSH) and just start 'claude'. With the ~/.claude/CLAUDE.md
-   installed by this script, it does all project work on your machine
-   through 'ssh my-device' — simply tell it which local project to use${LOCAL_PROJECT_DIR:+
-   (pre-recorded in its memory: $LOCAL_PROJECT_DIR)}.
-EOF
-
-if [[ -z "$LOCAL_PUBKEY" ]]; then
+# ---------------------------------------------------------------- menu items
+run_key_show() { # item 1: ensure the connect-back key exists + print its .pub
+  ensure_ssh_dir
+  # Use the default SSH key; generate it only when it does not exist yet.
+  if [[ -f "$KEY_PATH" ]]; then
+    if [[ ! -f "$KEY_PATH.pub" ]]; then
+      ssh-keygen -y -P "" -f "$KEY_PATH" > "$KEY_PATH.pub" 2>/dev/null \
+        || die "$KEY_PATH exists but $KEY_PATH.pub is missing and could not be derived (passphrase-protected?); please fix and re-run"
+    fi
+    log "Using existing SSH key: $KEY_PATH"
+    ssh-keygen -y -P "" -f "$KEY_PATH" >/dev/null 2>&1 \
+      || warn "This key appears to be passphrase-protected; agents will need a running ssh-agent to use it non-interactively"
+  else
+    log "Generating the default SSH key: $KEY_PATH"
+    ssh-keygen -t ed25519 -f "$KEY_PATH" -N "" >/dev/null
+  fi
+  chmod 600 "$KEY_PATH"
   echo
-  warn "Reminder: the tunnel login (step 2) is NOT authorized yet — no local"
-  warn "public key was pasted. Re-run this script and paste it, or from the"
-  warn "local machine: ssh-copy-id -i ~/.ssh/id_ed25519.pub $USER@<this server>"
-fi
+  log "Connect-back public key — paste it into the LOCAL bootstrap (item 3,"
+  log "'server-side public key'); it adds the loopback-only restriction:"
+  echo
+  cat "$KEY_PATH.pub"
+  echo
+}
+
+run_authorize_local() { # item 2: authorize the local machine's key (tunnel login)
+  ensure_ssh_dir
+  local pubkey
+  echo "Public key of the LOCAL machine: the .pub of the key the tunnel"
+  echo "(ssh -N remote-claude) logs in to this server with. The local bootstrap"
+  echo "shows it (item 5), or run: cat ~/.ssh/id_ed25519.pub  on your machine."
+  pubkey="${LOCAL_PUBKEY:-$(ask 'Local machine public key' '')}"
+  [[ -n "$pubkey" ]] || die "No key pasted; nothing changed"
+  add_authorized_key "$pubkey"
+}
+
+run_alias() { # item 3: Host my-device block
+  local reverse_port local_user
+  reverse_port="${REVERSE_PORT:-$(ask 'Reverse SSH port on this server (must match the local bootstrap)' '2222')}"
+  [[ "$reverse_port" =~ ^[0-9]+$ ]] || die "Reverse port must be a number"
+  local_user="${LOCAL_USER:-$(ask 'Username on the LOCAL machine')}"
+  [[ -n "$local_user" ]] || die "Local username must not be empty"
+  ensure_ssh_dir
+  write_ssh_config_block "$reverse_port" "$local_user"
+}
+
+run_claude_md() { # item 4: agent instructions + scratch dir
+  install_claude_md
+  # The agent instructions point at ~/tmp for scratch files; make sure it exists.
+  mkdir -p "$HOME/tmp"
+}
+
+run_facts() { # item 5: seed the agent facts file (never overwrites)
+  if [[ -f "$FACTS_FILE" ]]; then
+    log "Facts file already present, leaving it as is: $FACTS_FILE"
+    return 0
+  fi
+  local project_dir
+  echo "Optional: a project directory on the LOCAL machine to pre-record in the"
+  echo "agent's memory. You can always just tell the agent per session."
+  project_dir="${LOCAL_PROJECT_DIR:-$(ask 'Local project directory to pre-record (empty = skip)' '')}"
+  install_facts_file "$project_dir"
+}
+
+# ---------------------------------------------------------------- status checks
+status_key()       { [[ -f "$KEY_PATH" ]]; }
+status_authorize() { grep -qF 'remote-claude-tunnel' "$AUTH_KEYS" 2>/dev/null; }
+status_alias()     { grep -qF "$BEGIN_MARK" "$SSH_CONFIG" 2>/dev/null; }
+status_claude_md() { grep -qF "$CLAUDE_MD_BEGIN" "$CLAUDE_MD" 2>/dev/null; }
+status_facts()     { [[ -f "$FACTS_FILE" ]]; }
+
+# ---------------------------------------------------------------- menu
+mark() { if "$1"; then printf '[done]'; else printf '[ -  ]'; fi; }
+
+draw_menu() {
+  echo
+  echo "----------------------------------------------------------"
+  printf '  1) %-50s %s\n' 'Connect-back key — ensure + show public key' "$(mark status_key)"
+  printf '  2) %-50s %s\n' "Authorize the local machine's key (tunnel login)" "$(mark status_authorize)"
+  printf '  3) %-50s %s\n' 'my-device ssh alias (Host block)' "$(mark status_alias)"
+  printf '  4) %-50s %s\n' 'Agent instructions (~/.claude/CLAUDE.md)' "$(mark status_claude_md)"
+  printf '  5) %-50s %s\n' 'Agent facts file (facts.json)' "$(mark status_facts)"
+  echo   '  q) Quit'
+}
+
+run_item() { # run_item <run-function>; failures return to the menu
+  echo
+  ( set -e; "$1" )
+  local rc=$?
+  if [[ $rc -ne 0 ]]; then
+    err "Item did not complete (see above). Other items are unaffected."
+  fi
+}
+
+while true; do
+  draw_menu
+  read -r -p "Select [1-5, q]: " choice || break
+  case "$choice" in
+    1) run_item run_key_show ;;
+    2) run_item run_authorize_local ;;
+    3) run_item run_alias ;;
+    4) run_item run_claude_md ;;
+    5) run_item run_facts ;;
+    q|Q) break ;;
+    *) warn "Unknown selection: $choice" ;;
+  esac
+done
+
+echo
+log "Start the tunnel on the LOCAL machine: ssh -N remote-claude"
+log "Then test from this server: ssh $LOCAL_ALIAS 'echo ok'"
+log "Normal workflow: connect as usual (e.g. VSCode Remote-SSH) and start 'claude'."
