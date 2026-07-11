@@ -9,25 +9,27 @@
     local PC  -- ssh -N remote-claude -->  remote server
     remote server 127.0.0.1:<reverse_port>  -->  local PC 127.0.0.1:22
 
-  What it does (idempotent, safe to re-run):
-    1. Installs OpenSSH Server if missing, starts sshd, sets it to auto-start.
-    2. Hardens %ProgramData%\ssh\sshd_config: pubkey auth on, password auth
-       off (optional), and comments out the "Match Group administrators"
-       block so admin users also use their own
+  Presents a menu of independent items -- each is idempotent, shows whether
+  it is already configured, and can be run (or fail, or be re-run) on its own:
+
+    1. Incoming SSH: install OpenSSH Server if missing, start sshd, set it
+       to auto-start, and harden %ProgramData%\ssh\sshd_config: pubkey auth
+       on, password auth off (optional), and comment out the
+       "Match Group administrators" block so admin users also use their own
        %USERPROFILE%\.ssh\authorized_keys. Backs up the config and validates
-       with `sshd -t` before restarting.
-    3. Creates %USERPROFILE%\.ssh + authorized_keys with strict ACLs.
-    4. Appends the server-side public key to authorized_keys with a
+       with `sshd -t` before restarting. The only item that needs an
+       elevated (Administrator) PowerShell.
+    2. Ensure the default %USERPROFILE%\.ssh\id_ed25519 exists
+       (local -> server hop).
+    3. Append the server-side public key to authorized_keys with a
        from="127.0.0.1,::1" restriction (dedup by key blob).
-    5. Uses (or generates) the default %USERPROFILE%\.ssh\id_ed25519 for
-       the local -> server hop.
-    6. Writes a managed "Host remote-claude" block into
+    4. Write a managed "Host remote-claude" block into
        %USERPROFILE%\.ssh\config.
-    7. Optionally registers a Scheduled Task that keeps the tunnel up after
-       logon (hidden window, auto-reconnect loop).
+    5. Show the local public key to paste into the server-side setup.
 
 .NOTES
-  Must be run from an elevated (Administrator) PowerShell.
+  Only item 1 requires an elevated (Administrator) PowerShell; the other
+  items run fine without elevation.
 
 .EXAMPLE
   PS> Set-ExecutionPolicy -Scope Process Bypass -Force
@@ -39,7 +41,6 @@ param(
     [string]$ServerUser,
     [int]$ServerPort = 0,
     [int]$ReversePort = 0,
-    [string]$LocalUser,
     [string]$ServerPublicKey
 )
 
@@ -53,10 +54,7 @@ $SshConfig    = Join-Path $SshDir 'config'
 $AuthKeys     = Join-Path $SshDir 'authorized_keys'
 $SshdConfig   = Join-Path $env:ProgramData 'ssh\sshd_config'
 $SshdExe      = Join-Path $env:SystemRoot 'System32\OpenSSH\sshd.exe'
-$SshExe       = Join-Path $env:SystemRoot 'System32\OpenSSH\ssh.exe'
 $SshKeygenExe = Join-Path $env:SystemRoot 'System32\OpenSSH\ssh-keygen.exe'
-$TaskName     = 'ClaudeDevTunnel'
-$KeepAlivePs1 = Join-Path $SshDir 'remote-claude-keepalive.ps1'
 $Ts           = Get-Date -Format 'yyyyMMdd-HHmmss'
 
 $BeginMark = "# >>> $TunnelAlias (managed by reverse-ssh-bootstrap) >>>"
@@ -101,97 +99,21 @@ function Set-StrictAcl {
     & icacls $Path /grant "*${userSid}:$perm"   | Out-Null   # current user
 }
 
-# ---------------------------------------------------------------- platform / admin
-if ($env:OS -ne 'Windows_NT') {
-    Write-Err 'This script is for Windows. On macOS, run ./bootstrap-macos.sh instead.'
-    exit 1
-}
-$principal = New-Object System.Security.Principal.WindowsPrincipal(
-    [System.Security.Principal.WindowsIdentity]::GetCurrent())
-if (-not $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Err 'Administrator privileges are required (OpenSSH Server install / sshd_config / service control).'
-    Write-Err 'Please re-run from an elevated PowerShell, e.g.:'
-    Write-Host ('    Start-Process powershell -Verb RunAs -ArgumentList ''-ExecutionPolicy Bypass -File "{0}"''' -f $PSCommandPath)
-    exit 1
+function Test-IsAdmin {
+    $principal = New-Object System.Security.Principal.WindowsPrincipal(
+        [System.Security.Principal.WindowsIdentity]::GetCurrent())
+    return $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-Write-Host @'
-==========================================================
- Reverse SSH bootstrap (Windows)
- local PC  ->  remote server  ->  (reverse tunnel)  -> local PC
-==========================================================
-This will modify:
-  - OpenSSH Server install / sshd service / sshd_config
-  - %USERPROFILE%\.ssh\{config,authorized_keys,id_ed25519}
-All modified system files are backed up first.
-'@
-
-# ---------------------------------------------------------------- inputs
-if (-not $ServerHost)  { $ServerHost  = Read-Default 'Remote server hostname / IP' }
-if (-not $ServerHost)  { Write-Err 'Server hostname must not be empty'; exit 1 }
-if (-not $ServerUser)  { $ServerUser  = Read-Default 'Remote server SSH user' }
-if (-not $ServerUser)  { Write-Err 'Server user must not be empty'; exit 1 }
-if ($ServerPort -le 0) { $ServerPort  = [int](Read-Default 'Remote server SSH port' '22') }
-if ($ReversePort -le 0){ $ReversePort = [int](Read-Default 'Reverse SSH port on the server (used by Claude/Codex to connect back)' '2222') }
-if (-not $LocalUser)   { $LocalUser   = Read-Default 'Local username (used when connecting back from the server)' $env:USERNAME }
-
-Write-Host ''
-Write-Host 'Server-side public key: the .pub of the key that Claude / Codex on the'
-Write-Host 'server will use to SSH back into this machine (printed by'
-Write-Host 'server/setup-server.sh, or: cat ~/.ssh/id_ed25519.pub on the server).'
-Write-Host "(paste the whole line, e.g. 'ssh-ed25519 AAAA... comment'; leave empty to skip and re-run later)"
-if (-not $ServerPublicKey) { $ServerPublicKey = Read-Default 'Server-side public key' '' }
-
-$DisablePassword = Read-YesNo 'Disable password login for the local sshd (recommended, public key only)' $true
-
-# ---------------------------------------------------------------- OpenSSH Server install
-Write-Info 'Checking whether OpenSSH Server is installed'
-$cap = Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Server*' | Select-Object -First 1
-if (-not $cap) {
-    Write-Err 'OpenSSH.Server capability not found; Windows 10 1809+ / Windows 11 is required.'
-    exit 1
-}
-if ($cap.State -ne 'Installed') {
-    Write-Info 'Installing OpenSSH Server (this can take a few minutes)...'
-    Add-WindowsCapability -Online -Name $cap.Name | Out-Null
-    Write-Info 'OpenSSH Server installed'
-} else {
-    Write-Info 'OpenSSH Server is already installed'
-}
-$clientCap = Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Client*' | Select-Object -First 1
-if ($clientCap -and $clientCap.State -ne 'Installed') {
-    Write-Info 'Installing OpenSSH Client (provides ssh / ssh-keygen)...'
-    Add-WindowsCapability -Online -Name $clientCap.Name | Out-Null
+function Initialize-SshDir {
+    if (-not (Test-Path $SshDir)) { New-Item -ItemType Directory -Path $SshDir | Out-Null }
+    if (-not (Test-Path $AuthKeys)) { New-Item -ItemType File -Path $AuthKeys | Out-Null }
+    Set-StrictAcl -Path $SshDir -Directory
+    Set-StrictAcl -Path $AuthKeys
 }
 
-# ---------------------------------------------------------------- start sshd + auto start
-# Start once first so OpenSSH generates the default sshd_config and host keys
-# under %ProgramData%\ssh
-Write-Info 'Starting the sshd service and enabling auto-start'
-Set-Service -Name sshd -StartupType Automatic
-Start-Service -Name sshd
-
-# ---------------------------------------------------------------- sshd_config
-if (-not (Test-Path $SshdConfig)) {
-    Write-Err "$SshdConfig not found (it should be generated on the first sshd start)"
-    exit 1
-}
-$backupPath = "$SshdConfig.claude-bak-$Ts"
-Copy-Item $SshdConfig $backupPath
-Write-Info "Backed up sshd_config -> $backupPath"
-
-$raw = Get-Content -Raw $SshdConfig
-
-# 1) Comment out the administrators_authorized_keys Match block so users in
-#    the Administrators group also use their own
-#    %USERPROFILE%\.ssh\authorized_keys.
-#    Already-commented lines no longer match the pattern, so re-runs are
-#    idempotent.
-$raw = $raw -replace '(?m)^([ \t]*Match[ \t]+Group[ \t]+administrators[ \t]*)\r?$', '# claude-bootstrap disabled: $1'
-$raw = $raw -replace '(?m)^([ \t]*AuthorizedKeysFile[ \t]+__PROGRAMDATA__[/\\]ssh[/\\]administrators_authorized_keys[ \t]*)\r?$', '# claude-bootstrap disabled: $1'
-
-# 2) Set global directives (replace the first match only; append to the end
-#    of the file when not found)
+# Set a global sshd directive (replace the first match only; append to the
+# end of the file when not found)
 function Set-SshdDirective {
     param([string]$Text, [string]$Name, [string]$Value)
     $pattern = "(?m)^[#\t ]*$Name([ \t][^\r\n]*)?\r?$"
@@ -203,108 +125,185 @@ function Set-SshdDirective {
     return $Text.TrimEnd() + "`r`n$line`r`n"
 }
 
-$raw = Set-SshdDirective $raw 'PubkeyAuthentication' 'yes'
-$raw = Set-SshdDirective $raw 'AuthorizedKeysFile' '.ssh/authorized_keys'
-if ($DisablePassword) {
-    $raw = Set-SshdDirective $raw 'PasswordAuthentication' 'no'
-}
-
-[System.IO.File]::WriteAllText($SshdConfig, $raw)
-
-Write-Info 'Validating the sshd config (sshd -t)'
-# sshd -t reports errors on stderr; with EAP=Stop, 2>&1 wraps stderr into an
-# exception (PS 5.1 NativeCommandError), so relax it during validation to make
-# sure the backup gets restored on failure
-$prevEap = $ErrorActionPreference
-$ErrorActionPreference = 'Continue'
-$sshdCheck = & $SshdExe -t 2>&1
-$sshdCheckCode = $LASTEXITCODE
-$ErrorActionPreference = $prevEap
-$sshdCheck | ForEach-Object { Write-Host "    $_" }
-if ($sshdCheckCode -ne 0) {
-    Write-Err 'sshd config validation failed, restoring the backup'
-    Copy-Item $backupPath $SshdConfig -Force
+# ---------------------------------------------------------------- platform
+if ($env:OS -ne 'Windows_NT') {
+    Write-Err 'This script is for Windows. On macOS, run ./bootstrap-macos.sh instead.'
     exit 1
 }
-Write-Info 'Config validation passed, restarting sshd'
-Restart-Service -Name sshd
 
-# ---------------------------------------------------------------- ~/.ssh + ACL
-Write-Info 'Preparing %USERPROFILE%\.ssh and tightening its ACLs'
-if (-not (Test-Path $SshDir)) { New-Item -ItemType Directory -Path $SshDir | Out-Null }
-if (-not (Test-Path $AuthKeys)) { New-Item -ItemType File -Path $AuthKeys | Out-Null }
-Set-StrictAcl -Path $SshDir -Directory
-Set-StrictAcl -Path $AuthKeys
+Write-Host @'
+==========================================================
+ Reverse SSH bootstrap (Windows)
+ local PC  ->  remote server  ->  (reverse tunnel)  -> local PC
+==========================================================
+Pick items from the menu below; each one is independent, idempotent,
+and shows whether it is already configured. Files this can modify:
+  - OpenSSH Server install / sshd service / sshd_config (item 1, Administrator)
+  - %USERPROFILE%\.ssh\{config,authorized_keys,id_ed25519}
+All modified system files are backed up first (*.claude-bak-<timestamp>).
+'@
 
-# ---------------------------------------------------------------- server pubkey -> authorized_keys
-if ($ServerPublicKey) {
+# ---------------------------------------------------------------- menu items
+function Invoke-ItemSshd {   # item 1: OpenSSH Server install + harden (admin)
+    if (-not (Test-IsAdmin)) {
+        Write-Host ('    Start-Process powershell -Verb RunAs -ArgumentList ''-ExecutionPolicy Bypass -File "{0}"''' -f $PSCommandPath)
+        throw 'Administrator privileges are required for this item (OpenSSH Server install / sshd_config / service control). Re-run this script from an elevated PowerShell (e.g. the line above) to use it.'
+    }
+    $DisablePassword = Read-YesNo 'Disable password login for the local sshd (recommended, public key only)' $true
+
+    Write-Info 'Checking whether OpenSSH Server is installed'
+    $cap = Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Server*' | Select-Object -First 1
+    if (-not $cap) {
+        throw 'OpenSSH.Server capability not found; Windows 10 1809+ / Windows 11 is required.'
+    }
+    if ($cap.State -ne 'Installed') {
+        Write-Info 'Installing OpenSSH Server (this can take a few minutes)...'
+        Add-WindowsCapability -Online -Name $cap.Name | Out-Null
+        Write-Info 'OpenSSH Server installed'
+    } else {
+        Write-Info 'OpenSSH Server is already installed'
+    }
+    $clientCap = Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Client*' | Select-Object -First 1
+    if ($clientCap -and $clientCap.State -ne 'Installed') {
+        Write-Info 'Installing OpenSSH Client (provides ssh / ssh-keygen)...'
+        Add-WindowsCapability -Online -Name $clientCap.Name | Out-Null
+    }
+
+    # Start once first so OpenSSH generates the default sshd_config and host
+    # keys under %ProgramData%\ssh
+    Write-Info 'Starting the sshd service and enabling auto-start'
+    Set-Service -Name sshd -StartupType Automatic
+    Start-Service -Name sshd
+
+    if (-not (Test-Path $SshdConfig)) {
+        throw "$SshdConfig not found (it should be generated on the first sshd start)"
+    }
+    $backupPath = "$SshdConfig.claude-bak-$Ts"
+    Copy-Item $SshdConfig $backupPath
+    Write-Info "Backed up sshd_config -> $backupPath"
+
+    $raw = Get-Content -Raw $SshdConfig
+
+    # 1) Comment out the administrators_authorized_keys Match block so users
+    #    in the Administrators group also use their own
+    #    %USERPROFILE%\.ssh\authorized_keys.
+    #    Already-commented lines no longer match the pattern, so re-runs are
+    #    idempotent.
+    $raw = $raw -replace '(?m)^([ \t]*Match[ \t]+Group[ \t]+administrators[ \t]*)\r?$', '# claude-bootstrap disabled: $1'
+    $raw = $raw -replace '(?m)^([ \t]*AuthorizedKeysFile[ \t]+__PROGRAMDATA__[/\\]ssh[/\\]administrators_authorized_keys[ \t]*)\r?$', '# claude-bootstrap disabled: $1'
+
+    # 2) Global directives
+    $raw = Set-SshdDirective $raw 'PubkeyAuthentication' 'yes'
+    $raw = Set-SshdDirective $raw 'AuthorizedKeysFile' '.ssh/authorized_keys'
+    if ($DisablePassword) {
+        $raw = Set-SshdDirective $raw 'PasswordAuthentication' 'no'
+    }
+
+    [System.IO.File]::WriteAllText($SshdConfig, $raw)
+
+    Write-Info 'Validating the sshd config (sshd -t)'
+    # sshd -t reports errors on stderr; with EAP=Stop, 2>&1 wraps stderr into
+    # an exception (PS 5.1 NativeCommandError), so relax it during validation
+    # to make sure the backup gets restored on failure
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $sshdCheck = & $SshdExe -t 2>&1
+    $sshdCheckCode = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    $sshdCheck | ForEach-Object { Write-Host "    $_" }
+    if ($sshdCheckCode -ne 0) {
+        Copy-Item $backupPath $SshdConfig -Force
+        throw 'sshd config validation failed; the backup was restored'
+    }
+    Write-Info 'Config validation passed, restarting sshd'
+    Restart-Service -Name sshd
+}
+
+function Invoke-ItemKey {    # item 2: ensure %USERPROFILE%\.ssh\id_ed25519 exists
+    Initialize-SshDir
+    # Use the default SSH key; generate it only when it does not exist yet.
+    if (Test-Path $KeyPath) {
+        # ssh-keygen -y with an empty passphrase succeeds only on unprotected keys
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        $derivedPub = & $SshKeygenExe -y -P '""' -f $KeyPath 2>$null
+        $keyProbeCode = $LASTEXITCODE
+        $ErrorActionPreference = $prevEap
+        if (-not (Test-Path "$KeyPath.pub")) {
+            if ($keyProbeCode -ne 0) {
+                throw "$KeyPath exists but $KeyPath.pub is missing and could not be derived (passphrase-protected?); please fix and re-run"
+            }
+            [System.IO.File]::WriteAllText("$KeyPath.pub", ($derivedPub -join "`n") + "`n")
+        }
+        Write-Info "Using existing SSH key: $KeyPath"
+        if ($keyProbeCode -ne 0) {
+            Write-Warn 'This key appears to be passphrase-protected; the tunnel will need an ssh-agent to work'
+        }
+    } else {
+        Write-Info "Generating the default SSH key: $KeyPath"
+        & $SshKeygenExe -t ed25519 -f $KeyPath -N '""' | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'ssh-keygen failed' }
+    }
+    Set-StrictAcl -Path $KeyPath
+}
+
+function Invoke-ItemAuthorize {  # item 3: authorize the server's connect-back key
+    Initialize-SshDir
+    Write-Host 'Server-side public key: the .pub of the key that Claude / Codex on the'
+    Write-Host 'server will use to SSH back into this machine (setup-server.sh item 1'
+    Write-Host 'prints it, or: cat ~/.ssh/id_ed25519.pub on the server).'
+    $pubkey = $ServerPublicKey
+    if (-not $pubkey) { $pubkey = Read-Default 'Server-side public key' '' }
+    if (-not $pubkey) { throw 'No key pasted; nothing changed' }
+
     $tmp = [System.IO.Path]::GetTempFileName()
     try {
-        [System.IO.File]::WriteAllText($tmp, $ServerPublicKey + "`n")
+        [System.IO.File]::WriteAllText($tmp, $pubkey + "`n")
         $prevEap = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
         & $SshKeygenExe -lf $tmp *> $null
         $keyCheckCode = $LASTEXITCODE
         $ErrorActionPreference = $prevEap
         if ($keyCheckCode -ne 0) {
-            Write-Err 'The pasted content is not a valid SSH public key; please check and re-run'
-            exit 1
+            throw 'The pasted content is not a valid SSH public key; please check and re-run'
         }
     } finally {
         Remove-Item $tmp -ErrorAction SilentlyContinue
     }
-    $blob = ($ServerPublicKey -split '\s+' | Where-Object { $_ -like 'AAAA*' } | Select-Object -First 1)
-    if (-not $blob) { Write-Err 'Could not parse the key data from the public key'; exit 1 }
+    $blob = ($pubkey -split '\s+' | Where-Object { $_ -like 'AAAA*' } | Select-Object -First 1)
+    if (-not $blob) { throw 'Could not parse the key data from the public key' }
     $existing = Get-Content -Raw $AuthKeys -ErrorAction SilentlyContinue
     if ($existing -and $existing.Contains($blob)) {
         Write-Info 'This public key is already in authorized_keys, skipping'
     } else {
-        $entry = "from=`"127.0.0.1,::1`",no-agent-forwarding,no-X11-forwarding $ServerPublicKey"
+        $entry = "from=`"127.0.0.1,::1`",no-agent-forwarding,no-X11-forwarding $pubkey"
         Add-Content -Path $AuthKeys -Value $entry -Encoding ascii
         Write-Info 'Written to authorized_keys (restricted to loopback logins only)'
     }
-} else {
-    Write-Warn "No server-side public key provided. You can append it to $AuthKeys later,"
-    Write-Warn 'recommended format: from="127.0.0.1,::1",no-agent-forwarding,no-X11-forwarding <public-key>'
 }
 
-# ---------------------------------------------------------------- local tunnel key
-# Use the default SSH key; generate it only when it does not exist yet.
-if (Test-Path $KeyPath) {
-    # ssh-keygen -y with an empty passphrase succeeds only on unprotected keys
-    $prevEap = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    $derivedPub = & $SshKeygenExe -y -P '""' -f $KeyPath 2>$null
-    $keyProbeCode = $LASTEXITCODE
-    $ErrorActionPreference = $prevEap
-    if (-not (Test-Path "$KeyPath.pub")) {
-        if ($keyProbeCode -ne 0) {
-            Write-Err "$KeyPath exists but $KeyPath.pub is missing and could not be derived (passphrase-protected?); please fix and re-run"
-            exit 1
-        }
-        [System.IO.File]::WriteAllText("$KeyPath.pub", ($derivedPub -join "`n") + "`n")
-    }
-    Write-Info "Using existing SSH key: $KeyPath"
-    if ($keyProbeCode -ne 0) {
-        Write-Warn 'This key appears to be passphrase-protected; tunnel autostart will need an ssh-agent to work'
-    }
-} else {
-    Write-Info "Generating the default SSH key: $KeyPath"
-    & $SshKeygenExe -t ed25519 -f $KeyPath -N '""' | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-Err 'ssh-keygen failed'; exit 1 }
-}
-Set-StrictAcl -Path $KeyPath
+function Invoke-ItemConfig {     # item 4: Host remote-claude block
+    Initialize-SshDir
+    $srvHost = $ServerHost
+    if (-not $srvHost) { $srvHost = Read-Default 'Remote server hostname / IP' }
+    if (-not $srvHost) { throw 'Server hostname must not be empty' }
+    $srvUser = $ServerUser
+    if (-not $srvUser) { $srvUser = Read-Default 'Remote server SSH user' }
+    if (-not $srvUser) { throw 'Server user must not be empty' }
+    $srvPort = $ServerPort
+    if ($srvPort -le 0) { $srvPort = [int](Read-Default 'Remote server SSH port' '22') }
+    $revPort = $ReversePort
+    if ($revPort -le 0) { $revPort = [int](Read-Default 'Reverse SSH port on the server (used by Claude/Codex to connect back)' '2222') }
 
-# ---------------------------------------------------------------- ~/.ssh/config
-$configBlock = @"
+    $configBlock = @"
 $BeginMark
 Host $TunnelAlias
-    HostName $ServerHost
-    User $ServerUser
-    Port $ServerPort
+    HostName $srvHost
+    User $srvUser
+    Port $srvPort
     IdentityFile ~/.ssh/$KeyName
     IdentitiesOnly yes
-    RemoteForward 127.0.0.1:$ReversePort 127.0.0.1:22
+    RemoteForward 127.0.0.1:$revPort 127.0.0.1:22
     ExitOnForwardFailure yes
     ServerAliveInterval 30
     ServerAliveCountMax 3
@@ -312,119 +311,110 @@ Host $TunnelAlias
 $EndMark
 "@
 
-if (-not (Test-Path $SshConfig)) { New-Item -ItemType File -Path $SshConfig | Out-Null }
-$configRaw = Get-Content -Raw $SshConfig -ErrorAction SilentlyContinue
-if ($null -eq $configRaw) { $configRaw = '' }
+    if (-not (Test-Path $SshConfig)) { New-Item -ItemType File -Path $SshConfig | Out-Null }
+    $configRaw = Get-Content -Raw $SshConfig -ErrorAction SilentlyContinue
+    if ($null -eq $configRaw) { $configRaw = '' }
 
-$writeBlock = $true
-if ($configRaw.Contains($BeginMark)) {
-    if (Read-YesNo "~\.ssh\config already contains a $TunnelAlias block, update it" $true) {
+    $writeBlock = $true
+    if ($configRaw.Contains($BeginMark)) {
+        if (Read-YesNo "~\.ssh\config already contains a $TunnelAlias block, update it" $true) {
+            Copy-Item $SshConfig "$SshConfig.claude-bak-$Ts"
+            Write-Info "Backed up ssh config -> $SshConfig.claude-bak-$Ts"
+            $escBegin = [regex]::Escape($BeginMark)
+            $escEnd   = [regex]::Escape($EndMark)
+            $configRaw = [regex]::Replace($configRaw, "(?s)$escBegin.*?$escEnd(\r?\n)?", '')
+        } else {
+            Write-Warn 'Keeping the existing block, skipping the write'
+            $writeBlock = $false
+        }
+    } else {
+        if ($configRaw -match "(?m)^\s*Host\s+.*\b$TunnelAlias\b") {
+            Write-Warn "~\.ssh\config contains a 'Host $TunnelAlias' block that is not managed by this tool."
+            Write-Warn 'ssh uses first-match-wins, so the earlier block would override what this tool writes.'
+            if (-not (Read-YesNo 'Write the block anyway (cleaning up the old block manually is recommended)' $false)) {
+                throw "Aborted. Please remove the old Host $TunnelAlias block and re-run"
+            }
+        }
         Copy-Item $SshConfig "$SshConfig.claude-bak-$Ts"
         Write-Info "Backed up ssh config -> $SshConfig.claude-bak-$Ts"
-        $escBegin = [regex]::Escape($BeginMark)
-        $escEnd   = [regex]::Escape($EndMark)
-        $configRaw = [regex]::Replace($configRaw, "(?s)$escBegin.*?$escEnd(\r?\n)?", '')
-    } else {
-        Write-Warn 'Keeping the existing block, skipping the write'
-        $writeBlock = $false
     }
-} else {
-    if ($configRaw -match "(?m)^\s*Host\s+.*\b$TunnelAlias\b") {
-        Write-Warn "~\.ssh\config contains a 'Host $TunnelAlias' block that is not managed by this tool."
-        Write-Warn 'ssh uses first-match-wins, so the earlier block would override what this tool writes.'
-        if (-not (Read-YesNo 'Write the block anyway (cleaning up the old block manually is recommended)' $false)) {
-            Write-Err "Aborted. Please remove the old Host $TunnelAlias block and re-run"
-            exit 1
+
+    if ($writeBlock) {
+        $configRaw = $configRaw.TrimEnd()
+        if ($configRaw) { $configRaw += "`r`n`r`n" }
+        $configRaw += $configBlock.Replace("`r`n", "`n").Replace("`n", "`r`n") + "`r`n"
+        [System.IO.File]::WriteAllText($SshConfig, $configRaw)
+        Write-Info "Wrote Host $TunnelAlias to $SshConfig"
+    }
+    Set-StrictAcl -Path $SshConfig
+}
+
+function Invoke-ItemShowKey {    # item 5: print the local public key
+    if (-not (Test-Path "$KeyPath.pub")) {
+        if (-not (Test-Path $KeyPath)) {
+            if (-not (Read-YesNo 'No local key yet - generate it now' $true)) { throw 'No key to show' }
         }
+        Invoke-ItemKey
     }
-    Copy-Item $SshConfig "$SshConfig.claude-bak-$Ts"
-    Write-Info "Backed up ssh config -> $SshConfig.claude-bak-$Ts"
+    Write-Host ''
+    Write-Info "Local public key - paste it into server/setup-server.sh (item 2) on the server; that authorizes the tunnel login (ssh -N $TunnelAlias):"
+    Write-Host ''
+    Get-Content "$KeyPath.pub" | Write-Host
+    Write-Host ''
 }
 
-if ($writeBlock) {
-    $configRaw = $configRaw.TrimEnd()
-    if ($configRaw) { $configRaw += "`r`n`r`n" }
-    $configRaw += $configBlock.Replace("`r`n", "`n").Replace("`n", "`r`n") + "`r`n"
-    [System.IO.File]::WriteAllText($SshConfig, $configRaw)
-    Write-Info "Wrote Host $TunnelAlias to $SshConfig"
+# ---------------------------------------------------------------- status checks
+function Test-StatusSshd {
+    $svc = Get-Service -Name sshd -ErrorAction SilentlyContinue
+    if (-not $svc -or $svc.Status -ne 'Running') { return $false }
+    $raw = Get-Content -Raw $SshdConfig -ErrorAction SilentlyContinue
+    return [bool]($raw -match '(?m)^[ \t]*PubkeyAuthentication[ \t]+yes')
 }
-Set-StrictAcl -Path $SshConfig
-
-# ---------------------------------------------------------------- local pubkey handoff
-Write-Host ''
-Write-Info "Local public key — add it to ~/.ssh/authorized_keys of $ServerUser on the server:"
-Write-Host ''
-Get-Content "$KeyPath.pub" | Write-Host
-Write-Host ''
-Write-Info 'Paste it into server/setup-server.sh when it asks for the local machine'
-Write-Info 'public key (re-run it there if needed), or add it manually, e.g.:'
-Write-Info "  type `$env:USERPROFILE\.ssh\id_ed25519.pub | ssh -p $ServerPort $ServerUser@$ServerHost `"cat >> ~/.ssh/authorized_keys`""
-
-# ---------------------------------------------------------------- Scheduled Task (optional)
-Write-Host ''
-Write-Host "Optional: auto-connect the TUNNEL at logon. A Scheduled Task would run"
-Write-Host "'ssh -N $TunnelAlias', dialing OUT to the server and keeping the connection"
-Write-Host "alive. This is NOT about the sshd service - that is already set to start"
-Write-Host "at boot. Answer no to connect only when you choose to, by running:"
-Write-Host "ssh -N $TunnelAlias"
-$autostart = Read-YesNo 'Auto-connect the tunnel at logon (Scheduled Task)' $false
-if ($autostart) {
-    # keepalive script: reconnect 15 seconds after ssh exits
-    $keepAlive = @"
-`$ssh = '$SshExe'
-while (`$true) {
-    & `$ssh -N -o ExitOnForwardFailure=yes $TunnelAlias
-    Start-Sleep -Seconds 15
+function Test-StatusKey { return (Test-Path $KeyPath) }
+function Test-StatusAuthorize {
+    $raw = Get-Content -Raw $AuthKeys -ErrorAction SilentlyContinue
+    return [bool]($raw -and $raw.Contains('from="127.0.0.1,::1"'))
 }
-"@
-    [System.IO.File]::WriteAllText($KeepAlivePs1, $keepAlive)
-    Set-StrictAcl -Path $KeepAlivePs1
+function Test-StatusConfig {
+    $raw = Get-Content -Raw $SshConfig -ErrorAction SilentlyContinue
+    return [bool]($raw -and $raw.Contains($BeginMark))
+}
 
-    $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-        -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$KeepAlivePs1`""
-    $trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
-    $settings = New-ScheduledTaskSettingsSet `
-        -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-        -StartWhenAvailable -MultipleInstances IgnoreNew `
-        -ExecutionTimeLimit (New-TimeSpan -Seconds 0) `
-        -RestartCount 10 -RestartInterval (New-TimeSpan -Minutes 1)
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
-        -Settings $settings -Description 'Keep the remote-claude reverse SSH tunnel alive' -Force | Out-Null
-    Write-Info "Scheduled Task registered: $TaskName (starts automatically at next logon)"
-    if (Read-YesNo 'Start the Scheduled Task now' $true) {
-        Start-ScheduledTask -TaskName $TaskName
-        Write-Info 'Scheduled Task started'
+# ---------------------------------------------------------------- menu
+function Format-Mark { param([bool]$Ok) if ($Ok) { '[done]' } else { '[ -  ]' } }
+
+function Show-Menu {
+    Write-Host ''
+    Write-Host '----------------------------------------------------------'
+    Write-Host ('  1) {0,-50} {1}' -f 'Incoming SSH - OpenSSH Server + harden  [admin]', (Format-Mark (Test-StatusSshd)))
+    Write-Host ('  2) {0,-50} {1}' -f 'Local SSH key (~\.ssh\id_ed25519)', (Format-Mark (Test-StatusKey)))
+    Write-Host ('  3) {0,-50} {1}' -f "Authorize the server's connect-back key", (Format-Mark (Test-StatusAuthorize)))
+    Write-Host ('  4) {0,-50} {1}' -f 'Tunnel config (Host remote-claude)', (Format-Mark (Test-StatusConfig)))
+    Write-Host  '  5) Show local public key (paste into server setup)'
+    Write-Host  '  q) Quit'
+}
+
+:menu while ($true) {
+    Show-Menu
+    $choice = (Read-Host 'Select [1-5, q]').Trim()
+    if ($choice -match '^[Qq]$') { break menu }
+    $fn = switch ($choice) {
+        '1' { 'Invoke-ItemSshd' }
+        '2' { 'Invoke-ItemKey' }
+        '3' { 'Invoke-ItemAuthorize' }
+        '4' { 'Invoke-ItemConfig' }
+        '5' { 'Invoke-ItemShowKey' }
+        default { $null }
+    }
+    if (-not $fn) { Write-Warn "Unknown selection: $choice"; continue }
+    Write-Host ''
+    try { & $fn }
+    catch {
+        Write-Err "Item did not complete: $_"
+        Write-Err 'Other items are unaffected.'
     }
 }
 
-# ---------------------------------------------------------------- summary
-Write-Host @"
-
-==========================================================
- Done! Next steps
-==========================================================
-1. Make sure the local tunnel public key is added on the server
-   (~$ServerUser/.ssh/authorized_keys):
-     $KeyPath.pub
-
-2. Start the tunnel manually (keeps running in the foreground):
-     ssh -N $TunnelAlias
-
-3. While the tunnel stays connected, Claude / Codex on the server can use:
-     ssh -i ~/.ssh/id_ed25519 -p $ReversePort $LocalUser@127.0.0.1
-   (point -i at the actual private key path of the connect-back key on the server)
-
-   Tip: run server/setup-server.sh on the server to install the
-   my-device ssh alias and the CLAUDE.md agent instructions.
-"@
-if ($autostart) {
-    Write-Host @"
-The tunnel is set to start at logon (Scheduled Task $TaskName). To stop it:
-     Stop-ScheduledTask -TaskName $TaskName
-     Unregister-ScheduledTask -TaskName $TaskName -Confirm:`$false
-"@
-} else {
-    Write-Host 'For start-at-logon, re-run this script and answer yes at the Scheduled Task step.'
-}
 Write-Host ''
-Write-Host "See the 'Removal / rollback' section of README.md for rollback instructions."
+Write-Info "Start the tunnel with: ssh -N $TunnelAlias   (keep it running)"
+Write-Info "Then on the server: ssh my-device 'echo ok' should print ok"
