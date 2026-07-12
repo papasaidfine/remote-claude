@@ -28,6 +28,19 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 
 各菜单项只询问自己需要的信息：隧道配置项询问服务器地址/用户/端口和反向端口（默认 2222）；授权项询问第 2 步打印的服务器侧公钥——可以先做第 2 步再粘贴，也可以先跳过该项之后重跑。脚本本身不会发起任何 SSH 连接，公钥交换全部通过复制粘贴完成。
 
+### 可选：让隧道走 xray（VLESS）代理（macOS）
+
+网络较差 / 受限时，macOS 引导脚本多了一个菜单项（**6) xray client**）：粘贴一个
+`vless://` URL，它会装好 xray 并起一个本地 SOCKS 代理。随后菜单项 4 会询问是否把
+`remote-claude` 隧道走该代理——于是 VSCode Remote-SSH 和 `ssh remote-claude -t
+"claude"` 会自动把 SSH 套进 xray；xray 在连接时按需拉起，无后台常驻服务。
+
+停止按需启动的 xray：
+
+```bash
+pkill -f 'xray run -c .*remote-claude/xray.json'
+```
+
 ## 2. 配置服务器
 
 在远程服务器上（不需要 sudo）：

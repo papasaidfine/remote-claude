@@ -28,6 +28,21 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 
 The menu items ask only for what they need: the tunnel-config item asks for your server's address/user/port and a reverse port (default 2222); the authorize item asks for the server-side public key from step 2 — run step 2 first and paste it, or skip that item and re-run it later. The scripts never SSH anywhere themselves; key exchange is copy-paste.
 
+### Optional: route the tunnel through an xray (VLESS) proxy (macOS)
+
+On a poor / censored network, the macOS bootstrap has an extra menu item
+(**6) xray client**) that takes a `vless://` URL, installs xray, and runs a
+local SOCKS proxy. Then menu item 4 offers to route the `remote-claude` tunnel
+through it, so VSCode Remote-SSH and `ssh remote-claude -t "claude"`
+automatically tunnel SSH through xray — xray is started on demand at connect
+time, with no background service.
+
+Stop the on-demand xray:
+
+```bash
+pkill -f 'xray run -c .*remote-claude/xray.json'
+```
+
 ## 2. Set up the server
 
 On the remote server (no sudo needed):

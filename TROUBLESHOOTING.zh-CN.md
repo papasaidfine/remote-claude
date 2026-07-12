@@ -117,7 +117,17 @@ ssh my-device 'echo ok'             # accept-new 会存下新 key
 
 如果你**没有**预期隧道背后的机器发生变化，先停下来检查反向端口上实际监听的是什么。
 
-## 6. 一切正常但想确认安全性
+## 6. xray 代理：开了 item 4 的代理后连接卡住 / 失败
+
+`ProxyCommand` 会按需拉起 xray 并等待 `127.0.0.1:10808`。开启代理后 SSH 失败时：
+
+- 看日志：`cat ~/.config/remote-claude/xray.log`——`vless://` URL 有误或服务器
+  不可达都会在这里体现。
+- 确认 SOCKS 端口起来了：`nc -z 127.0.0.1 10808 && echo up`。
+- URL 粘错了就重跑引导脚本 item 6，重新生成 `~/.config/remote-claude/xray.json`。
+- 想临时不走 xray：重跑 item 4，代理那问选 **n**。
+
+## 7. 一切正常但想确认安全性
 
 ```bash
 # 服务器上：反向端口应只监听 127.0.0.1

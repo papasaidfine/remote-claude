@@ -117,7 +117,20 @@ ssh my-device 'echo ok'             # accept-new stores the new key
 
 If you did NOT expect the machine behind the tunnel to change, stop and check what is actually listening on the reverse port first.
 
-## 6. Everything works, but you want to verify the security posture
+## 6. xray proxy: connect hangs or fails after enabling item 4's proxy
+
+The `ProxyCommand` starts xray on demand and waits for `127.0.0.1:10808`.
+If SSH fails right after enabling the proxy:
+
+- Check the log: `cat ~/.config/remote-claude/xray.log` — a bad `vless://`
+  URL or an unreachable server shows up here.
+- Confirm the SOCKS port came up: `nc -z 127.0.0.1 10808 && echo up`.
+- Re-run bootstrap item 6 to regenerate `~/.config/remote-claude/xray.json`
+  if you pasted the wrong URL.
+- To bypass xray temporarily, re-run item 4 and answer **n** to the proxy
+  question.
+
+## 7. Everything works, but you want to verify the security posture
 
 ```bash
 # on the server: the reverse port must listen on 127.0.0.1 only
