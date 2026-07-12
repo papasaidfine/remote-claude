@@ -465,6 +465,37 @@ $transport_json
 JSON
 }
 
+xray_bin() { # echo path to an xray binary, or return 1
+  if [[ -x "$XRAY_VENDOR_BIN" ]]; then printf '%s\n' "$XRAY_VENDOR_BIN"; return 0; fi
+  command -v xray 2>/dev/null
+}
+
+install_xray() {
+  if xray_bin >/dev/null; then log "xray already available: $(xray_bin)"; return 0; fi
+  if command -v brew >/dev/null 2>&1; then
+    log "Installing xray via Homebrew"
+    brew install xray || die "brew install xray failed"
+    return 0
+  fi
+  log "Homebrew not found; downloading the xray-core release binary"
+  local asset tmp
+  case "$(uname -m)" in
+    arm64)  asset="Xray-macos-arm64-v8a.zip" ;;
+    x86_64) asset="Xray-macos-64.zip" ;;
+    *) die "Unsupported macOS arch: $(uname -m)" ;;
+  esac
+  mkdir -p "$(dirname "$XRAY_VENDOR_BIN")"
+  tmp="$(mktemp -d)"
+  curl -fsSL "https://github.com/XTLS/Xray-core/releases/latest/download/$asset" -o "$tmp/xray.zip" \
+    || die "Failed to download $asset"
+  unzip -o "$tmp/xray.zip" xray -d "$(dirname "$XRAY_VENDOR_BIN")" >/dev/null \
+    || die "Failed to unzip xray"
+  chmod +x "$XRAY_VENDOR_BIN"
+  xattr -dr com.apple.quarantine "$XRAY_VENDOR_BIN" 2>/dev/null || true
+  rm -rf "$tmp"
+  log "xray installed to $XRAY_VENDOR_BIN"
+}
+
 # ---------------------------------------------------------------- status checks
 status_sshd() {
   # systemsetup/launchctl need sudo, too heavy for drawing a menu — probe the port
@@ -475,6 +506,7 @@ status_sshd() {
 status_key()       { [[ -f "$KEY_PATH" ]]; }
 status_authorize() { grep -qF 'from="127.0.0.1,::1"' "$AUTH_KEYS" 2>/dev/null; }
 status_config()    { grep -qF "$BEGIN_MARK" "$SSH_CONFIG" 2>/dev/null; }
+status_xray()      { [[ -f "$XRAY_JSON" && -f "$XRAY_LAUNCHER" ]] && xray_bin >/dev/null 2>&1; }
 
 # ---------------------------------------------------------------- menu
 mark() { if "$1"; then printf '[done]'; else printf '[ -  ]'; fi; }
