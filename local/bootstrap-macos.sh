@@ -574,11 +574,14 @@ mark() { if "$1"; then printf '[done]'; else printf '[ -  ]'; fi; }
 draw_menu() {
   echo
   echo "----------------------------------------------------------"
+  local cfg_label='Tunnel config (Host remote-claude)'
+  config_proxy_on && cfg_label='Tunnel config (Host remote-claude) [xray]'
   printf '  1) %-50s %s\n' 'Incoming SSH — Remote Login + harden  [sudo]' "$(mark status_sshd)"
   printf '  2) %-50s %s\n' 'Local SSH key (~/.ssh/id_ed25519)' "$(mark status_key)"
   printf '  3) %-50s %s\n' "Authorize the server's connect-back key" "$(mark status_authorize)"
-  printf '  4) %-50s %s\n' 'Tunnel config (Host remote-claude)' "$(mark status_config)"
+  printf '  4) %-50s %s\n' "$cfg_label" "$(mark status_config)"
   printf '  5) %s\n' 'Show local public key (paste into server setup)'
+  printf '  6) %-50s %s\n' 'xray client (paste vless:// URL)' "$(mark status_xray)"
   echo   '  q) Quit'
 }
 
