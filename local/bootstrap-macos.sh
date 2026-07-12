@@ -323,6 +323,148 @@ run_show_key() { # item 5: print the local public key for the server-side handof
   echo
 }
 
+# ---------------------------------------------------------------- xray / VLESS
+urldecode() { # urldecode <string>
+  local s="${1//+/ }"
+  printf '%b' "${s//%/\\x}"
+}
+
+vless_url_to_json() { # vless_url_to_json <vless://...>  -> JSON on stdout
+  local url="$1"
+  case "$url" in vless://*) ;; *) err "Not a vless:// URL"; return 1 ;; esac
+  local rest="${url#vless://}"
+  rest="${rest%%#*}"                       # drop #fragment
+  local uuid="${rest%%@*}"
+  local after="${rest#*@}"                  # host:port[?query]
+  local hostport="${after%%\?*}"
+  local query=""
+  [[ "$after" == *\?* ]] && query="${after#*\?}"
+  local host="${hostport%%:*}"
+  local port="${hostport##*:}"
+  [[ -n "$uuid" && -n "$host" && -n "$port" ]] \
+    || { err "Malformed vless:// URL (need uuid@host:port)"; return 1; }
+
+  local type=tcp security=none flow="" sni="" fp="" pbk="" sid="" alpn="" path="" hosthdr="" servicename=""
+  local -a pairs=()
+  [[ -n "$query" ]] && IFS='&' read -ra pairs <<< "$query"
+  if [[ ${#pairs[@]} -gt 0 ]]; then
+    local pair k v
+    for pair in "${pairs[@]}"; do
+      k="${pair%%=*}"; v="${pair#*=}"; v="$(urldecode "$v")"
+      case "$k" in
+        type|network) type="$v" ;;
+        security)     security="$v" ;;
+        flow)         flow="$v" ;;
+        sni)          sni="$v" ;;
+        fp)           fp="$v" ;;
+        pbk)          pbk="$v" ;;
+        sid)          sid="$v" ;;
+        alpn)         alpn="$v" ;;
+        path)         path="$v" ;;
+        host)         hosthdr="$v" ;;
+        serviceName)  servicename="$v" ;;
+      esac
+    done
+  fi
+
+  [[ -z "$security" ]] && security=none
+  case "$security" in reality|tls|none) ;; *) err "Unsupported security='$security' (supported: reality, tls, none)"; return 1 ;; esac
+  case "$type" in tcp|ws|grpc) ;; *) err "Unsupported network type='$type' (supported: tcp, ws, grpc)"; return 1 ;; esac
+
+  local security_json="" transport_json=""
+  case "$security" in
+    reality)
+      [[ -n "$pbk" ]] || { err "reality requires pbk (publicKey) in the URL"; return 1; }
+      security_json=$(cat <<JSON
+        "security": "reality",
+        "realitySettings": {
+          "serverName": "$sni",
+          "fingerprint": "${fp:-chrome}",
+          "publicKey": "$pbk",
+          "shortId": "$sid",
+          "spiderX": ""
+        },
+JSON
+) ;;
+    tls)
+      local alpn_json="[]"
+      [[ -n "$alpn" ]] && alpn_json="[\"${alpn//,/\",\"}\"]"
+      security_json=$(cat <<JSON
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "$sni",
+          "fingerprint": "${fp:-chrome}",
+          "alpn": $alpn_json
+        },
+JSON
+) ;;
+    none)
+      security_json='        "security": "none",' ;;
+  esac
+
+  case "$type" in
+    ws)
+      transport_json=$(cat <<JSON
+        "wsSettings": {
+          "path": "${path:-/}",
+          "headers": { "Host": "$hosthdr" }
+        }
+JSON
+) ;;
+    grpc)
+      transport_json=$(cat <<JSON
+        "grpcSettings": {
+          "serviceName": "$servicename"
+        }
+JSON
+) ;;
+    tcp)
+      transport_json='        "tcpSettings": {}' ;;
+  esac
+
+  local flow_json=""
+  [[ -n "$flow" ]] && flow_json=",
+                \"flow\": \"$flow\""
+
+  cat <<JSON
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    {
+      "listen": "127.0.0.1",
+      "port": $SOCKS_PORT,
+      "protocol": "socks",
+      "settings": { "udp": true }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "$host",
+            "port": $port,
+            "users": [
+              {
+                "id": "$uuid",
+                "encryption": "none"$flow_json
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "$type",
+$security_json
+$transport_json
+      }
+    }
+  ]
+}
+JSON
+}
+
 # ---------------------------------------------------------------- status checks
 status_sshd() {
   # systemsetup/launchctl need sudo, too heavy for drawing a menu — probe the port
