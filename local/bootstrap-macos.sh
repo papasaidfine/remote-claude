@@ -125,25 +125,25 @@ add_authorized_key() {
   log "Written to authorized_keys (restricted to loopback logins only)"
 }
 
-write_ssh_config_block() { # <host> <user> <port> <reverse_port>
-  local SERVER_HOST="$1" SERVER_USER="$2" SERVER_PORT="$3" REVERSE_PORT="$4"
+write_ssh_config_block() { # <host> <user> <port> <reverse_port> [use_proxy 0|1]
+  local SERVER_HOST="$1" SERVER_USER="$2" SERVER_PORT="$3" REVERSE_PORT="$4" USE_PROXY="${5:-0}"
   local block tmp
-  block="$(cat <<EOF
-$BEGIN_MARK
-Host $TUNNEL_ALIAS
-    HostName $SERVER_HOST
-    User $SERVER_USER
-    Port $SERVER_PORT
-    IdentityFile ~/.ssh/$KEY_NAME
-    IdentitiesOnly yes
-    RemoteForward 127.0.0.1:$REVERSE_PORT 127.0.0.1:22
-    ExitOnForwardFailure yes
-    ServerAliveInterval 30
-    ServerAliveCountMax 3
-    ForwardAgent no
-$END_MARK
-EOF
-)"
+  block=$(
+    printf '%s\n' "$BEGIN_MARK"
+    printf 'Host %s\n' "$TUNNEL_ALIAS"
+    printf '    HostName %s\n' "$SERVER_HOST"
+    printf '    User %s\n' "$SERVER_USER"
+    printf '    Port %s\n' "$SERVER_PORT"
+    printf '    IdentityFile ~/.ssh/%s\n' "$KEY_NAME"
+    printf '    IdentitiesOnly yes\n'
+    [[ "$USE_PROXY" == "1" ]] && printf '    ProxyCommand %s %%h %%p\n' "$XRAY_LAUNCHER"
+    printf '    RemoteForward 127.0.0.1:%s 127.0.0.1:22\n' "$REVERSE_PORT"
+    printf '    ExitOnForwardFailure yes\n'
+    printf '    ServerAliveInterval 30\n'
+    printf '    ServerAliveCountMax 3\n'
+    printf '    ForwardAgent no\n'
+    printf '%s\n' "$END_MARK"
+  )
   touch "$SSH_CONFIG"
   chmod 600 "$SSH_CONFIG"
 
@@ -296,7 +296,7 @@ run_authorize() { # item 3: authorize the server's connect-back key
 
 run_config() { # item 4: Host remote-claude block
   ensure_ssh_dir
-  local server_host server_user server_port reverse_port
+  local server_host server_user server_port reverse_port use_proxy=0
   server_host="${SERVER_HOST:-$(ask 'Remote server hostname / IP')}"
   [[ -n "$server_host" ]] || die "Server hostname must not be empty"
   server_user="${SERVER_USER:-$(ask 'Remote server SSH user')}"
@@ -305,7 +305,14 @@ run_config() { # item 4: Host remote-claude block
   [[ "$server_port" =~ ^[0-9]+$ ]] || die "SSH port must be a number"
   reverse_port="${REVERSE_PORT:-$(ask 'Reverse SSH port on the server (used by Claude/Codex to connect back)' '2222')}"
   [[ "$reverse_port" =~ ^[0-9]+$ ]] || die "Reverse port must be a number"
-  write_ssh_config_block "$server_host" "$server_user" "$server_port" "$reverse_port"
+  if status_xray; then
+    if [[ -n "${USE_XRAY_PROXY:-}" ]]; then
+      [[ "$USE_XRAY_PROXY" == "1" ]] && use_proxy=1
+    elif ask_yn "Route this tunnel through the local xray proxy" "Y"; then
+      use_proxy=1
+    fi
+  fi
+  write_ssh_config_block "$server_host" "$server_user" "$server_port" "$reverse_port" "$use_proxy"
 }
 
 run_show_key() { # item 5: print the local public key for the server-side handoff
@@ -559,6 +566,7 @@ status_key()       { [[ -f "$KEY_PATH" ]]; }
 status_authorize() { grep -qF 'from="127.0.0.1,::1"' "$AUTH_KEYS" 2>/dev/null; }
 status_config()    { grep -qF "$BEGIN_MARK" "$SSH_CONFIG" 2>/dev/null; }
 status_xray()      { [[ -f "$XRAY_JSON" && -f "$XRAY_LAUNCHER" ]] && xray_bin >/dev/null 2>&1; }
+config_proxy_on()  { grep -qF "ProxyCommand $XRAY_LAUNCHER" "$SSH_CONFIG" 2>/dev/null; }
 
 # ---------------------------------------------------------------- menu
 mark() { if "$1"; then printf '[done]'; else printf '[ -  ]'; fi; }
