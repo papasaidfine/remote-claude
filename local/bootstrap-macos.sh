@@ -40,6 +40,14 @@ SSHD_DROPIN_DIR="/etc/ssh/sshd_config.d"
 SSHD_DROPIN="$SSHD_DROPIN_DIR/100-remote-claude.conf"
 TS="$(date +%Y%m%d-%H%M%S)"
 
+# xray / VLESS client (item 6)
+RC_CONFIG_DIR="$HOME/.config/remote-claude"
+XRAY_JSON="$RC_CONFIG_DIR/xray.json"
+XRAY_LAUNCHER="$RC_CONFIG_DIR/xray-proxy.sh"
+XRAY_VENDOR_BIN="$RC_CONFIG_DIR/bin/xray"
+XRAY_LOG="$RC_CONFIG_DIR/xray.log"
+SOCKS_PORT=10808
+
 BEGIN_MARK="# >>> ${TUNNEL_ALIAS} (managed by reverse-ssh-bootstrap) >>>"
 END_MARK="# <<< ${TUNNEL_ALIAS} <<<"
 
@@ -73,6 +81,7 @@ ask_yn() { # ask_yn <prompt> <Y|N>  -> exit status 0 = yes
 }
 
 # ---------------------------------------------------------------- platform
+if [[ -z "${RC_SOURCED_FOR_TEST:-}" ]]; then
 [[ "$(uname -s)" == "Darwin" ]] || die "This script is for macOS. On Windows, run bootstrap-windows.ps1 in an elevated PowerShell."
 
 cat <<'EOF'
@@ -86,6 +95,7 @@ and shows whether it is already configured. Files this can modify:
   - ~/.ssh/{config,authorized_keys,id_ed25519}
 All modified system files are backed up first (*.claude-bak-<timestamp>).
 EOF
+fi
 
 # ---------------------------------------------------------------- shared prep
 ensure_ssh_dir() {
@@ -347,15 +357,17 @@ run_item() { # run_item <run-function>; failures return to the menu
   fi
 }
 
+if [[ -z "${RC_SOURCED_FOR_TEST:-}" ]]; then
 while true; do
   draw_menu
-  read -r -p "Select [1-5, q]: " choice || break
+  read -r -p "Select [1-6, q]: " choice || break
   case "$choice" in
     1) run_item run_sshd ;;
     2) run_item run_key ;;
     3) run_item run_authorize ;;
     4) run_item run_config ;;
     5) run_item run_show_key ;;
+    6) run_item run_xray ;;
     q|Q) break ;;
     *) warn "Unknown selection: $choice" ;;
   esac
@@ -364,3 +376,4 @@ done
 echo
 log "Start the tunnel with: ssh -N $TUNNEL_ALIAS   (keep it running)"
 log "Then on the server: ssh my-device 'echo ok' should print ok"
+fi
