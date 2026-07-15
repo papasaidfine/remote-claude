@@ -178,6 +178,14 @@ write_ssh_config_block() { # <host> <user> <port> <reverse_port> [use_proxy 0|1]
   log "Wrote Host $TUNNEL_ALIAS to ~/.ssh/config"
 }
 
+config_block_value() { # config_block_value <Key> -> that key's value inside the managed block
+  awk -v begin="$BEGIN_MARK" -v end="$END_MARK" -v key="$1" '
+    $0 == begin { inblk = 1; next }
+    $0 == end   { inblk = 0 }
+    inblk && $1 == key { print $2; exit }
+  ' "$SSH_CONFIG" 2>/dev/null
+}
+
 # ---------------------------------------------------------------- sshd helpers
 enable_remote_login() {
   local status
