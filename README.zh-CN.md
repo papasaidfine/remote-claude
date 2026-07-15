@@ -28,7 +28,7 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 
 各菜单项只询问自己需要的信息：隧道配置项询问服务器地址/用户/端口和反向端口（默认 2222）；授权项询问第 2 步打印的服务器侧公钥——可以先做第 2 步再粘贴，也可以先跳过该项之后重跑。脚本本身不会发起任何 SSH 连接，公钥交换全部通过复制粘贴完成。
 
-### 可选：让隧道走 xray（VLESS）代理（macOS）
+### 可选：让隧道走 xray（VLESS）代理
 
 网络较差 / 受限时，macOS 引导脚本多了一个菜单项（**6) xray client**）：粘贴一个
 `vless://` URL，它会装好 xray 并起一个本地 SOCKS 代理。随后菜单项 4 会询问是否把
@@ -38,7 +38,12 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 如果隧道配置（菜单项 4）已经写好、xray 是后来才加的：用菜单项 **7** 一键开/关
 代理——它复用 config block 里已有的服务器信息，无需重新输入。
 
-停止按需启动的 xray：
+Windows 上 `bootstrap-windows.ps1` 也有同样的第 6、7 项。但模型与 macOS 不同：
+不是共享一个按需常驻的 xray，而是**每条 ssh 连接启动一个自己的 xray，连接一断
+内核立刻把它杀掉**（kill-on-close Job Object）——不用启、不用停、不留进程。
+每条连接的日志在 `%TEMP%\rc-xray-*.log`。
+
+停止按需启动的 xray（仅 macOS 需要；Windows 会自行清理）：
 
 ```bash
 pkill -f 'xray run -c .*remote-claude/xray.json'

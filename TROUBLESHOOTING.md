@@ -117,10 +117,10 @@ ssh my-device 'echo ok'             # accept-new stores the new key
 
 If you did NOT expect the machine behind the tunnel to change, stop and check what is actually listening on the reverse port first.
 
-## 6. xray proxy: connect hangs or fails after enabling item 4's proxy
+## 6. xray proxy: connect hangs or fails after enabling the proxy
 
-The `ProxyCommand` starts xray on demand and waits for `127.0.0.1:10808`.
-If SSH fails right after enabling the proxy:
+On macOS the `ProxyCommand` starts xray on demand and waits for
+`127.0.0.1:10808`. If SSH fails right after enabling the proxy:
 
 - Check the log: `cat ~/.config/remote-claude/xray.log` — a bad `vless://`
   URL or an unreachable server shows up here.
@@ -129,6 +129,16 @@ If SSH fails right after enabling the proxy:
   if you pasted the wrong URL.
 - To bypass xray temporarily, run bootstrap item 7 to toggle the proxy off
   (run it again to re-enable).
+
+On Windows (per-connection model — each ssh connection runs its own xray):
+
+- Check the newest `%TEMP%\rc-xray-*.log` — a bad `vless://` URL or an
+  unreachable server shows up there (the log is kept when startup fails).
+- Acceptance check: connect, `xray.exe` appears in Task Manager; disconnect,
+  it disappears within a second or two. Two concurrent connections run two
+  independent `xray.exe` processes.
+- If `xray.exe` is missing, re-run bootstrap item 6.
+- Item 7 toggles the proxy off/on, same as on macOS.
 
 ## 7. Everything works, but you want to verify the security posture
 

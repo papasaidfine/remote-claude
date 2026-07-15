@@ -117,15 +117,25 @@ ssh my-device 'echo ok'             # accept-new 会存下新 key
 
 如果你**没有**预期隧道背后的机器发生变化，先停下来检查反向端口上实际监听的是什么。
 
-## 6. xray 代理：开了 item 4 的代理后连接卡住 / 失败
+## 6. xray 代理：开启代理后连接卡住 / 失败
 
-`ProxyCommand` 会按需拉起 xray 并等待 `127.0.0.1:10808`。开启代理后 SSH 失败时：
+macOS 上 `ProxyCommand` 会按需拉起 xray 并等待 `127.0.0.1:10808`。开启代理后
+SSH 失败时：
 
 - 看日志：`cat ~/.config/remote-claude/xray.log`——`vless://` URL 有误或服务器
   不可达都会在这里体现。
 - 确认 SOCKS 端口起来了：`nc -z 127.0.0.1 10808 && echo up`。
 - URL 粘错了就重跑引导脚本 item 6，重新生成 `~/.config/remote-claude/xray.json`。
 - 想临时不走 xray：跑 item 7 把代理关掉（再跑一次重新打开）。
+
+Windows（每连接一实例模型——每条 ssh 连接跑一个自己的 xray）：
+
+- 看最新的 `%TEMP%\rc-xray-*.log`——`vless://` URL 有误或服务器不可达都会在这里
+  体现（启动失败时日志会保留）。
+- 验收方法：连接后任务管理器里应出现 `xray.exe`，断开后一两秒内消失；两条并发
+  连接会各有一个独立的 `xray.exe`。
+- 找不到 `xray.exe` 就重跑引导脚本 item 6。
+- item 7 同样用于开/关代理，和 macOS 一致。
 
 ## 7. 一切正常但想确认安全性
 
