@@ -41,4 +41,15 @@ check 'parse: Port'          "x$(config_block_value Port)x"          'x22x'
 check 'parse: RemoteForward' "x$(config_block_value RemoteForward)x" 'x127.0.0.1:2222x'
 check 'parse: missing key is empty' "x$(config_block_value ProxyCommand)x" 'xx'
 
+# force=1 skips the "update it?" confirmation: the 'n' on stdin must NOT be
+# consumed as an answer, so the rewrite happens anyway.
+write_ssh_config_block '198.51.100.9' 'carol' '2200' '2345' 0 1 >/dev/null <<< 'n'
+cfg="$(cat "$SSH_CONFIG")"
+check 'force: block rewritten despite n on stdin' "$cfg" 'HostName 198.51.100.9'
+check 'force: reverse port updated' "$cfg" 'RemoteForward 127.0.0.1:2345 127.0.0.1:22'
+check 'force: unmanaged content kept' "$cfg" 'Host other'
+[[ "$(grep -cF "$BEGIN_MARK" "$SSH_CONFIG")" == 1 ]] \
+  && printf 'ok   - force: single managed block\n' \
+  || { printf 'FAIL - force: managed block duplicated\n'; fail=1; }
+
 exit $fail

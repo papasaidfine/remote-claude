@@ -125,8 +125,8 @@ add_authorized_key() {
   log "Written to authorized_keys (restricted to loopback logins only)"
 }
 
-write_ssh_config_block() { # <host> <user> <port> <reverse_port> [use_proxy 0|1]
-  local SERVER_HOST="$1" SERVER_USER="$2" SERVER_PORT="$3" REVERSE_PORT="$4" USE_PROXY="${5:-0}"
+write_ssh_config_block() { # <host> <user> <port> <reverse_port> [use_proxy 0|1] [force 0|1]
+  local SERVER_HOST="$1" SERVER_USER="$2" SERVER_PORT="$3" REVERSE_PORT="$4" USE_PROXY="${5:-0}" FORCE="${6:-0}"
   local block tmp
   block=$(
     printf '%s\n' "$BEGIN_MARK"
@@ -148,7 +148,7 @@ write_ssh_config_block() { # <host> <user> <port> <reverse_port> [use_proxy 0|1]
   chmod 600 "$SSH_CONFIG"
 
   if grep -qF "$BEGIN_MARK" "$SSH_CONFIG"; then
-    if ! ask_yn "~/.ssh/config already contains a $TUNNEL_ALIAS block, update it" "Y"; then
+    if [[ "$FORCE" != "1" ]] && ! ask_yn "~/.ssh/config already contains a $TUNNEL_ALIAS block, update it" "Y"; then
       warn "Keeping the existing block, skipping the write"
       return 0
     fi
