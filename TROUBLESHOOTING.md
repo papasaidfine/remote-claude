@@ -127,8 +127,8 @@ If SSH fails right after enabling the proxy:
 - Confirm the SOCKS port came up: `nc -z 127.0.0.1 10808 && echo up`.
 - Re-run bootstrap item 6 to regenerate `~/.config/remote-claude/xray.json`
   if you pasted the wrong URL.
-- To bypass xray temporarily, re-run item 4 and answer **n** to the proxy
-  question.
+- To bypass xray temporarily, run bootstrap item 7 to toggle the proxy off
+  (run it again to re-enable).
 
 ## 7. Everything works, but you want to verify the security posture
 

@@ -125,7 +125,7 @@ ssh my-device 'echo ok'             # accept-new 会存下新 key
   不可达都会在这里体现。
 - 确认 SOCKS 端口起来了：`nc -z 127.0.0.1 10808 && echo up`。
 - URL 粘错了就重跑引导脚本 item 6，重新生成 `~/.config/remote-claude/xray.json`。
-- 想临时不走 xray：重跑 item 4，代理那问选 **n**。
+- 想临时不走 xray：跑 item 7 把代理关掉（再跑一次重新打开）。
 
 ## 7. 一切正常但想确认安全性
 

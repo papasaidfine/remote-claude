@@ -37,6 +37,10 @@ through it, so VSCode Remote-SSH and `ssh remote-claude -t "claude"`
 automatically tunnel SSH through xray — xray is started on demand at connect
 time, with no background service.
 
+Added xray after the tunnel config was already written? Menu item **7** toggles
+the proxy on/off in place — it reuses the server details stored in the config
+block, so nothing needs to be retyped.
+
 Stop the on-demand xray:
 
 ```bash

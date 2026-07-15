@@ -35,6 +35,9 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 `remote-claude` 隧道走该代理——于是 VSCode Remote-SSH 和 `ssh remote-claude -t
 "claude"` 会自动把 SSH 套进 xray；xray 在连接时按需拉起，无后台常驻服务。
 
+如果隧道配置（菜单项 4）已经写好、xray 是后来才加的：用菜单项 **7** 一键开/关
+代理——它复用 config block 里已有的服务器信息，无需重新输入。
+
 停止按需启动的 xray：
 
 ```bash
