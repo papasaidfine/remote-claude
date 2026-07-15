@@ -101,5 +101,21 @@ $raw = Get-Content -Raw $SshConfig
 Check 'proxy: ProxyCommand line present' ($raw.Contains("-File `"$XrayLauncher`" %h %p"))
 Check 'proxy: after IdentitiesOnly' ($raw.IndexOf('IdentitiesOnly yes') -lt $raw.IndexOf('ProxyCommand'))
 
+# --- Write-XrayLauncher -------------------------------------------------------
+Write-XrayLauncher
+Check 'launcher written' (Test-Path $XrayLauncher)
+$launchErrors = $null
+[System.Management.Automation.Language.Parser]::ParseFile($XrayLauncher, [ref]$null, [ref]$launchErrors) | Out-Null
+Check 'launcher parses without errors' ($launchErrors.Count -eq 0)
+$launcherSrc = Get-Content -Raw $XrayLauncher
+Check 'launcher: kill-on-close job'     ($launcherSrc.Contains('0x2000'))
+Check 'launcher: replaces placeholders' ($launcherSrc.Contains('"__DOKO_PORT__"') -and $launcherSrc.Contains('__DEST_HOST__'))
+
+# --- Test-StatusXray ----------------------------------------------------------
+Check 'status: xray not ready yet' (-not (Test-StatusXray))
+New-Item -ItemType Directory -Force -Path (Split-Path $XrayVendorBin) | Out-Null
+New-Item -ItemType File -Force -Path $XrayJson, $XrayVendorBin | Out-Null
+Check 'status: xray ready with all artifacts' (Test-StatusXray)
+
 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 exit $script:fail
