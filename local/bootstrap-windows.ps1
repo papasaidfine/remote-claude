@@ -126,12 +126,13 @@ function Set-SshdDirective {
 }
 
 # ---------------------------------------------------------------- platform
-if ($env:OS -ne 'Windows_NT') {
-    Write-Err 'This script is for Windows. On macOS, run ./bootstrap-macos.sh instead.'
-    exit 1
-}
+if (-not $env:RC_SOURCED_FOR_TEST) {
+    if ($env:OS -ne 'Windows_NT') {
+        Write-Err 'This script is for Windows. On macOS, run ./bootstrap-macos.sh instead.'
+        exit 1
+    }
 
-Write-Host @'
+    Write-Host @'
 ==========================================================
  Reverse SSH bootstrap (Windows)
  local PC  ->  remote server  ->  (reverse tunnel)  -> local PC
@@ -142,6 +143,7 @@ and shows whether it is already configured. Files this can modify:
   - %USERPROFILE%\.ssh\{config,authorized_keys,id_ed25519}
 All modified system files are backed up first (*.claude-bak-<timestamp>).
 '@
+}
 
 # ---------------------------------------------------------------- menu items
 function Invoke-ItemSshd {   # item 1: OpenSSH Server install + harden (admin)
@@ -394,27 +396,29 @@ function Show-Menu {
     Write-Host  '  q) Quit'
 }
 
-:menu while ($true) {
-    Show-Menu
-    $choice = (Read-Host 'Select [1-5, q]').Trim()
-    if ($choice -match '^[Qq]$') { break menu }
-    $fn = switch ($choice) {
-        '1' { 'Invoke-ItemSshd' }
-        '2' { 'Invoke-ItemKey' }
-        '3' { 'Invoke-ItemAuthorize' }
-        '4' { 'Invoke-ItemConfig' }
-        '5' { 'Invoke-ItemShowKey' }
-        default { $null }
+if (-not $env:RC_SOURCED_FOR_TEST) {
+    :menu while ($true) {
+        Show-Menu
+        $choice = (Read-Host 'Select [1-5, q]').Trim()
+        if ($choice -match '^[Qq]$') { break menu }
+        $fn = switch ($choice) {
+            '1' { 'Invoke-ItemSshd' }
+            '2' { 'Invoke-ItemKey' }
+            '3' { 'Invoke-ItemAuthorize' }
+            '4' { 'Invoke-ItemConfig' }
+            '5' { 'Invoke-ItemShowKey' }
+            default { $null }
+        }
+        if (-not $fn) { Write-Warn "Unknown selection: $choice"; continue }
+        Write-Host ''
+        try { & $fn }
+        catch {
+            Write-Err "Item did not complete: $_"
+            Write-Err 'Other items are unaffected.'
+        }
     }
-    if (-not $fn) { Write-Warn "Unknown selection: $choice"; continue }
-    Write-Host ''
-    try { & $fn }
-    catch {
-        Write-Err "Item did not complete: $_"
-        Write-Err 'Other items are unaffected.'
-    }
-}
 
-Write-Host ''
-Write-Info "Start the tunnel with: ssh -N $TunnelAlias   (keep it running)"
-Write-Info "Then on the server: ssh my-device 'echo ok' should print ok"
+    Write-Host ''
+    Write-Info "Start the tunnel with: ssh -N $TunnelAlias   (keep it running)"
+    Write-Info "Then on the server: ssh my-device 'echo ok' should print ok"
+}
