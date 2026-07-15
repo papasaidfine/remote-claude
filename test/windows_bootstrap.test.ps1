@@ -75,5 +75,31 @@ $threw = $false
 try { ConvertTo-VlessJson 'https://not-vless' | Out-Null } catch { $threw = $true }
 Check 'non-vless url throws' $threw
 
+# --- Write-SshConfigBlock / Get-ConfigBlockValue ------------------------------
+New-Item -ItemType Directory -Force -Path $SshDir | Out-Null
+[System.IO.File]::WriteAllText($SshConfig, "Host other`r`n    User bob`r`n")
+Write-SshConfigBlock -SrvHost '203.0.113.7' -SrvUser 'ubuntu' -SrvPort 22 -RevPort 2222
+
+Check 'parse: HostName'      ((Get-ConfigBlockValue 'HostName') -eq '203.0.113.7')
+Check 'parse: User'          ((Get-ConfigBlockValue 'User') -eq 'ubuntu')
+Check 'parse: Port'          ((Get-ConfigBlockValue 'Port') -eq '22')
+Check 'parse: RemoteForward' ((Get-ConfigBlockValue 'RemoteForward') -eq '127.0.0.1:2222')
+Check 'parse: missing key'   ((Get-ConfigBlockValue 'ProxyCommand') -eq '')
+
+# Any prompt from here on is a bug: -Force must never ask
+function Read-YesNo { throw 'unexpected Read-YesNo prompt' }
+Write-SshConfigBlock -SrvHost '198.51.100.9' -SrvUser 'carol' -SrvPort 2200 -RevPort 2345 -Force
+$raw = Get-Content -Raw $SshConfig
+Check 'force: rewritten without prompting' ($raw.Contains('HostName 198.51.100.9'))
+Check 'force: reverse port updated' ($raw.Contains('RemoteForward 127.0.0.1:2345 127.0.0.1:22'))
+Check 'force: unmanaged content kept' ($raw.Contains('Host other'))
+Check 'force: single managed block' (([regex]::Matches($raw, [regex]::Escape($BeginMark))).Count -eq 1)
+
+# -UseProxy injects the launcher ProxyCommand line
+Write-SshConfigBlock -SrvHost '203.0.113.7' -SrvUser 'ubuntu' -SrvPort 22 -RevPort 2222 -UseProxy -Force
+$raw = Get-Content -Raw $SshConfig
+Check 'proxy: ProxyCommand line present' ($raw.Contains("-File `"$XrayLauncher`" %h %p"))
+Check 'proxy: after IdentitiesOnly' ($raw.IndexOf('IdentitiesOnly yes') -lt $raw.IndexOf('ProxyCommand'))
+
 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 exit $script:fail

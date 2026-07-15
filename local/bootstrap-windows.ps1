@@ -392,6 +392,83 @@ function Invoke-ItemAuthorize {  # item 3: authorize the server's connect-back k
     }
 }
 
+# Write (or rewrite) the managed Host block. -UseProxy adds the xray
+# ProxyCommand line; -Force skips the "update it?" confirmation (used by the
+# item-7 toggle, which has already collected its answer).
+function Write-SshConfigBlock {
+    param(
+        [string]$SrvHost, [string]$SrvUser, [int]$SrvPort, [int]$RevPort,
+        [switch]$UseProxy, [switch]$Force
+    )
+    $lines = @(
+        $BeginMark
+        "Host $TunnelAlias"
+        "    HostName $SrvHost"
+        "    User $SrvUser"
+        "    Port $SrvPort"
+        "    IdentityFile ~/.ssh/$KeyName"
+        "    IdentitiesOnly yes"
+    )
+    if ($UseProxy) {
+        $lines += "    ProxyCommand powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$XrayLauncher`" %h %p"
+    }
+    $lines += @(
+        "    RemoteForward 127.0.0.1:$RevPort 127.0.0.1:22"
+        "    ExitOnForwardFailure yes"
+        "    ServerAliveInterval 30"
+        "    ServerAliveCountMax 3"
+        "    ForwardAgent no"
+        $EndMark
+    )
+    $configBlock = $lines -join "`r`n"
+
+    if (-not (Test-Path $SshConfig)) { New-Item -ItemType File -Path $SshConfig | Out-Null }
+    $configRaw = Get-Content -Raw $SshConfig -ErrorAction SilentlyContinue
+    if ($null -eq $configRaw) { $configRaw = '' }
+
+    if ($configRaw.Contains($BeginMark)) {
+        if (-not $Force) {
+            if (-not (Read-YesNo "~\.ssh\config already contains a $TunnelAlias block, update it" $true)) {
+                Write-Warn 'Keeping the existing block, skipping the write'
+                return
+            }
+        }
+        Copy-Item $SshConfig "$SshConfig.claude-bak-$Ts"
+        Write-Info "Backed up ssh config -> $SshConfig.claude-bak-$Ts"
+        $escBegin = [regex]::Escape($BeginMark)
+        $escEnd   = [regex]::Escape($EndMark)
+        $configRaw = [regex]::Replace($configRaw, "(?s)$escBegin.*?$escEnd(\r?\n)?", '')
+    } else {
+        if ($configRaw -match "(?m)^\s*Host\s+.*\b$TunnelAlias\b") {
+            Write-Warn "~\.ssh\config contains a 'Host $TunnelAlias' block that is not managed by this tool."
+            Write-Warn 'ssh uses first-match-wins, so the earlier block would override what this tool writes.'
+            if (-not (Read-YesNo 'Write the block anyway (cleaning up the old block manually is recommended)' $false)) {
+                throw "Aborted. Please remove the old Host $TunnelAlias block and re-run"
+            }
+        }
+        Copy-Item $SshConfig "$SshConfig.claude-bak-$Ts"
+        Write-Info "Backed up ssh config -> $SshConfig.claude-bak-$Ts"
+    }
+
+    $configRaw = $configRaw.TrimEnd()
+    if ($configRaw) { $configRaw += "`r`n`r`n" }
+    $configRaw += $configBlock + "`r`n"
+    [System.IO.File]::WriteAllText($SshConfig, $configRaw)
+    Write-Info "Wrote Host $TunnelAlias to $SshConfig"
+    Set-StrictAcl -Path $SshConfig
+}
+
+function Get-ConfigBlockValue { # Get-ConfigBlockValue <Key> -> value inside the managed block
+    param([string]$Key)
+    $raw = Get-Content -Raw $SshConfig -ErrorAction SilentlyContinue
+    if (-not $raw) { return '' }
+    $m = [regex]::Match($raw, "(?s)$([regex]::Escape($BeginMark))(.*?)$([regex]::Escape($EndMark))")
+    if (-not $m.Success) { return '' }
+    $mm = [regex]::Match($m.Groups[1].Value, "(?m)^[ \t]+$([regex]::Escape($Key))[ \t]+(\S+)")
+    if ($mm.Success) { return $mm.Groups[1].Value }
+    return ''
+}
+
 function Invoke-ItemConfig {     # item 4: Host remote-claude block
     Initialize-SshDir
     $srvHost = $ServerHost
@@ -405,58 +482,7 @@ function Invoke-ItemConfig {     # item 4: Host remote-claude block
     $revPort = $ReversePort
     if ($revPort -le 0) { $revPort = [int](Read-Default 'Reverse SSH port on the server (used by Claude/Codex to connect back)' '2222') }
 
-    $configBlock = @"
-$BeginMark
-Host $TunnelAlias
-    HostName $srvHost
-    User $srvUser
-    Port $srvPort
-    IdentityFile ~/.ssh/$KeyName
-    IdentitiesOnly yes
-    RemoteForward 127.0.0.1:$revPort 127.0.0.1:22
-    ExitOnForwardFailure yes
-    ServerAliveInterval 30
-    ServerAliveCountMax 3
-    ForwardAgent no
-$EndMark
-"@
-
-    if (-not (Test-Path $SshConfig)) { New-Item -ItemType File -Path $SshConfig | Out-Null }
-    $configRaw = Get-Content -Raw $SshConfig -ErrorAction SilentlyContinue
-    if ($null -eq $configRaw) { $configRaw = '' }
-
-    $writeBlock = $true
-    if ($configRaw.Contains($BeginMark)) {
-        if (Read-YesNo "~\.ssh\config already contains a $TunnelAlias block, update it" $true) {
-            Copy-Item $SshConfig "$SshConfig.claude-bak-$Ts"
-            Write-Info "Backed up ssh config -> $SshConfig.claude-bak-$Ts"
-            $escBegin = [regex]::Escape($BeginMark)
-            $escEnd   = [regex]::Escape($EndMark)
-            $configRaw = [regex]::Replace($configRaw, "(?s)$escBegin.*?$escEnd(\r?\n)?", '')
-        } else {
-            Write-Warn 'Keeping the existing block, skipping the write'
-            $writeBlock = $false
-        }
-    } else {
-        if ($configRaw -match "(?m)^\s*Host\s+.*\b$TunnelAlias\b") {
-            Write-Warn "~\.ssh\config contains a 'Host $TunnelAlias' block that is not managed by this tool."
-            Write-Warn 'ssh uses first-match-wins, so the earlier block would override what this tool writes.'
-            if (-not (Read-YesNo 'Write the block anyway (cleaning up the old block manually is recommended)' $false)) {
-                throw "Aborted. Please remove the old Host $TunnelAlias block and re-run"
-            }
-        }
-        Copy-Item $SshConfig "$SshConfig.claude-bak-$Ts"
-        Write-Info "Backed up ssh config -> $SshConfig.claude-bak-$Ts"
-    }
-
-    if ($writeBlock) {
-        $configRaw = $configRaw.TrimEnd()
-        if ($configRaw) { $configRaw += "`r`n`r`n" }
-        $configRaw += $configBlock.Replace("`r`n", "`n").Replace("`n", "`r`n") + "`r`n"
-        [System.IO.File]::WriteAllText($SshConfig, $configRaw)
-        Write-Info "Wrote Host $TunnelAlias to $SshConfig"
-    }
-    Set-StrictAcl -Path $SshConfig
+    Write-SshConfigBlock -SrvHost $srvHost -SrvUser $srvUser -SrvPort $srvPort -RevPort $revPort
 }
 
 function Invoke-ItemShowKey {    # item 5: print the local public key
