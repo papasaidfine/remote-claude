@@ -60,6 +60,12 @@ $Ts           = Get-Date -Format 'yyyyMMdd-HHmmss'
 $BeginMark = "# >>> $TunnelAlias (managed by reverse-ssh-bootstrap) >>>"
 $EndMark   = "# <<< $TunnelAlias <<<"
 
+# xray / VLESS client (items 6 and 7)
+$RcConfigDir  = Join-Path $env:LOCALAPPDATA 'remote-claude'
+$XrayJson     = Join-Path $RcConfigDir 'xray.json'
+$XrayLauncher = Join-Path $RcConfigDir 'xray-proxy.ps1'
+$XrayVendorBin = Join-Path (Join-Path $RcConfigDir 'bin') 'xray.exe'
+
 function Write-Info { param([string]$Msg) Write-Host "[+] $Msg" -ForegroundColor Green }
 function Write-Warn { param([string]$Msg) Write-Host "[!] $Msg" -ForegroundColor Yellow }
 function Write-Err  { param([string]$Msg) Write-Host "[x] $Msg" -ForegroundColor Red }
@@ -123,6 +129,108 @@ function Set-SshdDirective {
         return $regex.Replace($Text, $line, 1)
     }
     return $Text.TrimEnd() + "`r`n$line`r`n"
+}
+
+# ---------------------------------------------------------------- xray / VLESS
+# Parse a vless:// URL into an xray client config TEMPLATE (JSON string).
+# The inbound is a dokodemo-door with __DOKO_PORT__/__DEST_HOST__/__DEST_PORT__
+# placeholders that xray-proxy.ps1 fills in per connection; __LOG_FILE__ points
+# the error log at a per-connection file. The VLESS outbound is fully resolved.
+function ConvertTo-VlessJson {
+    param([string]$Url)
+    if ($Url -notmatch '^vless://') { throw 'Not a vless:// URL' }
+    $rest = $Url.Substring(8) -replace '#.*$', ''
+    if ($rest -notmatch '^([^@]+)@(.+):(\d+)(\?(.*))?$') {
+        throw 'Malformed vless:// URL (need uuid@host:port)'
+    }
+    $uuid  = $Matches[1]
+    $vhost = $Matches[2]
+    $vport = [int]$Matches[3]
+    $query = if ($Matches[5]) { $Matches[5] } else { '' }
+
+    $p = @{ type = 'tcp'; security = 'none' }
+    foreach ($pair in ($query -split '&')) {
+        if (-not $pair) { continue }
+        $k, $v = $pair -split '=', 2
+        if ($null -eq $v) { $v = '' }
+        $v = [uri]::UnescapeDataString(($v -replace '\+', ' '))
+        switch ($k) {
+            'type'        { $p.type = $v }
+            'network'     { $p.type = $v }
+            'security'    { $p.security = $v }
+            'flow'        { $p.flow = $v }
+            'sni'         { $p.sni = $v }
+            'fp'          { $p.fp = $v }
+            'pbk'         { $p.pbk = $v }
+            'sid'         { $p.sid = $v }
+            'alpn'        { $p.alpn = $v }
+            'path'        { $p.path = $v }
+            'host'        { $p.hosthdr = $v }
+            'serviceName' { $p.servicename = $v }
+        }
+    }
+    if (-not $p.security) { $p.security = 'none' }
+    if ('reality', 'tls', 'none' -notcontains $p.security) {
+        throw "Unsupported security='$($p.security)' (supported: reality, tls, none)"
+    }
+    if ('tcp', 'ws', 'grpc' -notcontains $p.type) {
+        throw "Unsupported network type='$($p.type)' (supported: tcp, ws, grpc)"
+    }
+
+    $user = [ordered]@{ id = $uuid; encryption = 'none' }
+    if ($p.flow) { $user.flow = $p.flow }
+
+    $stream = [ordered]@{ network = $p.type; security = $p.security }
+    switch ($p.security) {
+        'reality' {
+            if (-not $p.pbk) { throw 'reality requires pbk (publicKey) in the URL' }
+            $fp = if ($p.fp) { $p.fp } else { 'chrome' }
+            $stream.realitySettings = [ordered]@{
+                serverName = "$($p.sni)"; fingerprint = $fp
+                publicKey = $p.pbk; shortId = "$($p.sid)"; spiderX = ''
+            }
+        }
+        'tls' {
+            $fp = if ($p.fp) { $p.fp } else { 'chrome' }
+            $alpn = if ($p.alpn) { @($p.alpn -split ',') } else { @() }
+            $stream.tlsSettings = [ordered]@{
+                serverName = "$($p.sni)"; fingerprint = $fp; alpn = $alpn
+            }
+        }
+    }
+    switch ($p.type) {
+        'ws' {
+            $path = if ($p.path) { $p.path } else { '/' }
+            $stream.wsSettings = [ordered]@{
+                path = $path; headers = [ordered]@{ Host = "$($p.hosthdr)" }
+            }
+        }
+        'grpc' { $stream.grpcSettings = [ordered]@{ serviceName = "$($p.servicename)" } }
+        'tcp'  { $stream.tcpSettings = @{} }
+    }
+
+    $config = [ordered]@{
+        log = [ordered]@{ loglevel = 'warning'; error = '__LOG_FILE__' }
+        inbounds = @(
+            [ordered]@{
+                listen = '127.0.0.1'; port = '__DOKO_PORT__'
+                protocol = 'dokodemo-door'
+                settings = [ordered]@{
+                    address = '__DEST_HOST__'; port = '__DEST_PORT__'; network = 'tcp'
+                }
+            }
+        )
+        outbounds = @(
+            [ordered]@{
+                protocol = 'vless'
+                settings = [ordered]@{
+                    vnext = @([ordered]@{ address = $vhost; port = $vport; users = @($user) })
+                }
+                streamSettings = $stream
+            }
+        )
+    }
+    return ($config | ConvertTo-Json -Depth 10)
 }
 
 # ---------------------------------------------------------------- platform

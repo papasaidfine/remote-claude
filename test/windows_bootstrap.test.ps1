@@ -31,5 +31,49 @@ function Set-StrictAcl { param([string]$Path, [switch]$Directory) }
 Check 'sourcing defines Invoke-ItemConfig' ([bool](Get-Command Invoke-ItemConfig -ErrorAction SilentlyContinue))
 Check 'paths are sandboxed' ($SshConfig.StartsWith($tmp))
 
+# --- ConvertTo-VlessJson ------------------------------------------------------
+$u = 'vless://11111111-2222-3333-4444-555555555555@example.com:443?type=tcp&security=reality&pbk=PUBKEYXYZ&sid=ab12&sni=www.microsoft.com&fp=chrome&flow=xtls-rprx-vision#node'
+$tpl = ConvertTo-VlessJson $u
+$j = $tpl | ConvertFrom-Json
+$vnext = $j.outbounds[0].settings.vnext[0]
+Check 'reality: uuid'        ($vnext.users[0].id -eq '11111111-2222-3333-4444-555555555555')
+Check 'reality: flow'        ($vnext.users[0].flow -eq 'xtls-rprx-vision')
+Check 'reality: address'     ($vnext.address -eq 'example.com')
+Check 'reality: server port' ($vnext.port -eq 443)
+$ss = $j.outbounds[0].streamSettings
+Check 'reality: security'    ($ss.security -eq 'reality')
+Check 'reality: pbk'         ($ss.realitySettings.publicKey -eq 'PUBKEYXYZ')
+Check 'reality: sid'         ($ss.realitySettings.shortId -eq 'ab12')
+Check 'reality: sni'         ($ss.realitySettings.serverName -eq 'www.microsoft.com')
+Check 'reality: fp'          ($ss.realitySettings.fingerprint -eq 'chrome')
+$inb = $j.inbounds[0]
+Check 'inbound: dokodemo'          ($inb.protocol -eq 'dokodemo-door')
+Check 'inbound: port placeholder'  ($inb.port -eq '__DOKO_PORT__')
+Check 'inbound: dest placeholders' ($inb.settings.address -eq '__DEST_HOST__' -and $inb.settings.port -eq '__DEST_PORT__')
+Check 'log placeholder' ($j.log.error -eq '__LOG_FILE__')
+
+# The launcher's materialization contract: quoted numeric placeholders become numbers
+$mat = $tpl.Replace('"__DOKO_PORT__"', '12345').Replace('"__DEST_PORT__"', '22').Replace('__DEST_HOST__', '203.0.113.7').Replace('__LOG_FILE__', 'C:/t/x.log')
+$mj = $mat | ConvertFrom-Json
+Check 'materialized: numeric ports' ($mj.inbounds[0].port -eq 12345 -and $mj.inbounds[0].settings.port -eq 22)
+Check 'materialized: dest host'     ($mj.inbounds[0].settings.address -eq '203.0.113.7')
+
+# TLS + ws (percent-encoded path)
+$u2 = 'vless://aaaa@host.tld:8443?type=ws&security=tls&sni=host.tld&path=%2Fws&host=host.tld'
+$j2 = (ConvertTo-VlessJson $u2) | ConvertFrom-Json
+$ss2 = $j2.outbounds[0].streamSettings
+Check 'tls-ws: security' ($ss2.security -eq 'tls')
+Check 'tls-ws: sni'      ($ss2.tlsSettings.serverName -eq 'host.tld')
+Check 'tls-ws: ws path'  ($ss2.wsSettings.path -eq '/ws')
+Check 'tls-ws: ws host'  ($ss2.wsSettings.headers.Host -eq 'host.tld')
+
+# Unsupported values must throw
+$threw = $false
+try { ConvertTo-VlessJson 'vless://x@h:1?security=weird&type=tcp' | Out-Null } catch { $threw = $true }
+Check 'unsupported security throws' $threw
+$threw = $false
+try { ConvertTo-VlessJson 'https://not-vless' | Out-Null } catch { $threw = $true }
+Check 'non-vless url throws' $threw
+
 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 exit $script:fail
