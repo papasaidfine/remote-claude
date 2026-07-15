@@ -20,6 +20,10 @@
 #      from="127.0.0.1,::1" restriction (dedup by key blob).
 #   4. Write a managed "Host remote-claude" block into ~/.ssh/config.
 #   5. Show the local public key to paste into the server-side setup.
+#   6. xray client: parse a vless:// URL, install xray, write the config and
+#      the on-demand SOCKS launcher used by ProxyCommand.
+#   7. Toggle routing the tunnel through the xray proxy — rewrites the managed
+#      block reusing its stored values, no re-prompting.
 #
 # Usage:  ./bootstrap-macos.sh
 # Non-interactive overrides via env vars: SERVER_HOST, SERVER_USER,
@@ -348,7 +352,26 @@ run_xray() { # item 6: install xray + build config from a vless:// URL
   install_xray
   write_xray_config "$url"
   write_xray_launcher
-  log "xray client ready. Turn it on for the tunnel via menu item 4 (answer Y to route through the proxy)."
+  log "xray client ready. Turn it on for the tunnel via menu item 7 (proxy toggle)."
+}
+
+run_proxy() { # item 7: toggle routing the tunnel through the xray proxy
+  status_config || die "No managed Host $TUNNEL_ALIAS block yet — run item 4 first"
+  local host user port rport
+  host="$(config_block_value HostName)"
+  user="$(config_block_value User)"
+  port="$(config_block_value Port)"
+  rport="$(config_block_value RemoteForward)"; rport="${rport##*:}"
+  [[ -n "$host" && -n "$user" && -n "$port" && -n "$rport" ]] \
+    || die "Could not read the Host $TUNNEL_ALIAS block — re-run item 4"
+  if config_proxy_on; then
+    write_ssh_config_block "$host" "$user" "$port" "$rport" 0 1
+    log "Proxy OFF — ssh $TUNNEL_ALIAS connects directly again"
+  else
+    status_xray || die "xray client not configured — run item 6 first"
+    write_ssh_config_block "$host" "$user" "$port" "$rport" 1 1
+    log "Proxy ON — ssh $TUNNEL_ALIAS now routes through xray"
+  fi
 }
 
 # ---------------------------------------------------------------- xray / VLESS
@@ -590,6 +613,7 @@ draw_menu() {
   printf '  4) %-50s %s\n' "$cfg_label" "$(mark status_config)"
   printf '  5) %s\n' 'Show local public key (paste into server setup)'
   printf '  6) %-50s %s\n' 'xray client (paste vless:// URL)' "$(mark status_xray)"
+  printf '  7) %-50s %s\n' 'Route tunnel through xray (ProxyCommand)' "$(mark config_proxy_on)"
   echo   '  q) Quit'
 }
 
@@ -605,7 +629,7 @@ run_item() { # run_item <run-function>; failures return to the menu
 if [[ -z "${RC_SOURCED_FOR_TEST:-}" ]]; then
 while true; do
   draw_menu
-  read -r -p "Select [1-6, q]: " choice || break
+  read -r -p "Select [1-7, q]: " choice || break
   case "$choice" in
     1) run_item run_sshd ;;
     2) run_item run_key ;;
@@ -613,6 +637,7 @@ while true; do
     4) run_item run_config ;;
     5) run_item run_show_key ;;
     6) run_item run_xray ;;
+    7) run_item run_proxy ;;
     q|Q) break ;;
     *) warn "Unknown selection: $choice" ;;
   esac
