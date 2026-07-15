@@ -26,6 +26,11 @@
     4. Write a managed "Host remote-claude" block into
        %USERPROFILE%\.ssh\config.
     5. Show the local public key to paste into the server-side setup.
+    6. xray client: parse a vless:// URL, install xray, write the config
+       template and the per-connection ProxyCommand launcher.
+    7. Toggle routing the tunnel through the xray proxy - rewrites the
+       managed block reusing its stored values, no re-prompting. Each ssh
+       connection then runs its own xray, which dies with the connection.
 
 .NOTES
   Only item 1 requires an elevated (Administrator) PowerShell; the other
@@ -406,6 +411,25 @@ function Invoke-ItemXray {   # item 6: install xray + write template/launcher
     Write-Info 'xray client ready. Turn it on for the tunnel via menu item 7 (proxy toggle).'
 }
 
+function Invoke-ItemProxy {  # item 7: toggle routing the tunnel through xray
+    if (-not (Test-StatusConfig)) { throw "No managed Host $TunnelAlias block yet - run item 4 first" }
+    $srvHost = Get-ConfigBlockValue 'HostName'
+    $srvUser = Get-ConfigBlockValue 'User'
+    $srvPort = Get-ConfigBlockValue 'Port'
+    $revPort = ((Get-ConfigBlockValue 'RemoteForward') -split ':')[-1]
+    if (-not ($srvHost -and $srvUser -and $srvPort -and $revPort)) {
+        throw "Could not read the Host $TunnelAlias block - re-run item 4"
+    }
+    if (Test-ConfigProxyOn) {
+        Write-SshConfigBlock -SrvHost $srvHost -SrvUser $srvUser -SrvPort ([int]$srvPort) -RevPort ([int]$revPort) -Force
+        Write-Info "Proxy OFF - ssh $TunnelAlias connects directly again"
+    } else {
+        if (-not (Test-StatusXray)) { throw 'xray client not configured - run item 6 first' }
+        Write-SshConfigBlock -SrvHost $srvHost -SrvUser $srvUser -SrvPort ([int]$srvPort) -RevPort ([int]$revPort) -UseProxy -Force
+        Write-Info "Proxy ON - ssh $TunnelAlias now routes through xray"
+    }
+}
+
 # ---------------------------------------------------------------- platform
 if (-not $env:RC_SOURCED_FOR_TEST) {
     if ($env:OS -ne 'Windows_NT') {
@@ -655,7 +679,12 @@ function Invoke-ItemConfig {     # item 4: Host remote-claude block
     $revPort = $ReversePort
     if ($revPort -le 0) { $revPort = [int](Read-Default 'Reverse SSH port on the server (used by Claude/Codex to connect back)' '2222') }
 
-    Write-SshConfigBlock -SrvHost $srvHost -SrvUser $srvUser -SrvPort $srvPort -RevPort $revPort
+    $useProxy = $false
+    if (Test-StatusXray) {
+        if ($UseXrayProxy -ne '') { $useProxy = ($UseXrayProxy -eq '1') }
+        elseif (Read-YesNo 'Route this tunnel through the local xray proxy' $true) { $useProxy = $true }
+    }
+    Write-SshConfigBlock -SrvHost $srvHost -SrvUser $srvUser -SrvPort $srvPort -RevPort $revPort -UseProxy:$useProxy
 }
 
 function Invoke-ItemShowKey {    # item 5: print the local public key
@@ -691,6 +720,10 @@ function Test-StatusConfig {
 function Test-StatusXray {
     return (Test-Path $XrayJson) -and (Test-Path $XrayLauncher) -and [bool](Resolve-XrayExe)
 }
+function Test-ConfigProxyOn {
+    $raw = Get-Content -Raw $SshConfig -ErrorAction SilentlyContinue
+    return [bool]($raw -and $raw.Contains('ProxyCommand') -and $raw.Contains($XrayLauncher))
+}
 
 # ---------------------------------------------------------------- menu
 function Format-Mark { param([bool]$Ok) if ($Ok) { '[done]' } else { '[ -  ]' } }
@@ -701,15 +734,19 @@ function Show-Menu {
     Write-Host ('  1) {0,-50} {1}' -f 'Incoming SSH - OpenSSH Server + harden  [admin]', (Format-Mark (Test-StatusSshd)))
     Write-Host ('  2) {0,-50} {1}' -f 'Local SSH key (~\.ssh\id_ed25519)', (Format-Mark (Test-StatusKey)))
     Write-Host ('  3) {0,-50} {1}' -f "Authorize the server's connect-back key", (Format-Mark (Test-StatusAuthorize)))
-    Write-Host ('  4) {0,-50} {1}' -f 'Tunnel config (Host remote-claude)', (Format-Mark (Test-StatusConfig)))
+    $cfgLabel = 'Tunnel config (Host remote-claude)'
+    if (Test-ConfigProxyOn) { $cfgLabel += ' [xray]' }
+    Write-Host ('  4) {0,-50} {1}' -f $cfgLabel, (Format-Mark (Test-StatusConfig)))
     Write-Host  '  5) Show local public key (paste into server setup)'
+    Write-Host ('  6) {0,-50} {1}' -f 'xray client (paste vless:// URL)', (Format-Mark (Test-StatusXray)))
+    Write-Host ('  7) {0,-50} {1}' -f 'Route tunnel through xray (ProxyCommand)', (Format-Mark (Test-ConfigProxyOn)))
     Write-Host  '  q) Quit'
 }
 
 if (-not $env:RC_SOURCED_FOR_TEST) {
     :menu while ($true) {
         Show-Menu
-        $choice = (Read-Host 'Select [1-5, q]').Trim()
+        $choice = (Read-Host 'Select [1-7, q]').Trim()
         if ($choice -match '^[Qq]$') { break menu }
         $fn = switch ($choice) {
             '1' { 'Invoke-ItemSshd' }
@@ -717,6 +754,8 @@ if (-not $env:RC_SOURCED_FOR_TEST) {
             '3' { 'Invoke-ItemAuthorize' }
             '4' { 'Invoke-ItemConfig' }
             '5' { 'Invoke-ItemShowKey' }
+            '6' { 'Invoke-ItemXray' }
+            '7' { 'Invoke-ItemProxy' }
             default { $null }
         }
         if (-not $fn) { Write-Warn "Unknown selection: $choice"; continue }

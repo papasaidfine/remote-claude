@@ -117,5 +117,47 @@ New-Item -ItemType Directory -Force -Path (Split-Path $XrayVendorBin) | Out-Null
 New-Item -ItemType File -Force -Path $XrayJson, $XrayVendorBin | Out-Null
 Check 'status: xray ready with all artifacts' (Test-StatusXray)
 
+# --- Invoke-ItemProxy (menu item 7) -------------------------------------------
+# Reset to a known block without the proxy (Read-YesNo still throws on any prompt)
+Write-SshConfigBlock -SrvHost '203.0.113.7' -SrvUser 'ubuntu' -SrvPort 22 -RevPort 2222 -Force
+
+# No managed block -> error
+$savedConfig = $SshConfig
+$SshConfig = Join-Path $tmp 'no-such-config'
+$threw = $false
+try { Invoke-ItemProxy } catch { $threw = $true }
+Check 'toggle: no managed block errors' $threw
+$SshConfig = $savedConfig
+
+# xray artifacts exist from the launcher tests, so enabling must work, promptless
+Invoke-ItemProxy
+$raw = Get-Content -Raw $SshConfig
+Check 'toggle on: ProxyCommand added'     ($raw.Contains("-File `"$XrayLauncher`" %h %p"))
+Check 'toggle on: HostName preserved'     ($raw.Contains('HostName 203.0.113.7'))
+Check 'toggle on: User preserved'         ($raw.Contains('User ubuntu'))
+Check 'toggle on: reverse port preserved' ($raw.Contains('RemoteForward 127.0.0.1:2222 127.0.0.1:22'))
+Check 'toggle on: unmanaged content kept' ($raw.Contains('Host other'))
+Check 'toggle on: proxy status detected'  (Test-ConfigProxyOn)
+
+# Toggle OFF
+Invoke-ItemProxy
+$raw = Get-Content -Raw $SshConfig
+Check 'toggle off: ProxyCommand removed' (-not $raw.Contains('ProxyCommand'))
+Check 'toggle off: HostName preserved'   ($raw.Contains('HostName 203.0.113.7'))
+
+# Toggle ON again - nothing duplicated
+Invoke-ItemProxy
+$raw = Get-Content -Raw $SshConfig
+Check 're-toggle: exactly one ProxyCommand'  (([regex]::Matches($raw, 'ProxyCommand')).Count -eq 1)
+Check 're-toggle: exactly one managed block' (([regex]::Matches($raw, [regex]::Escape($BeginMark))).Count -eq 1)
+
+# Enabling without xray must error and leave the config untouched
+Invoke-ItemProxy   # back to OFF
+Remove-Item $XrayJson -Force
+$threw = $false
+try { Invoke-ItemProxy } catch { $threw = $true }
+Check 'toggle: enabling without xray errors' $threw
+Check 'toggle: config untouched without xray' (-not (Get-Content -Raw $SshConfig).Contains('ProxyCommand'))
+
 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 exit $script:fail
