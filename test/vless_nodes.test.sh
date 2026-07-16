@@ -73,4 +73,21 @@ else
   printf 'ok   - pick: comments-only file errors\n'
 fi
 
+# --- write_xray_launcher: embeds the parser, reads the nodes file --------------
+write_xray_launcher >/dev/null
+if bash -n "$XRAY_LAUNCHER"; then
+  printf 'ok   - launcher: bash -n clean\n'
+else
+  printf 'FAIL - launcher: syntax error\n'; fail=1
+fi
+src="$(cat "$XRAY_LAUNCHER")"
+check 'launcher: embeds vless_url_to_json' "$src" 'vless_url_to_json ()'
+check 'launcher: embeds urldecode'         "$src" 'urldecode ()'
+check 'launcher: embeds read_vless_nodes'  "$src" 'read_vless_nodes ()'
+check 'launcher: embeds pick_random_node'  "$src" 'pick_random_node ()'
+check 'launcher: embeds err'               "$src" 'err ()'
+check 'launcher: reads the nodes file'     "$src" 'vless-nodes.txt'
+check 'launcher: writes current config'    "$src" 'xray-current.json'
+check 'launcher: still a SOCKS bridge'     "$src" 'nc -X 5 -x'
+
 exit $fail
