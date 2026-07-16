@@ -50,6 +50,7 @@ XRAY_JSON="$RC_CONFIG_DIR/xray.json"
 XRAY_LAUNCHER="$RC_CONFIG_DIR/xray-proxy.sh"
 XRAY_VENDOR_BIN="$RC_CONFIG_DIR/bin/xray"
 XRAY_LOG="$RC_CONFIG_DIR/xray.log"
+VLESS_NODES="$RC_CONFIG_DIR/vless-nodes.txt"
 SOCKS_PORT=10808
 
 BEGIN_MARK="# >>> ${TUNNEL_ALIAS} (managed by reverse-ssh-bootstrap) >>>"
@@ -514,6 +515,26 @@ $transport_json
   ]
 }
 JSON
+}
+
+read_vless_nodes() { # read_vless_nodes <nodes-file> -> node URLs on stdout, one per line
+  local file="$1" line
+  [[ -f "$file" ]] || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line#"${line%%[![:space:]]*}"}"        # ltrim
+    [[ -z "$line" || "$line" == \#* ]] && continue # blank / comment
+    printf '%s\n' "$line"
+  done < "$file"
+}
+
+pick_random_node() { # pick_random_node <nodes-file> -> one random node URL on stdout
+  local -a nodes=()
+  local line
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && nodes+=("$line")
+  done <<< "$(read_vless_nodes "$1" 2>/dev/null)"
+  [[ ${#nodes[@]} -gt 0 ]] || { err "No vless:// nodes in $1 — re-run bootstrap item 6"; return 1; }
+  printf '%s\n' "${nodes[RANDOM % ${#nodes[@]}]}"
 }
 
 xray_bin() { # echo path to an xray binary, or return 1
