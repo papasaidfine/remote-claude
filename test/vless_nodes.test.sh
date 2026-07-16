@@ -90,4 +90,55 @@ check 'launcher: reads the nodes file'     "$src" 'vless-nodes.txt'
 check 'launcher: writes current config'    "$src" 'xray-current.json'
 check 'launcher: still a SOCKS bridge'     "$src" 'nc -X 5 -x'
 
+# --- run_xray (item 6): seeds the nodes file from VLESS_URL --------------------
+# Fake the vendor binary so install_xray short-circuits (no network); fake nc
+# in case the host lacks it (command -v also finds functions). run_xray dies
+# via exit on failure, so every invocation runs in a subshell ( ... ) — same
+# pattern as run_proxy in config_proxy_toggle.test.sh.
+mkdir -p "$RC_CONFIG_DIR/bin"
+printf '#!/bin/sh\n' > "$XRAY_VENDOR_BIN"; chmod +x "$XRAY_VENDOR_BIN"
+nc() { :; }
+: > "$XRAY_JSON"        # stale pre-nodes-file config that item 6 must remove
+rm -f "$VLESS_NODES"
+if ( VLESS_URL='vless://seed@s.example:443?type=tcp#seeded' run_xray ) >/dev/null 2>&1; then
+  printf 'ok   - item6: seed run exits zero\n'
+else
+  printf 'FAIL - item6: seed run exited non-zero\n'; fail=1
+fi
+check 'item6: nodes file seeded with the URL' "$(cat "$VLESS_NODES")" 'vless://seed@s.example:443?type=tcp#seeded'
+check 'item6: nodes file has format comment' "$(cat "$VLESS_NODES")" '# '
+if [[ ! -f "$XRAY_JSON" ]]; then
+  printf 'ok   - item6: stale xray.json removed\n'
+else
+  printf 'FAIL - item6: stale xray.json still present\n'; fail=1
+fi
+
+# --- run_xray: validates an existing nodes file, no prompt ---------------------
+printf 'vless://bad@h:1?security=weird&type=tcp\n' > "$VLESS_NODES"
+if ( run_xray ) >/dev/null 2>&1; then
+  printf 'FAIL - item6: bad nodes file should error\n'; fail=1
+else
+  printf 'ok   - item6: bad nodes file errors\n'
+fi
+
+printf 'vless://uuid-a@a.example:443?type=tcp#node-a\n' > "$VLESS_NODES"
+if ( run_xray ) </dev/null >/dev/null 2>&1; then
+  printf 'ok   - item6: valid nodes file passes without prompting\n'
+else
+  printf 'FAIL - item6: valid nodes file should pass\n'; fail=1
+fi
+
+# --- status_xray ----------------------------------------------------------------
+if status_xray; then
+  printf 'ok   - status: ready with nodes file + launcher + binary\n'
+else
+  printf 'FAIL - status: should be ready\n'; fail=1
+fi
+rm -f "$VLESS_NODES"
+if status_xray; then
+  printf 'FAIL - status: should not be ready without the nodes file\n'; fail=1
+else
+  printf 'ok   - status: not ready without the nodes file\n'
+fi
+
 exit $fail

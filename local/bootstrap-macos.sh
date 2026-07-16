@@ -20,8 +20,9 @@
 #      from="127.0.0.1,::1" restriction (dedup by key blob).
 #   4. Write a managed "Host remote-claude" block into ~/.ssh/config.
 #   5. Show the local public key to paste into the server-side setup.
-#   6. xray client: parse a vless:// URL, install xray, write the config and
-#      the on-demand SOCKS launcher used by ProxyCommand.
+#   6. xray client: install xray, seed ~/.config/remote-claude/vless-nodes.txt
+#      (one vless:// URL per line) and write the on-demand SOCKS launcher used
+#      by ProxyCommand; every xray start picks a random node from that file.
 #   7. Toggle routing the tunnel through the xray proxy — rewrites the managed
 #      block reusing its stored values, no re-prompting.
 #
@@ -343,17 +344,31 @@ run_show_key() { # item 5: print the local public key for the server-side handof
   echo
 }
 
-run_xray() { # item 6: install xray + build config from a vless:// URL
+run_xray() { # item 6: install xray + seed/validate the nodes file + write the launcher
   command -v nc >/dev/null 2>&1 || die "nc (netcat) not found — required for the SOCKS ProxyCommand"
-  local url
-  url="${VLESS_URL:-$(ask 'Paste your vless:// URL')}"
-  [[ -n "$url" ]] || die "No URL given; nothing changed"
-  case "$url" in vless://*) ;; *) die "Not a vless:// URL" ;; esac
-  vless_url_to_json "$url" >/dev/null || die "Could not parse the vless:// URL (see message above)"
+  local url line n=0 nodes
+  nodes="$(read_vless_nodes "$VLESS_NODES" 2>/dev/null || true)"
+  if [[ -n "$nodes" ]]; then
+    while IFS= read -r line; do
+      n=$((n + 1))
+      vless_url_to_json "$line" >/dev/null \
+        || die "Node $n in $VLESS_NODES does not parse (see message above)"
+    done <<< "$nodes"
+    log "Validated $n node(s) from $VLESS_NODES"
+  else
+    url="${VLESS_URL:-$(ask 'Paste your vless:// URL')}"
+    [[ -n "$url" ]] || die "No URL given; nothing changed"
+    case "$url" in vless://*) ;; *) die "Not a vless:// URL" ;; esac
+    vless_url_to_json "$url" >/dev/null || die "Could not parse the vless:// URL (see message above)"
+    write_vless_nodes_file "$url"
+  fi
   install_xray
-  write_xray_config "$url"
   write_xray_launcher
-  log "xray client ready. Turn it on for the tunnel via menu item 7 (proxy toggle)."
+  rm -f "$XRAY_JSON"   # pre-nodes-file layout; superseded by vless-nodes.txt
+  log "Each xray start picks a random node from $VLESS_NODES — edit that file to"
+  log "add/swap nodes (one vless:// URL per line, # comments); takes effect on the"
+  log "next connect. A running xray keeps its node: pkill xray to re-roll."
+  log "Turn it on for the tunnel via menu item 7 (proxy toggle)."
 }
 
 run_proxy() { # item 7: toggle routing the tunnel through the xray proxy
@@ -568,13 +583,16 @@ install_xray() {
   log "xray installed to $XRAY_VENDOR_BIN"
 }
 
-write_xray_config() { # write_xray_config <vless-url>
-  local url="$1" json
-  json="$(vless_url_to_json "$url")" || return 1
+write_vless_nodes_file() { # write_vless_nodes_file <vless-url> — seed the nodes file
   mkdir -p "$RC_CONFIG_DIR"
-  printf '%s\n' "$json" > "$XRAY_JSON"
-  chmod 600 "$XRAY_JSON"
-  log "Wrote $XRAY_JSON"
+  {
+    printf '# vless nodes for the remote-claude tunnel — one vless:// URL per line.\n'
+    printf '# Lines starting with # and blank lines are ignored.\n'
+    printf '# Every xray start picks a random node; edits take effect on the next connect.\n'
+    printf '%s\n' "$1"
+  } > "$VLESS_NODES"
+  chmod 600 "$VLESS_NODES"
+  log "Wrote $VLESS_NODES"
 }
 
 write_xray_launcher() {
@@ -634,7 +652,11 @@ status_sshd() {
 status_key()       { [[ -f "$KEY_PATH" ]]; }
 status_authorize() { grep -qF 'from="127.0.0.1,::1"' "$AUTH_KEYS" 2>/dev/null; }
 status_config()    { grep -qF "$BEGIN_MARK" "$SSH_CONFIG" 2>/dev/null; }
-status_xray()      { [[ -f "$XRAY_JSON" && -f "$XRAY_LAUNCHER" ]] && xray_bin >/dev/null 2>&1; }
+status_xray() {
+  [[ -f "$XRAY_LAUNCHER" ]] || return 1
+  xray_bin >/dev/null 2>&1 || return 1
+  [[ -n "$(read_vless_nodes "$VLESS_NODES" 2>/dev/null)" ]]
+}
 config_proxy_on()  { grep -qF "ProxyCommand $XRAY_LAUNCHER" "$SSH_CONFIG" 2>/dev/null; }
 
 # ---------------------------------------------------------------- menu
@@ -650,7 +672,7 @@ draw_menu() {
   printf '  3) %-50s %s\n' "Authorize the server's connect-back key" "$(mark status_authorize)"
   printf '  4) %-50s %s\n' "$cfg_label" "$(mark status_config)"
   printf '  5) %s\n' 'Show local public key (paste into server setup)'
-  printf '  6) %-50s %s\n' 'xray client (paste vless:// URL)' "$(mark status_xray)"
+  printf '  6) %-50s %s\n' 'xray client (vless-nodes.txt)' "$(mark status_xray)"
   printf '  7) %-50s %s\n' 'Route tunnel through xray (ProxyCommand)' "$(mark config_proxy_on)"
   echo   '  q) Quit'
 }

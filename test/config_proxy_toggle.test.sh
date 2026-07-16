@@ -10,7 +10,7 @@ source "$HERE/../local/bootstrap-macos.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 SSH_CONFIG="$TMP/config"
-XRAY_JSON="$TMP/xray.json"
+VLESS_NODES="$TMP/vless-nodes.txt"
 XRAY_LAUNCHER="$TMP/xray-proxy.sh"
 XRAY_VENDOR_BIN="$TMP/bin/xray"
 
@@ -73,7 +73,7 @@ check_absent 'no xray: ProxyCommand still absent' "$(cat "$SSH_CONFIG")" 'ProxyC
 
 # Fake the xray artifacts so status_xray passes
 mkdir -p "$TMP/bin"
-: > "$XRAY_JSON"
+printf 'vless://u@h.example:443?type=tcp#t\n' > "$VLESS_NODES"
 : > "$XRAY_LAUNCHER"
 printf '#!/bin/sh\n' > "$XRAY_VENDOR_BIN"
 chmod +x "$XRAY_VENDOR_BIN"
