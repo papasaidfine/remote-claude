@@ -26,8 +26,9 @@
     4. Write a managed "Host remote-claude" block into
        %USERPROFILE%\.ssh\config.
     5. Show the local public key to paste into the server-side setup.
-    6. xray client: parse a vless:// URL, install xray, write the config
-       template and the per-connection ProxyCommand launcher.
+    6. xray client: install xray, seed vless-nodes.txt (one vless:// URL per
+       line) and write the per-connection ProxyCommand launcher; every
+       connection picks a random node from that file.
     7. Toggle routing the tunnel through the xray proxy - rewrites the
        managed block reusing its stored values, no re-prompting. Each ssh
        connection then runs its own xray, which dies with the connection.
@@ -432,16 +433,33 @@ try {
     Write-Info "Wrote $XrayLauncher"
 }
 
-function Invoke-ItemXray {   # item 6: install xray + write template/launcher
-    $url = $VlessUrl
-    if (-not $url) { $url = Read-Default 'Paste your vless:// URL' }
-    if (-not $url) { throw 'No URL given; nothing changed' }
-    $json = ConvertTo-VlessJson $url    # throws before any side effect
+function Invoke-ItemXray {   # item 6: install xray + seed/validate nodes file + launcher
+    $nodes = Read-VlessNodes $VlessNodes
+    if ($nodes.Count -gt 0) {
+        for ($i = 0; $i -lt $nodes.Count; $i++) {
+            try { ConvertTo-VlessJson $nodes[$i] | Out-Null }
+            catch { throw "Node $($i + 1) in $VlessNodes does not parse: $_" }
+        }
+        Write-Info "Validated $($nodes.Count) node(s) from $VlessNodes"
+    } else {
+        $url = $VlessUrl
+        if (-not $url) { $url = Read-Default 'Paste your vless:// URL' }
+        if (-not $url) { throw 'No URL given; nothing changed' }
+        ConvertTo-VlessJson $url | Out-Null    # throws before any side effect
+        New-Item -ItemType Directory -Force -Path $RcConfigDir | Out-Null
+        $seed = @(
+            '# vless nodes for the remote-claude tunnel - one vless:// URL per line.',
+            '# Lines starting with # and blank lines are ignored.',
+            '# Every connection picks a random node; edits take effect on the next connect.',
+            $url
+        ) -join "`r`n"
+        [System.IO.File]::WriteAllText($VlessNodes, $seed + "`r`n")
+        Write-Info "Wrote $VlessNodes"
+    }
     Install-Xray
-    New-Item -ItemType Directory -Force -Path $RcConfigDir | Out-Null
-    [System.IO.File]::WriteAllText($XrayJson, $json)
-    Write-Info "Wrote $XrayJson"
     Write-XrayLauncher
+    Remove-Item $XrayJson -Force -ErrorAction SilentlyContinue  # pre-nodes-file layout
+    Write-Info "Each connection picks a random node from $VlessNodes - edit that file to add/swap nodes."
     Write-Info 'xray client ready. Turn it on for the tunnel via menu item 7 (proxy toggle).'
 }
 
@@ -752,7 +770,7 @@ function Test-StatusConfig {
     return [bool]($raw -and $raw.Contains($BeginMark))
 }
 function Test-StatusXray {
-    return (Test-Path $XrayJson) -and (Test-Path $XrayLauncher) -and [bool](Resolve-XrayExe)
+    return ((Read-VlessNodes $VlessNodes).Count -gt 0) -and (Test-Path $XrayLauncher) -and [bool](Resolve-XrayExe)
 }
 function Test-ConfigProxyOn {
     $raw = Get-Content -Raw $SshConfig -ErrorAction SilentlyContinue
@@ -772,7 +790,7 @@ function Show-Menu {
     if (Test-ConfigProxyOn) { $cfgLabel += ' [xray]' }
     Write-Host ('  4) {0,-50} {1}' -f $cfgLabel, (Format-Mark (Test-StatusConfig)))
     Write-Host  '  5) Show local public key (paste into server setup)'
-    Write-Host ('  6) {0,-50} {1}' -f 'xray client (paste vless:// URL)', (Format-Mark (Test-StatusXray)))
+    Write-Host ('  6) {0,-50} {1}' -f 'xray client (vless-nodes.txt)', (Format-Mark (Test-StatusXray)))
     Write-Host ('  7) {0,-50} {1}' -f 'Route tunnel through xray (ProxyCommand)', (Format-Mark (Test-ConfigProxyOn)))
     Write-Host  '  q) Quit'
 }

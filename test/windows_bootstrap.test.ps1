@@ -132,10 +132,27 @@ Check 'launcher reads vless-nodes.txt'      ($launcherSrc.Contains('vless-nodes.
 Check 'launcher no longer reads xray.json'  (-not $launcherSrc.Contains("'xray.json'"))
 
 # --- Test-StatusXray ----------------------------------------------------------
-Check 'status: xray not ready yet' (-not (Test-StatusXray))
+# nodes file + launcher already exist from earlier sections; binary still missing
+Check 'status: xray not ready without binary' (-not (Test-StatusXray))
 New-Item -ItemType Directory -Force -Path (Split-Path $XrayVendorBin) | Out-Null
-New-Item -ItemType File -Force -Path $XrayJson, $XrayVendorBin | Out-Null
+New-Item -ItemType File -Force -Path $XrayVendorBin | Out-Null
 Check 'status: xray ready with all artifacts' (Test-StatusXray)
+Remove-Item $VlessNodes -Force
+Check 'status: xray not ready without nodes file' (-not (Test-StatusXray))
+Set-Content $VlessNodes 'vless://uuid-a@a.example:443?type=tcp#node-a'
+Check 'status: ready again with nodes file back' (Test-StatusXray)
+
+# --- Invoke-ItemXray: bad nodes file fails fast --------------------------------
+Set-Content $VlessNodes 'vless://bad@h:1?security=weird&type=tcp'
+$threw = $false
+try { Invoke-ItemXray } catch { $threw = $true }
+Check 'item 6: bad nodes file throws' $threw
+Set-Content $VlessNodes 'vless://uuid-a@a.example:443?type=tcp#node-a'
+
+# --- Invoke-ItemXray: valid nodes file, no prompt, stale xray.json removed -----
+New-Item -ItemType File -Force -Path $XrayJson | Out-Null
+Invoke-ItemXray
+Check 'item 6: stale xray.json removed' (-not (Test-Path $XrayJson))
 
 # --- Invoke-ItemProxy (menu item 7) -------------------------------------------
 # Reset to a known block without the proxy (Read-YesNo still throws on any prompt)
@@ -173,7 +190,7 @@ Check 're-toggle: exactly one managed block' (([regex]::Matches($raw, [regex]::E
 
 # Enabling without xray must error and leave the config untouched
 Invoke-ItemProxy   # back to OFF
-Remove-Item $XrayJson -Force
+Remove-Item $VlessNodes -Force
 $threw = $false
 try { Invoke-ItemProxy } catch { $threw = $true }
 Check 'toggle: enabling without xray errors' $threw
