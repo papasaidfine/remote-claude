@@ -196,5 +196,59 @@ try { Invoke-ItemProxy } catch { $threw = $true }
 Check 'toggle: enabling without xray errors' $threw
 Check 'toggle: config untouched without xray' (-not (Get-Content -Raw $SshConfig).Contains('ProxyCommand'))
 
+# --- Invoke-ItemConfig form ----------------------------------------------------
+# Scripted input: each prompt pops one queued value; '' means "keep the default";
+# a prompt with an empty queue throws, proving exactly N inputs are consumed.
+$script:inputQueue = New-Object System.Collections.Queue
+function Read-Default {
+    param([string]$Prompt, [string]$Default = '')
+    if ($script:inputQueue.Count -eq 0) { throw "input queue empty at: $Prompt" }
+    $v = [string]$script:inputQueue.Dequeue()
+    if ($v -eq '') { return $Default }
+    return $v
+}
+
+# Pre-filled from the existing block; edit the host, apply
+'1', '198.51.100.77', 'a' | ForEach-Object { $script:inputQueue.Enqueue($_) }
+Invoke-ItemConfig
+$raw = Get-Content -Raw $SshConfig
+Check 'form: edited host written'       ($raw.Contains('HostName 198.51.100.77'))
+Check 'form: untouched user preserved'  ($raw.Contains('User ubuntu'))
+Check 'form: untouched rport preserved' ($raw.Contains('RemoteForward 127.0.0.1:2222 127.0.0.1:22'))
+Check 'form: single managed block'      (([regex]::Matches($raw, [regex]::Escape($BeginMark))).Count -eq 1)
+
+# Edit a field but keep it via the blank default, then cancel - nothing changes
+'1', '', 'q' | ForEach-Object { $script:inputQueue.Enqueue($_) }
+Invoke-ItemConfig
+Check 'form: cancel leaves config untouched' ((Get-Content -Raw $SshConfig).Contains('HostName 198.51.100.77'))
+
+# Validation: non-numeric port is rejected, form continues, fix and apply
+'3', 'abc', 'a', '3', '2200', 'a' | ForEach-Object { $script:inputQueue.Enqueue($_) }
+Invoke-ItemConfig
+Check 'form: bad port rejected then fixed' ((Get-Content -Raw $SshConfig).Contains('Port 2200'))
+Check 'form: queue fully consumed' ($script:inputQueue.Count -eq 0)
+
+# Proxy row appears and toggles once xray is configured again
+Set-Content $VlessNodes 'vless://uuid-a@a.example:443?type=tcp#node-a'
+'5', 'a' | ForEach-Object { $script:inputQueue.Enqueue($_) }
+Invoke-ItemConfig
+Check 'form: proxy toggled on' ((Get-Content -Raw $SshConfig).Contains("-File `"$XrayLauncher`" %h %p"))
+'5', 'a' | ForEach-Object { $script:inputQueue.Enqueue($_) }
+Invoke-ItemConfig
+Check 'form: proxy toggled back off' (-not (Get-Content -Raw $SshConfig).Contains('ProxyCommand'))
+Remove-Item $VlessNodes -Force
+
+# Non-interactive parameters skip the form entirely (queue stays empty)
+$savedConfig = $SshConfig
+$SshConfig = Join-Path $tmp 'auto-config'
+$ServerHost = '192.0.2.10'; $ServerUser = 'auto'
+Invoke-ItemConfig
+$raw = Get-Content -Raw $SshConfig
+Check 'auto: host written'  ($raw.Contains('HostName 192.0.2.10'))
+Check 'auto: user written'  ($raw.Contains('User auto'))
+Check 'auto: default ports' ($raw.Contains('RemoteForward 127.0.0.1:2222 127.0.0.1:22'))
+$ServerHost = ''; $ServerUser = ''
+$SshConfig = $savedConfig
+
 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 exit $script:fail

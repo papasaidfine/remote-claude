@@ -718,25 +718,81 @@ function Get-ConfigBlockValue { # Get-ConfigBlockValue <Key> -> value inside the
     return ''
 }
 
-function Invoke-ItemConfig {     # item 4: Host remote-claude block
-    Initialize-SshDir
-    $srvHost = $ServerHost
-    if (-not $srvHost) { $srvHost = Read-Default 'Remote server hostname / IP' }
-    if (-not $srvHost) { throw 'Server hostname must not be empty' }
-    $srvUser = $ServerUser
-    if (-not $srvUser) { $srvUser = Read-Default 'Remote server SSH user' }
-    if (-not $srvUser) { throw 'Server user must not be empty' }
-    $srvPort = $ServerPort
-    if ($srvPort -le 0) { $srvPort = [int](Read-Default 'Remote server SSH port' '22') }
-    $revPort = $ReversePort
-    if ($revPort -le 0) { $revPort = [int](Read-Default 'Reverse SSH port on the server (used by Claude/Codex to connect back)' '2222') }
+function Test-ConfigFields { # $true when all fields are valid; else Write-Err + $false
+    param([string]$SrvHost, [string]$SrvUser, [string]$SrvPort, [string]$RevPort)
+    if (-not $SrvHost) { Write-Err 'Server host must not be empty'; return $false }
+    if (-not $SrvUser) { Write-Err 'SSH user must not be empty'; return $false }
+    if ($SrvPort -notmatch '^\d+$') { Write-Err 'SSH port must be a number'; return $false }
+    if ($RevPort -notmatch '^\d+$') { Write-Err 'Reverse port must be a number'; return $false }
+    return $true
+}
 
-    $useProxy = $false
-    if (Test-StatusXray) {
-        if ($UseXrayProxy -ne '') { $useProxy = ($UseXrayProxy -eq '1') }
-        elseif (Read-YesNo 'Route this tunnel through the local xray proxy' $true) { $useProxy = $true }
+function Invoke-ItemConfig {     # item 4: Host remote-claude block - form: edit fields, then apply
+    Initialize-SshDir
+    $srvHost = ''; $srvUser = ''; $srvPort = ''; $revPort = ''; $useProxy = $false
+    # Pre-fill: existing managed block, then explicit parameters, then defaults
+    if (Test-StatusConfig) {
+        $srvHost = Get-ConfigBlockValue 'HostName'
+        $srvUser = Get-ConfigBlockValue 'User'
+        $srvPort = Get-ConfigBlockValue 'Port'
+        $revPort = ((Get-ConfigBlockValue 'RemoteForward') -split ':')[-1]
+        $useProxy = Test-ConfigProxyOn
+    } elseif (Test-StatusXray) {
+        $useProxy = $true   # no block yet: same default-yes as the old proxy question
     }
-    Write-SshConfigBlock -SrvHost $srvHost -SrvUser $srvUser -SrvPort $srvPort -RevPort $revPort -UseProxy:$useProxy
+    if ($ServerHost) { $srvHost = $ServerHost }
+    if ($ServerUser) { $srvUser = $ServerUser }
+    if ($ServerPort -gt 0) { $srvPort = "$ServerPort" }
+    if ($ReversePort -gt 0) { $revPort = "$ReversePort" }
+    if (-not $srvPort) { $srvPort = '22' }
+    if (-not $revPort) { $revPort = '2222' }
+    if ($UseXrayProxy -ne '') { $useProxy = ($UseXrayProxy -eq '1') }
+    if (-not (Test-StatusXray)) { $useProxy = $false }
+
+    if ($ServerHost -and $ServerUser) {
+        # Non-interactive (documented parameter overrides): no form, write immediately
+        if (-not (Test-ConfigFields $srvHost $srvUser $srvPort $revPort)) { throw 'Invalid tunnel config values' }
+        Write-SshConfigBlock -SrvHost $srvHost -SrvUser $srvUser -SrvPort ([int]$srvPort) -RevPort ([int]$revPort) -UseProxy:$useProxy
+        return
+    }
+
+    while ($true) {
+        $hasXray = Test-StatusXray
+        $nmax = if ($hasXray) { 5 } else { 4 }
+        Write-Host ''
+        Write-Host "Tunnel config (Host $TunnelAlias) - edit fields, then apply:"
+        $hostShow = if ($srvHost) { $srvHost } else { '(not set)' }
+        $userShow = if ($srvUser) { $srvUser } else { '(not set)' }
+        Write-Host ('  1) {0,-22} {1}' -f 'Server host / IP', $hostShow)
+        Write-Host ('  2) {0,-22} {1}' -f 'SSH user', $userShow)
+        Write-Host ('  3) {0,-22} {1}' -f 'SSH port', $srvPort)
+        Write-Host ('  4) {0,-22} {1}' -f 'Reverse port', $revPort)
+        if ($hasXray) {
+            $proxyShow = if ($useProxy) { 'yes' } else { 'no' }
+            Write-Host ('  5) {0,-22} {1}' -f 'Route through xray', $proxyShow)
+        }
+        Write-Host '  a) Apply & write config'
+        Write-Host '  q) Cancel (no changes)'
+        $sel = (Read-Default "Select [1-$nmax, a, q]").Trim()
+        switch -Regex ($sel) {
+            '^1$' { $srvHost = Read-Default 'Server host / IP' $srvHost }
+            '^2$' { $srvUser = Read-Default 'SSH user' $srvUser }
+            '^3$' { $srvPort = Read-Default 'SSH port' $srvPort }
+            '^4$' { $revPort = Read-Default 'Reverse port' $revPort }
+            '^5$' {
+                if ($hasXray) { $useProxy = -not $useProxy }
+                else { Write-Warn "Unknown selection: $sel" }
+            }
+            '^[Aa]$' {
+                if (Test-ConfigFields $srvHost $srvUser $srvPort $revPort) {
+                    Write-SshConfigBlock -SrvHost $srvHost -SrvUser $srvUser -SrvPort ([int]$srvPort) -RevPort ([int]$revPort) -UseProxy:$useProxy -Force
+                    return
+                }
+            }
+            '^[Qq]$' { Write-Info 'Cancelled - nothing changed'; return }
+            default { Write-Warn "Unknown selection: $sel" }
+        }
+    }
 }
 
 function Invoke-ItemShowKey {    # item 5: print the local public key
