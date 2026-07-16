@@ -31,6 +31,21 @@ function Set-StrictAcl { param([string]$Path, [switch]$Directory) }
 Check 'sourcing defines Invoke-ItemConfig' ([bool](Get-Command Invoke-ItemConfig -ErrorAction SilentlyContinue))
 Check 'paths are sandboxed' ($SshConfig.StartsWith($tmp))
 
+# --- Read-VlessNodes ----------------------------------------------------------
+New-Item -ItemType Directory -Force -Path $RcConfigDir | Out-Null
+@"
+
+# comment line
+vless://uuid-a@a.example:443?type=tcp#node-a
+   # indented comment
+vless://uuid-b@b.example:443?type=tcp#node-b
+"@ | Set-Content $VlessNodes
+$nodes = Read-VlessNodes $VlessNodes
+Check 'nodes: two nodes survive filtering' ($nodes.Count -eq 2)
+Check 'nodes: first node kept'  ($nodes[0] -eq 'vless://uuid-a@a.example:443?type=tcp#node-a')
+Check 'nodes: second node kept' ($nodes[1] -eq 'vless://uuid-b@b.example:443?type=tcp#node-b')
+Check 'nodes: missing file gives empty set' ((Read-VlessNodes (Join-Path $RcConfigDir 'nope.txt')).Count -eq 0)
+
 # --- ConvertTo-VlessJson ------------------------------------------------------
 $u = 'vless://11111111-2222-3333-4444-555555555555@example.com:443?type=tcp&security=reality&pbk=PUBKEYXYZ&sid=ab12&sni=www.microsoft.com&fp=chrome&flow=xtls-rprx-vision#node'
 $tpl = ConvertTo-VlessJson $u

@@ -72,6 +72,7 @@ $RcConfigDir  = Join-Path $env:LOCALAPPDATA 'remote-claude'
 $XrayJson     = Join-Path $RcConfigDir 'xray.json'
 $XrayLauncher = Join-Path $RcConfigDir 'xray-proxy.ps1'
 $XrayVendorBin = Join-Path (Join-Path $RcConfigDir 'bin') 'xray.exe'
+$VlessNodes   = Join-Path $RcConfigDir 'vless-nodes.txt'
 
 function Write-Info { param([string]$Msg) Write-Host "[+] $Msg" -ForegroundColor Green }
 function Write-Warn { param([string]$Msg) Write-Host "[!] $Msg" -ForegroundColor Yellow }
@@ -238,6 +239,19 @@ function ConvertTo-VlessJson {
         )
     }
     return ($config | ConvertTo-Json -Depth 10)
+}
+
+function Read-VlessNodes { # node URLs from a nodes file; comments and blanks dropped
+    param([string]$Path)
+    $nodes = @()
+    if (Test-Path $Path) {
+        foreach ($line in @(Get-Content $Path)) {
+            $t = "$line".Trim()
+            if (-not $t -or $t.StartsWith('#')) { continue }
+            $nodes += $t
+        }
+    }
+    return ,$nodes
 }
 
 function Resolve-XrayExe { # path to an xray binary, or $null
