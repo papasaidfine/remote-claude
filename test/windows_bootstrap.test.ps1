@@ -125,6 +125,11 @@ Check 'launcher parses without errors' ($launchErrors.Count -eq 0)
 $launcherSrc = Get-Content -Raw $XrayLauncher
 Check 'launcher: kill-on-close job'     ($launcherSrc.Contains('0x2000'))
 Check 'launcher: replaces placeholders' ($launcherSrc.Contains('"__DOKO_PORT__"') -and $launcherSrc.Contains('__DEST_HOST__'))
+Check 'launcher embeds ConvertTo-VlessJson' ($launcherSrc.Contains('function ConvertTo-VlessJson'))
+Check 'launcher embeds Read-VlessNodes'     ($launcherSrc.Contains('function Read-VlessNodes'))
+Check 'launcher picks a random node'        ($launcherSrc.Contains('Get-Random'))
+Check 'launcher reads vless-nodes.txt'      ($launcherSrc.Contains('vless-nodes.txt'))
+Check 'launcher no longer reads xray.json'  (-not $launcherSrc.Contains("'xray.json'"))
 
 # --- Test-StatusXray ----------------------------------------------------------
 Check 'status: xray not ready yet' (-not (Test-StatusXray))
