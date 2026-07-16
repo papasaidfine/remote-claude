@@ -30,8 +30,10 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 
 ### 可选：让隧道走 xray（VLESS）代理
 
-网络较差 / 受限时，macOS 引导脚本多了一个菜单项（**6) xray client**）：粘贴一个
-`vless://` URL，它会装好 xray 并起一个本地 SOCKS 代理。随后菜单项 4 会询问是否把
+网络较差 / 受限时，macOS 引导脚本多了一个菜单项（**6) xray client**）：装好 xray、
+把你的 `vless://` URL 写进 `~/.config/remote-claude/vless-nodes.txt`，并起一个本地
+SOCKS 代理。该文件一行一个节点（`#` 开头是注释），每次 xray 启动随机选一个——
+改文件即可换/加节点，无需重跑脚本。随后菜单项 4 会询问是否把
 `remote-claude` 隧道走该代理——于是 VSCode Remote-SSH 和 `ssh remote-claude -t
 "claude"` 会自动把 SSH 套进 xray；xray 在连接时按需拉起，无后台常驻服务。
 
@@ -41,12 +43,14 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 Windows 上 `bootstrap-windows.ps1` 也有同样的第 6、7 项。但模型与 macOS 不同：
 不是共享一个按需常驻的 xray，而是**每条 ssh 连接启动一个自己的 xray，连接一断
 内核立刻把它杀掉**（kill-on-close Job Object）——不用启、不用停、不留进程。
-每条连接的日志在 `%TEMP%\rc-xray-*.log`。
+每条连接的日志在 `%TEMP%\rc-xray-*.log`。每条连接都独立地从
+`%LOCALAPPDATA%\remote-claude\vless-nodes.txt` 随机选节点。
 
-停止按需启动的 xray（仅 macOS 需要；Windows 会自行清理）：
+停止按需启动的 xray（仅 macOS 需要；Windows 会自行清理）——下次连接会重新
+随机选一个节点再拉起：
 
 ```bash
-pkill -f 'xray run -c .*remote-claude/xray.json'
+pkill -f 'xray run -c .*remote-claude/xray-current.json'
 ```
 
 ## 2. 配置服务器

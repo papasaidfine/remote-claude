@@ -31,8 +31,11 @@ The menu items ask only for what they need: the tunnel-config item asks for your
 ### Optional: route the tunnel through an xray (VLESS) proxy
 
 On a poor / censored network, the macOS bootstrap has an extra menu item
-(**6) xray client**) that takes a `vless://` URL, installs xray, and runs a
-local SOCKS proxy. Then menu item 4 offers to route the `remote-claude` tunnel
+(**6) xray client**) that installs xray, seeds
+`~/.config/remote-claude/vless-nodes.txt` with your `vless://` URL, and runs a
+local SOCKS proxy. List several nodes in that file (one URL per line, `#`
+comments) and every xray start picks one at random — swap or add nodes by
+editing the file, no re-run needed. Then menu item 4 offers to route the `remote-claude` tunnel
 through it, so VSCode Remote-SSH and `ssh remote-claude -t "claude"`
 automatically tunnel SSH through xray — xray is started on demand at connect
 time, with no background service.
@@ -46,11 +49,14 @@ different from macOS: instead of one shared on-demand xray, **every ssh
 connection starts its own xray and the kernel kills it the moment that
 connection closes** (kill-on-close Job Object) — nothing to start, nothing to
 stop, no leftover processes. Per-connection logs live in `%TEMP%\rc-xray-*.log`.
+Every connection independently picks a random node from
+`%LOCALAPPDATA%\remote-claude\vless-nodes.txt`.
 
-Stop the on-demand xray (macOS only; Windows cleans up by itself):
+Stop the on-demand xray (macOS only; Windows cleans up by itself) — the next
+connect starts it again with a freshly picked node:
 
 ```bash
-pkill -f 'xray run -c .*remote-claude/xray.json'
+pkill -f 'xray run -c .*remote-claude/xray-current.json'
 ```
 
 ## 2. Set up the server

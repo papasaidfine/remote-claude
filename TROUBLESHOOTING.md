@@ -125,15 +125,19 @@ On macOS the `ProxyCommand` starts xray on demand and waits for
 - Check the log: `cat ~/.config/remote-claude/xray.log` — a bad `vless://`
   URL or an unreachable server shows up here.
 - Confirm the SOCKS port came up: `nc -z 127.0.0.1 10808 && echo up`.
-- Re-run bootstrap item 6 to regenerate `~/.config/remote-claude/xray.json`
-  if you pasted the wrong URL.
+- The log's `starting xray with node:` line shows which node was picked. Fix
+  or remove a bad URL in `~/.config/remote-claude/vless-nodes.txt` (the
+  generated config is `~/.config/remote-claude/xray-current.json`), then
+  `pkill xray` and reconnect.
 - To bypass xray temporarily, run bootstrap item 7 to toggle the proxy off
   (run it again to re-enable).
 
 On Windows (per-connection model — each ssh connection runs its own xray):
 
 - Check the newest `%TEMP%\rc-xray-*.log` — a bad `vless://` URL or an
-  unreachable server shows up there (the log is kept when startup fails).
+  unreachable server shows up there (the log is kept when startup fails), and
+  its first line names the node that was picked (`chosen node: …`). Fix or
+  remove a bad URL in `%LOCALAPPDATA%\remote-claude\vless-nodes.txt`.
 - Acceptance check: connect, `xray.exe` appears in Task Manager; disconnect,
   it disappears within a second or two. Two concurrent connections run two
   independent `xray.exe` processes.

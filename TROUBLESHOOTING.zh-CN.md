@@ -125,13 +125,16 @@ SSH 失败时：
 - 看日志：`cat ~/.config/remote-claude/xray.log`——`vless://` URL 有误或服务器
   不可达都会在这里体现。
 - 确认 SOCKS 端口起来了：`nc -z 127.0.0.1 10808 && echo up`。
-- URL 粘错了就重跑引导脚本 item 6，重新生成 `~/.config/remote-claude/xray.json`。
+- 日志里的 `starting xray with node:` 一行显示这次选中的节点。URL 有问题就直接改
+  `~/.config/remote-claude/vless-nodes.txt`（生成的配置在
+  `~/.config/remote-claude/xray-current.json`），然后 `pkill xray` 重连。
 - 想临时不走 xray：跑 item 7 把代理关掉（再跑一次重新打开）。
 
 Windows（每连接一实例模型——每条 ssh 连接跑一个自己的 xray）：
 
 - 看最新的 `%TEMP%\rc-xray-*.log`——`vless://` URL 有误或服务器不可达都会在这里
-  体现（启动失败时日志会保留）。
+  体现（启动失败时日志会保留），第一行 `chosen node: …` 是这次选中的节点。URL
+  有问题就直接改 `%LOCALAPPDATA%\remote-claude\vless-nodes.txt`。
 - 验收方法：连接后任务管理器里应出现 `xray.exe`，断开后一两秒内消失；两条并发
   连接会各有一个独立的 `xray.exe`。
 - 找不到 `xray.exe` 就重跑引导脚本 item 6。
