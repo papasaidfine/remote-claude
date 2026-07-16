@@ -308,25 +308,77 @@ run_authorize() { # item 3: authorize the server's connect-back key
   add_authorized_key "$pubkey"
 }
 
-run_config() { # item 4: Host remote-claude block
+check_config_fields() { # check_config_fields <host> <user> <port> <rport>
+  [[ -n "$1" ]] || { err "Server host must not be empty"; return 1; }
+  [[ -n "$2" ]] || { err "SSH user must not be empty"; return 1; }
+  [[ "$3" =~ ^[0-9]+$ ]] || { err "SSH port must be a number"; return 1; }
+  [[ "$4" =~ ^[0-9]+$ ]] || { err "Reverse port must be a number"; return 1; }
+}
+
+run_config() { # item 4: Host remote-claude block — form: edit fields, then apply
   ensure_ssh_dir
-  local server_host server_user server_port reverse_port use_proxy=0
-  server_host="${SERVER_HOST:-$(ask 'Remote server hostname / IP')}"
-  [[ -n "$server_host" ]] || die "Server hostname must not be empty"
-  server_user="${SERVER_USER:-$(ask 'Remote server SSH user')}"
-  [[ -n "$server_user" ]] || die "Server user must not be empty"
-  server_port="${SERVER_PORT:-$(ask 'Remote server SSH port' '22')}"
-  [[ "$server_port" =~ ^[0-9]+$ ]] || die "SSH port must be a number"
-  reverse_port="${REVERSE_PORT:-$(ask 'Reverse SSH port on the server (used by Claude/Codex to connect back)' '2222')}"
-  [[ "$reverse_port" =~ ^[0-9]+$ ]] || die "Reverse port must be a number"
-  if status_xray; then
-    if [[ -n "${USE_XRAY_PROXY:-}" ]]; then
-      [[ "$USE_XRAY_PROXY" == "1" ]] && use_proxy=1
-    elif ask_yn "Route this tunnel through the local xray proxy" "Y"; then
-      use_proxy=1
-    fi
+  local host="" user="" port="" rport="" use_proxy=0 sel nmax proxy_label
+  # Pre-fill: existing managed block, then explicit env overrides, then defaults
+  if status_config; then
+    host="$(config_block_value HostName)"
+    user="$(config_block_value User)"
+    port="$(config_block_value Port)"
+    rport="$(config_block_value RemoteForward)"; rport="${rport##*:}"
+    config_proxy_on && use_proxy=1
+  elif status_xray; then
+    use_proxy=1   # no block yet: same default-yes as the old proxy question
   fi
-  write_ssh_config_block "$server_host" "$server_user" "$server_port" "$reverse_port" "$use_proxy"
+  host="${SERVER_HOST:-$host}"
+  user="${SERVER_USER:-$user}"
+  port="${SERVER_PORT:-${port:-22}}"
+  rport="${REVERSE_PORT:-${rport:-2222}}"
+  if [[ -n "${USE_XRAY_PROXY:-}" ]]; then
+    use_proxy=0; [[ "$USE_XRAY_PROXY" == "1" ]] && use_proxy=1
+  fi
+  status_xray || use_proxy=0
+
+  if [[ -n "${SERVER_HOST:-}" && -n "${SERVER_USER:-}" ]]; then
+    # Non-interactive (documented env overrides): no form, write immediately
+    check_config_fields "$host" "$user" "$port" "$rport" || return 1
+    write_ssh_config_block "$host" "$user" "$port" "$rport" "$use_proxy"
+    return 0
+  fi
+
+  while true; do
+    nmax=4; status_xray && nmax=5
+    echo
+    echo "Tunnel config (Host $TUNNEL_ALIAS) — edit fields, then apply:"
+    printf '  1) %-22s %s\n' 'Server host / IP' "${host:-(not set)}"
+    printf '  2) %-22s %s\n' 'SSH user'         "${user:-(not set)}"
+    printf '  3) %-22s %s\n' 'SSH port'         "$port"
+    printf '  4) %-22s %s\n' 'Reverse port'     "$rport"
+    if [[ $nmax == 5 ]]; then
+      proxy_label=no; [[ "$use_proxy" == 1 ]] && proxy_label=yes
+      printf '  5) %-22s %s\n' 'Route through xray' "$proxy_label"
+    fi
+    echo '  a) Apply & write config'
+    echo '  q) Cancel (no changes)'
+    read -r -p "Select [1-$nmax, a, q]: " sel \
+      || { warn "No selection (EOF) — nothing changed"; return 0; }
+    case "$sel" in
+      1) host="$(ask 'Server host / IP' "$host")" ;;
+      2) user="$(ask 'SSH user' "$user")" ;;
+      3) port="$(ask 'SSH port' "$port")" ;;
+      4) rport="$(ask 'Reverse port' "$rport")" ;;
+      5)
+        if [[ $nmax == 5 ]]; then
+          use_proxy=$((1 - use_proxy))
+        else
+          warn "Unknown selection: $sel"
+        fi ;;
+      a|A)
+        check_config_fields "$host" "$user" "$port" "$rport" || continue
+        write_ssh_config_block "$host" "$user" "$port" "$rport" "$use_proxy" 1
+        return 0 ;;
+      q|Q) log "Cancelled — nothing changed"; return 0 ;;
+      *) warn "Unknown selection: $sel" ;;
+    esac
+  done
 }
 
 run_show_key() { # item 5: print the local public key for the server-side handoff
