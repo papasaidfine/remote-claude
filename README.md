@@ -26,7 +26,7 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 .\bootstrap-windows.ps1
 ```
 
-The menu items ask only for what they need: the tunnel-config item asks for your server's address/user/port and a reverse port (default 2222); the authorize item asks for the server-side public key from step 2 — run step 2 first and paste it, or skip that item and re-run it later. The scripts never SSH anywhere themselves; key exchange is copy-paste.
+The menu items ask only for what they need: the tunnel-config item shows a small form — server address/user/port and a reverse port (default 2222), pre-filled with current values; edit any field, then apply; the authorize item asks for the server-side public key from step 2 — run step 2 first and paste it, or skip that item and re-run it later. The scripts never SSH anywhere themselves; key exchange is copy-paste.
 
 ### Optional: route the tunnel through an xray (VLESS) proxy
 
