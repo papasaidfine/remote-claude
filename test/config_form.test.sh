@@ -31,7 +31,7 @@ check_absent() { # check_absent <description> <haystack> <needle>
   fi
 }
 
-# --- fresh config: set host + user, apply; ports get defaults ------------------
+# --- fresh config: set host + user, apply; NO reverse port, NO proxy -----------
 ( run_config ) >/dev/null 2>&1 <<'IN'
 1
 203.0.113.9
@@ -40,40 +40,51 @@ dave
 a
 IN
 cfg="$(cat "$SSH_CONFIG")"
-check 'apply: host written'            "$cfg" 'HostName 203.0.113.9'
-check 'apply: user written'            "$cfg" 'User dave'
-check 'apply: default ssh port'        "$cfg" 'Port 22'
-check 'apply: default reverse port'    "$cfg" 'RemoteForward 127.0.0.1:2222 127.0.0.1:22'
-check_absent 'apply: no proxy without xray' "$cfg" 'ProxyCommand'
+check 'apply: host written'      "$cfg" 'HostName 203.0.113.9'
+check 'apply: user written'      "$cfg" 'User dave'
+check 'apply: default ssh port'  "$cfg" 'Port 22'
+check_absent 'apply: no RemoteForward in base block' "$cfg" 'RemoteForward'
+check_absent 'apply: no proxy in base block'         "$cfg" 'ProxyCommand'
 
-# --- pre-fill from the block: edit only the reverse port, apply ----------------
+# --- pre-fill: edit only the ssh port, host/user survive ------------------------
 ( run_config ) >/dev/null 2>&1 <<'IN'
-4
-2345
+3
+2200
 a
 IN
 cfg="$(cat "$SSH_CONFIG")"
-check 'prefill: host preserved'        "$cfg" 'HostName 203.0.113.9'
-check 'prefill: user preserved'        "$cfg" 'User dave'
-check 'prefill: reverse port updated'  "$cfg" 'RemoteForward 127.0.0.1:2345 127.0.0.1:22'
+check 'prefill: host preserved' "$cfg" 'HostName 203.0.113.9'
+check 'prefill: user preserved' "$cfg" 'User dave'
+check 'prefill: port updated'   "$cfg" 'Port 2200'
 [[ "$(grep -cF "$BEGIN_MARK" "$SSH_CONFIG")" == 1 ]] \
   && printf 'ok   - prefill: single managed block\n' \
   || { printf 'FAIL - prefill: managed block duplicated\n'; fail=1; }
 
-# --- cancel writes nothing ------------------------------------------------------
+# --- cross-preservation: item 4 must keep RemoteForward + ProxyCommand ----------
+write_ssh_config_block '203.0.113.9' 'dave' '2200' '2345' 1 1 >/dev/null
+( run_config ) >/dev/null 2>&1 <<'IN'
+1
+198.51.100.7
+a
+IN
+cfg="$(cat "$SSH_CONFIG")"
+check 'preserve: host updated'          "$cfg" 'HostName 198.51.100.7'
+check 'preserve: RemoteForward kept'    "$cfg" 'RemoteForward 127.0.0.1:2345 127.0.0.1:22'
+check 'preserve: ExitOnForwardFailure'  "$cfg" 'ExitOnForwardFailure yes'
+check 'preserve: ProxyCommand kept'     "$cfg" "ProxyCommand $XRAY_LAUNCHER %h %p"
+
+# --- cancel / EOF write nothing --------------------------------------------------
 ( run_config ) >/dev/null 2>&1 <<'IN'
 1
 changed.example
 q
 IN
 check_absent 'cancel: edit not written' "$(cat "$SSH_CONFIG")" 'changed.example'
-
-# --- EOF on the select prompt exits without writing ----------------------------
 ( run_config ) </dev/null >/dev/null 2>&1 \
   || { printf 'FAIL - eof: run_config should exit zero\n'; fail=1; }
-check 'eof: config unchanged' "$(cat "$SSH_CONFIG")" 'HostName 203.0.113.9'
+check 'eof: config unchanged' "$(cat "$SSH_CONFIG")" 'HostName 198.51.100.7'
 
-# --- validation: apply with empty host errors, form continues ------------------
+# --- validation: empty host reported, form continues -----------------------------
 out="$( ( SSH_CONFIG="$TMP/fresh-config"; run_config ) 2>&1 >/dev/null <<'IN'
 a
 1
@@ -86,41 +97,12 @@ IN
 check 'validate: empty host reported' "$out" 'Server host must not be empty'
 check 'validate: fixed then applied'  "$(cat "$TMP/fresh-config")" 'HostName h.example'
 
-# --- validation: non-numeric port rejected, then fixed --------------------------
-out="$( ( run_config ) 2>&1 >/dev/null <<'IN'
-3
-abc
-a
-3
-2200
-a
-IN
-)"
-check 'validate: bad port reported' "$out" 'SSH port must be a number'
-check 'validate: fixed port applied' "$(cat "$SSH_CONFIG")" 'Port 2200'
-
-# --- proxy row appears + toggles when xray is configured ------------------------
-mkdir -p "$TMP/bin"
-printf 'vless://u@h.example:443?type=tcp#t\n' > "$VLESS_NODES"
-: > "$XRAY_LAUNCHER"
-printf '#!/bin/sh\n' > "$XRAY_VENDOR_BIN"; chmod +x "$XRAY_VENDOR_BIN"
-( run_config ) >/dev/null 2>&1 <<'IN'
-5
-a
-IN
-check 'proxy: toggled on and written' "$(cat "$SSH_CONFIG")" "ProxyCommand $XRAY_LAUNCHER %h %p"
-( run_config ) >/dev/null 2>&1 <<'IN'
-5
-a
-IN
-check_absent 'proxy: toggled back off' "$(cat "$SSH_CONFIG")" 'ProxyCommand'
-
-# --- non-interactive: SERVER_HOST + SERVER_USER skip the form -------------------
+# --- non-interactive: SERVER_HOST + SERVER_USER skip the form --------------------
 ( SSH_CONFIG="$TMP/auto-config" SERVER_HOST=192.0.2.10 SERVER_USER=auto run_config ) </dev/null >/dev/null 2>&1 \
   || { printf 'FAIL - auto: run_config exited non-zero\n'; fail=1; }
 cfg="$(cat "$TMP/auto-config")"
-check 'auto: host written'  "$cfg" 'HostName 192.0.2.10'
-check 'auto: user written'  "$cfg" 'User auto'
-check 'auto: default ports' "$cfg" 'RemoteForward 127.0.0.1:2222 127.0.0.1:22'
+check 'auto: host written' "$cfg" 'HostName 192.0.2.10'
+check 'auto: user written' "$cfg" 'User auto'
+check_absent 'auto: no RemoteForward' "$cfg" 'RemoteForward'
 
 exit $fail
