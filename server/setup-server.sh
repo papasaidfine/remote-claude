@@ -12,7 +12,7 @@
 #      and print its public key — paste it into the local bootstrap.
 #   2. Ask for the LOCAL machine's public key and append it to this server's
 #      ~/.ssh/authorized_keys (dedup by key blob) — that is what authorizes
-#      the tunnel login (ssh -N remote-claude).
+#      the tunnel login (ssh remote-claude).
 #   3. Write a managed "Host my-device" block into ~/.ssh/config that points
 #      at the reverse tunnel (127.0.0.1:<reverse_port>).
 #   4. Install agent instructions into ~/.claude/CLAUDE.md telling Claude
@@ -282,9 +282,10 @@ When quoting through two shells gets hairy, pipe a whole script instead
 
 ## When ssh my-device fails
 
-- `Connection refused`: the reverse tunnel is down. Tell the user to start
-  `ssh -N remote-claude` on their machine. Nothing on this server can fix
-  it — do not retry endlessly or work around it by editing files here.
+- `Connection refused`: the reverse tunnel is down. Tell the user to reconnect
+  to the server (VSCode Remote-SSH, or `ssh remote-claude`) — the tunnel rides
+  on that connection. Nothing on this server can fix it — do not retry
+  endlessly or work around it by editing files here.
 - Host key mismatch: stop and tell the user; the machine behind the tunnel
   may have changed.
 CLAUDE_MD_EOF
@@ -360,7 +361,7 @@ run_authorize_local() { # item 2: authorize the local machine's key (tunnel logi
   ensure_ssh_dir
   local pubkey
   echo "Public key of the LOCAL machine: the .pub of the key the tunnel"
-  echo "(ssh -N remote-claude) logs in to this server with. The local bootstrap"
+  echo "(ssh remote-claude) logs in to this server with. The local bootstrap"
   echo "shows it (item 5), or run: cat ~/.ssh/id_ed25519.pub  on your machine."
   pubkey="${LOCAL_PUBKEY:-$(ask 'Local machine public key' '')}"
   [[ -n "$pubkey" ]] || die "No key pasted; nothing changed"
@@ -440,6 +441,7 @@ while true; do
 done
 
 echo
-log "Start the tunnel on the LOCAL machine: ssh -N remote-claude"
+log "Connect from the LOCAL machine as usual — VSCode Remote-SSH or: ssh remote-claude"
+log "(the reverse tunnel rides on that connection, one connection at a time)."
 log "Then test from this server: ssh $LOCAL_ALIAS 'echo ok'"
-log "Normal workflow: connect as usual (e.g. VSCode Remote-SSH) and start 'claude'."
+log "Normal workflow: stay connected and start 'claude'."

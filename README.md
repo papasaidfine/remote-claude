@@ -2,16 +2,38 @@
 
 English | [中文](README.zh-CN.md)
 
-Let Claude / Codex on a remote server SSH back into your local machine (Windows / macOS / Linux) through a reverse tunnel, and work in your local project directory. The tunnel stays on `127.0.0.1` at both ends — the reverse port is never exposed to the LAN or internet, and the server-side key only works through it.
+Use Claude / Codex on a remote server to work on the code on **your own
+machine** (Windows / macOS / Linux). Your normal SSH connection to the server
+carries a reverse tunnel; the agent uses it to `ssh my-device` back into your
+machine and does all project work there.
 
 ```
-you                      : ssh -N remote-claude        (keep it running)
-agent on the server      : ssh my-device                (lands on your machine)
+you    ── VSCode Remote-SSH / ssh remote-claude ──▶  server
+agent  ── ssh my-device ──▶  your machine    (through the reverse tunnel)
 ```
+
+- **Nothing extra to run** — connecting to the server the way you always do
+  (VSCode Remote-SSH, or `ssh remote-claude` in a terminal) brings the reverse
+  tunnel up with it and closes it when you disconnect.
+- **One connection at a time** — the reverse port can only be held once; a
+  second `remote-claude` connection fails until the first one closes.
+- **Private by construction** — the reverse port stays on `127.0.0.1` at both
+  ends, is never exposed to LAN or internet, and the server-side key only
+  works through the tunnel.
+- **Menu-driven setup on both sides** — independent, idempotent items that
+  show what's already configured; safe to re-run any time. Key exchange is
+  copy-paste; the scripts never SSH anywhere themselves.
+- **Agent-ready server** — installs `~/.claude/CLAUDE.md` so `claude` works on
+  your machine through `ssh my-device`, plus an agent-maintained facts file
+  (your OS, project paths) so new sessions skip rediscovery.
+- **Optional xray (VLESS) proxy** for bad networks — nodes live in a plain
+  text file; every xray start picks one at random.
+- **Easy rollback** — every file the scripts touch is backed up first
+  (`*.claude-bak-<timestamp>`) and marked with `claude`.
 
 ## 1. Set up your local machine
 
-**macOS / Linux** — run it and pick items from the menu; each item is independent, idempotent, and shows whether it is already configured (only the sshd item needs sudo):
+**macOS / Linux** (only the sshd item needs sudo):
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-macos.sh)   # macOS
@@ -26,38 +48,8 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 .\bootstrap-windows.ps1
 ```
 
-The menu items ask only for what they need: the tunnel-config item shows a small form — server address/user/port and a reverse port (default 2222), pre-filled with current values; edit any field, then apply; the authorize item asks for the server-side public key from step 2 — run step 2 first and paste it, or skip that item and re-run it later. The scripts never SSH anywhere themselves; key exchange is copy-paste.
-
-### Optional: route the tunnel through an xray (VLESS) proxy
-
-On a poor / censored network, the macOS bootstrap has an extra menu item
-(**6) xray client**) that installs xray, seeds
-`~/.config/remote-claude/vless-nodes.txt` with your `vless://` URL, and runs a
-local SOCKS proxy. List several nodes in that file (one URL per line, `#`
-comments) and every xray start picks one at random — swap or add nodes by
-editing the file, no re-run needed. Then menu item 4 offers to route the `remote-claude` tunnel
-through it, so VSCode Remote-SSH and `ssh remote-claude -t "claude"`
-automatically tunnel SSH through xray — xray is started on demand at connect
-time, with no background service.
-
-Added xray after the tunnel config was already written? Menu item **7** toggles
-the proxy on/off in place — it reuses the server details stored in the config
-block, so nothing needs to be retyped.
-
-On Windows, `bootstrap-windows.ps1` has the same items 6 and 7. The model is
-different from macOS: instead of one shared on-demand xray, **every ssh
-connection starts its own xray and the kernel kills it the moment that
-connection closes** (kill-on-close Job Object) — nothing to start, nothing to
-stop, no leftover processes. Per-connection logs live in `%TEMP%\rc-xray-*.log`.
-Every connection independently picks a random node from
-`%LOCALAPPDATA%\remote-claude\vless-nodes.txt`.
-
-Stop the on-demand xray (macOS only; Windows cleans up by itself) — the next
-connect starts it again with a freshly picked node:
-
-```bash
-pkill -f 'xray run -c .*remote-claude/xray-current.json'
-```
+Work through the menu top to bottom. When asked for the "server-side public
+key", paste the key printed in step 2 (or skip that item and re-run it later).
 
 ## 2. Set up the server
 
@@ -67,39 +59,46 @@ On the remote server (no sudo needed):
 bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/server/setup-server.sh)
 ```
 
-It presents the same kind of menu. Its first item prints a public key — paste it into the local bootstrap when asked for the "server-side public key". Use the same reverse port on both sides. Separate menu items install `~/.claude/CLAUDE.md` instructions so Claude Code does all project work through `ssh my-device` instead of touching this server's filesystem, and seed an agent-maintained facts file (`~/.config/remote-claude/facts.json` — your machine's OS, project paths and descriptions) that Claude reads at session start and keeps updated, so new sessions skip the rediscovery.
+- Its first item prints the server's public key → paste it into the local
+  bootstrap when asked for the "server-side public key".
+- Another item asks for **your local machine's key** (the local menu's "show
+  key" item prints it) → that authorizes the tunnel login.
+- The remaining items install the `~/.claude/CLAUDE.md` instructions and the
+  facts file that make `claude` work on your machine.
+- Use the same reverse port on both sides (default 2222).
 
-If you skipped that CLAUDE.md prompt (or just want the instructions without the rest), fetch them directly:
+## 3. Use it
 
-```bash
-mkdir -p ~/.claude && curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/server/CLAUDE.md >> ~/.claude/CLAUDE.md
-```
+Connect to the server as usual — **VSCode Remote-SSH** (host `remote-claude`)
+or a plain `ssh remote-claude` in a terminal — and start `claude`. Tell it
+which local project to work on ("work on `~/projects/foo`").
 
-This appends, so an existing `~/.claude/CLAUDE.md` keeps its content — but running it twice duplicates the block, and the setup script's managed install won't deduplicate a copy added this way. Pick one method and stick with it.
-
-Another menu item asks for the **local** machine's public key (the local bootstrap's "show key" item prints it; or `cat ~/.ssh/id_ed25519.pub` on your machine) and adds it to this server's `~/.ssh/authorized_keys` — that is what authorizes the tunnel login. Skipped it? Re-run that item and paste it, or use `ssh-copy-id`.
-
-## 3. Start the tunnel and use it
-
-On your local machine (keep it running):
-
-```bash
-ssh -N remote-claude
-```
-
-On the server, the normal workflow is: connect however you usually do (e.g. **VSCode Remote-SSH**) and just start `claude`. The `~/.claude/CLAUDE.md` installed in step 2 makes it do all project work on your machine through `ssh my-device` — simply tell it which local project to work on ("work on `~/projects/foo`").
-
-Quick tunnel test:
+Quick test, on the server:
 
 ```bash
 ssh my-device 'echo ok'                # should print ok
 ```
 
-## Stop / uninstall
+If the connection fails because the reverse port is taken, close the previous
+`remote-claude` session first — only one connection can hold the tunnel.
 
-- Stop the tunnel: `Ctrl-C` in the terminal running `ssh -N remote-claude`.
-- Everything the scripts change is backed up first (`*.claude-bak-<timestamp>`) and marked with `claude` in the file/block name, so it's easy to find and remove. Ask your AI assistant to walk you through a full rollback, or just point it at the scripts in this repo.
+## Optional: route the tunnel through an xray (VLESS) proxy
+
+On a poor / censored network, the macOS and Windows bootstraps have two extra
+items. **6) xray client** installs xray and writes your `vless://` URL into a
+node list (`~/.config/remote-claude/vless-nodes.txt` on macOS,
+`%LOCALAPPDATA%\remote-claude\vless-nodes.txt` on Windows) — one URL per line,
+`#` comments, a random node per xray start; edits take effect on the next
+connect. **7)** toggles routing the tunnel through the proxy. On Windows each
+connection runs its own xray and it dies with the connection; on macOS one
+on-demand xray is shared — `pkill xray` and reconnect to switch node.
+
+## Uninstall
+
+Everything the scripts change is backed up first (`*.claude-bak-<timestamp>`)
+and marked with `claude` in the file or block name. Point your AI assistant at
+this repo and ask it to walk you through a full rollback.
 
 ## Something not working?
 
-See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — it's organized by symptom, hop by hop.
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — organized by symptom, hop by hop.

@@ -3,9 +3,9 @@
 [English](TROUBLESHOOTING.md) | 中文
 
 按数据路径分层排查：**本地 → 服务器（隧道跳） → 服务器上的反向端口 → 本地 sshd**。
-`README.zh-CN.md` 的"手动测试"一节给出了每一跳的独立测试命令，先跑那四步确定断在哪一层。
+下面每一节都从你看到的症状出发，沿这条路径排查。
 
-## 1. 隧道建不起来（`ssh -N remote-claude` 失败）
+## 1. 连不上服务器（VSCode Remote-SSH / `ssh remote-claude` 失败）
 
 ### `Permission denied (publickey)`（连服务器时）
 
@@ -33,7 +33,7 @@ ss -tlnp | grep <reverse_port>
 
 ### `Connection refused`（`ssh -p <reverse_port> ... 127.0.0.1`）
 
-- 隧道其实没在：本地检查 `ssh -N remote-claude` 进程是否存活；
+- 隧道其实没在：确认本地到服务器的 SSH 连接（VSCode Remote-SSH 或 `ssh remote-claude`）还活着——隧道就搭在这条连接上；
 - 本地 sshd 没起来：
   - macOS：`sudo launchctl print system/com.openssh.sshd`；系统设置 → 共享 → 远程登录是否开启；
   - Linux：`systemctl status sshd`（Debian/Ubuntu 是 `ssh`），必要时 `sudo systemctl start sshd`；
@@ -66,8 +66,8 @@ ss -tlnp | grep <reverse_port>
 ## 3. 隧道频繁断开
 
 - 已配置 `ServerAliveInterval 30` / `ServerAliveCountMax 3`（约 90 秒发现死连接并退出）；
-- 想自动重连的话，自己包一层循环：`while true; do ssh -N remote-claude; sleep 15; done`；
-- 笔记本睡眠后 TCP 会断，唤醒后重新启动隧道。
+- 想要一条不依赖编辑器/终端会话的常驻隧道：另开终端跑 `while true; do ssh -N remote-claude; sleep 15; done`；
+- 笔记本睡眠后 TCP 会断，唤醒后重连即可。
 
 ## 4. sshd 配置类问题
 

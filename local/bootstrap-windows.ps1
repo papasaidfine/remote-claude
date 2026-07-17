@@ -6,7 +6,7 @@
   Prepares this Windows machine so a remote server's Claude / Codex agent can
   SSH back into it through a reverse tunnel:
 
-    local PC  -- ssh -N remote-claude -->  remote server
+    local PC  -- ssh remote-claude -->  remote server
     remote server 127.0.0.1:<reverse_port>  -->  local PC 127.0.0.1:22
 
   Presents a menu of independent items -- each is idempotent, shows whether
@@ -803,7 +803,7 @@ function Invoke-ItemShowKey {    # item 5: print the local public key
         Invoke-ItemKey
     }
     Write-Host ''
-    Write-Info "Local public key - paste it into server/setup-server.sh (item 2) on the server; that authorizes the tunnel login (ssh -N $TunnelAlias):"
+    Write-Info "Local public key - paste it into server/setup-server.sh (item 2) on the server; that authorizes the tunnel login (ssh $TunnelAlias):"
     Write-Host ''
     Get-Content "$KeyPath.pub" | Write-Host
     Write-Host ''
@@ -876,6 +876,7 @@ if (-not $env:RC_SOURCED_FOR_TEST) {
     }
 
     Write-Host ''
-    Write-Info "Start the tunnel with: ssh -N $TunnelAlias   (keep it running)"
+    Write-Info "Connect as usual - VSCode Remote-SSH (host $TunnelAlias) or: ssh $TunnelAlias"
+    Write-Info 'The reverse tunnel rides on that connection (one connection at a time).'
     Write-Info "Then on the server: ssh my-device 'echo ok' should print ok"
 }

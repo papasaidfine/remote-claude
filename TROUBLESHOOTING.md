@@ -3,9 +3,9 @@
 English | [中文](TROUBLESHOOTING.zh-CN.md)
 
 Debug layer by layer along the data path: **local → server (tunnel hop) → reverse port on the server → local sshd**.
-The "Manual testing" section of `README.md` gives an independent test command for each hop — run those four steps first to find out which layer is broken.
+Each section below starts from a symptom and works along that path.
 
-## 1. The tunnel won't come up (`ssh -N remote-claude` fails)
+## 1. Connecting to the server fails (VSCode Remote-SSH / `ssh remote-claude`)
 
 ### `Permission denied (publickey)` (connecting to the server)
 
@@ -33,7 +33,7 @@ Because `ExitOnForwardFailure yes` is configured, ssh exits immediately when the
 
 ### `Connection refused` (`ssh -p <reverse_port> ... 127.0.0.1`)
 
-- The tunnel isn't actually up: check on the local machine that the `ssh -N remote-claude` process is alive;
+- The tunnel isn't actually up: check that your SSH connection to the server (VSCode Remote-SSH or `ssh remote-claude`) is still alive — the tunnel rides on it;
 - The local sshd isn't running:
   - macOS: `sudo launchctl print system/com.openssh.sshd`; check System Settings → Sharing → Remote Login;
   - Linux: `systemctl status sshd` (Debian/Ubuntu: `ssh`), then `sudo systemctl start sshd` if needed;
@@ -66,8 +66,8 @@ The user in the connect-back command is the **local machine's username** (the "L
 ## 3. The tunnel keeps dropping
 
 - `ServerAliveInterval 30` / `ServerAliveCountMax 3` are configured (a dead connection is detected and exits within ~90 seconds);
-- To reconnect automatically, wrap the command in a loop: `while true; do ssh -N remote-claude; sleep 15; done`;
-- Laptop sleep kills the TCP connection; after waking, restart the tunnel.
+- Want a tunnel that stays up independent of your editor/terminal session: run `while true; do ssh -N remote-claude; sleep 15; done` in a spare terminal;
+- Laptop sleep kills the TCP connection; after waking, reconnect.
 
 ## 4. sshd configuration issues
 

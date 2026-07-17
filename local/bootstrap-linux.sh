@@ -5,7 +5,7 @@
 # Prepares this Linux machine so a remote server's Claude / Codex agent can
 # SSH back into it through a reverse tunnel:
 #
-#   local linux  ── ssh -N remote-claude ──▶  remote server
+#   local linux  ── ssh remote-claude ──▶  remote server
 #   remote server 127.0.0.1:<reverse_port>  ──▶  local linux 127.0.0.1:22
 #
 # Presents a menu of independent items — each is idempotent, shows whether
@@ -347,7 +347,7 @@ run_show_key() { # item 5: print the local public key for the server-side handof
   fi
   echo
   log "Local public key — paste it into server/setup-server.sh (item 2) on the"
-  log "server; that authorizes the tunnel login (ssh -N $TUNNEL_ALIAS):"
+  log "server; that authorizes the tunnel login (ssh $TUNNEL_ALIAS):"
   echo
   cat "$KEY_PATH.pub"
   echo
@@ -407,5 +407,6 @@ while true; do
 done
 
 echo
-log "Start the tunnel with: ssh -N $TUNNEL_ALIAS   (keep it running)"
+log "Connect as usual — VSCode Remote-SSH (host $TUNNEL_ALIAS) or: ssh $TUNNEL_ALIAS"
+log "The reverse tunnel rides on that connection (one connection at a time)."
 log "Then on the server: ssh my-device 'echo ok' should print ok"

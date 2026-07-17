@@ -2,16 +2,33 @@
 
 [English](README.md) | 中文
 
-让远程服务器上的 Claude / Codex 通过反向 SSH 隧道回到你的本地电脑（Windows / macOS / Linux），在本地项目目录中干活。隧道两端都只绑定 `127.0.0.1`——反向端口绝不暴露到局域网或公网，服务器侧的 key 也只能通过隧道使用。
+让远程服务器上的 Claude / Codex 在**你自己电脑**（Windows / macOS / Linux）的代码上
+干活：你平时连服务器的那条 SSH 连接会顺带建立一条反向隧道，agent 通过它
+`ssh my-device` 回到你的电脑，所有项目操作都在本地执行。
 
 ```
-你（本地）        : ssh -N remote-claude        （保持运行）
-服务器上的 agent  : ssh my-device                （落到你的电脑上）
+你      ── VSCode Remote-SSH / ssh remote-claude ──▶  服务器
+agent   ── ssh my-device ──▶  你的电脑    （走反向隧道）
 ```
+
+- **不用额外跑任何东西**——像平时一样连服务器（VSCode Remote-SSH，或终端里
+  `ssh remote-claude`），反向隧道随连接建立、随断开关闭。
+- **同一时刻只有一条连接**——反向端口只能被占用一次，第二条 `remote-claude`
+  连接会直接失败，先断开旧的。
+- **天生私密**——反向端口两端都只绑 `127.0.0.1`，绝不暴露到局域网或公网；
+  服务器侧的 key 只能通过隧道使用。
+- **两侧都是菜单式配置**——每项独立、幂等、显示是否已配置，随时可重跑。
+  公钥交换全靠复制粘贴，脚本自己不发起任何 SSH 连接。
+- **服务器开箱即用**——自动安装 `~/.claude/CLAUDE.md`，让 `claude` 的项目操作都走
+  `ssh my-device`；另有 agent 自己维护的 facts 文件（你的系统、项目路径），
+  新会话不用重新摸索。
+- **可选 xray（VLESS）代理**应对差网络——节点就是一个纯文本列表文件，
+  每次 xray 启动随机选一个。
+- **好回滚**——脚本动过的文件全部先备份（`*.claude-bak-<时间戳>`）并带 `claude` 标记。
 
 ## 1. 配置本地电脑
 
-**macOS / Linux** — 运行后从菜单里选要做的项——每一项都相互独立、可重复运行、并显示是否已配置好（只有 sshd 那一项需要 sudo）：
+**macOS / Linux**（只有 sshd 那一项需要 sudo）：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-macos.sh)   # macOS
@@ -26,32 +43,8 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 .\bootstrap-windows.ps1
 ```
 
-各菜单项只询问自己需要的信息：隧道配置项是一个小表单——服务器地址/用户/端口和反向端口（默认 2222）预填当前值，改哪项都行，最后统一提交；授权项询问第 2 步打印的服务器侧公钥——可以先做第 2 步再粘贴，也可以先跳过该项之后重跑。脚本本身不会发起任何 SSH 连接，公钥交换全部通过复制粘贴完成。
-
-### 可选：让隧道走 xray（VLESS）代理
-
-网络较差 / 受限时，macOS 引导脚本多了一个菜单项（**6) xray client**）：装好 xray、
-把你的 `vless://` URL 写进 `~/.config/remote-claude/vless-nodes.txt`，并起一个本地
-SOCKS 代理。该文件一行一个节点（`#` 开头是注释），每次 xray 启动随机选一个——
-改文件即可换/加节点，无需重跑脚本。随后菜单项 4 会询问是否把
-`remote-claude` 隧道走该代理——于是 VSCode Remote-SSH 和 `ssh remote-claude -t
-"claude"` 会自动把 SSH 套进 xray；xray 在连接时按需拉起，无后台常驻服务。
-
-如果隧道配置（菜单项 4）已经写好、xray 是后来才加的：用菜单项 **7** 一键开/关
-代理——它复用 config block 里已有的服务器信息，无需重新输入。
-
-Windows 上 `bootstrap-windows.ps1` 也有同样的第 6、7 项。但模型与 macOS 不同：
-不是共享一个按需常驻的 xray，而是**每条 ssh 连接启动一个自己的 xray，连接一断
-内核立刻把它杀掉**（kill-on-close Job Object）——不用启、不用停、不留进程。
-每条连接的日志在 `%TEMP%\rc-xray-*.log`。每条连接都独立地从
-`%LOCALAPPDATA%\remote-claude\vless-nodes.txt` 随机选节点。
-
-停止按需启动的 xray（仅 macOS 需要；Windows 会自行清理）——下次连接会重新
-随机选一个节点再拉起：
-
-```bash
-pkill -f 'xray run -c .*remote-claude/xray-current.json'
-```
+按菜单从上到下做即可。问到 "server-side public key" 时，粘贴第 2 步打印的公钥
+（也可以先跳过，之后重跑该项）。
 
 ## 2. 配置服务器
 
@@ -61,38 +54,40 @@ pkill -f 'xray run -c .*remote-claude/xray-current.json'
 bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/server/setup-server.sh)
 ```
 
-它也是同样的菜单形式。第一个菜单项会打印一个公钥——粘贴到本地 bootstrap 询问 "server-side public key" 的地方。两边的反向端口要填一样的。另有独立菜单项负责安装 `~/.claude/CLAUDE.md` 指令，让 Claude Code 的所有项目操作都走 `ssh my-device`，而不是读写服务器本地文件；以及种下一个由 agent 自己维护的 facts 文件（`~/.config/remote-claude/facts.json`——你机器的操作系统、各项目路径和简介），agent 每次会话开始先读它、学到新事实就更新，新会话不用每次重新摸索。
+- 第一项打印服务器公钥 → 粘到本地 bootstrap 询问 "server-side public key" 的地方。
+- 另一项询问**你本地电脑的公钥**（本地菜单的"显示公钥"项会打印）→ 授权隧道登录。
+- 其余项安装 `~/.claude/CLAUDE.md` 指令和 facts 文件，让 `claude` 在你电脑上干活。
+- 两边的反向端口填一样的（默认 2222）。
 
-如果当时跳过了 CLAUDE.md 那一步（或只想要这份指令、不装其他东西），可以直接下载：
+## 3. 开始使用
 
-```bash
-mkdir -p ~/.claude && curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/server/CLAUDE.md >> ~/.claude/CLAUDE.md
-```
+像平时一样连服务器——**VSCode Remote-SSH**（host 选 `remote-claude`）或终端里
+`ssh remote-claude`——然后启动 `claude`，告诉它做哪个本地项目
+（"在 `~/projects/foo` 上工作"）。
 
-这是追加写入，已有的 `~/.claude/CLAUDE.md` 内容会保留——但重复执行会追加出重复内容，而且 setup 脚本的受管安装不会识别这种手动加入的副本。两种安装方式选一种即可。
-
-还有一个菜单项询问**本地机器的公钥**（本地 bootstrap 的"显示公钥"项会打印；也可以在你电脑上 `cat ~/.ssh/id_ed25519.pub`），粘贴后写入服务器的 `~/.ssh/authorized_keys`——这一步授权的就是隧道登录。当时跳过的话，重跑对应菜单项粘贴，或改用 `ssh-copy-id`。
-
-## 3. 启动隧道，开始使用
-
-在本地电脑上（保持运行）：
-
-```bash
-ssh -N remote-claude
-```
-
-在服务器上，日常用法就是：像平时一样连上服务器（比如 **VSCode Remote-SSH**），直接启动 `claude`。第 2 步装好的 `~/.claude/CLAUDE.md` 会让它的所有项目操作都走 `ssh my-device` 在你电脑上执行——你只需要告诉它这次在哪个本地项目干活（"在 `~/projects/foo` 上工作"）。
-
-快速隧道测试：
+快速验证（在服务器上）：
 
 ```bash
 ssh my-device 'echo ok'                # 应打印 ok
 ```
 
-## 停止 / 卸载
+如果因为反向端口被占用而连接失败：先断开上一条 `remote-claude` 连接——
+隧道同时只能有一条。
 
-- 停止隧道：在运行 `ssh -N remote-claude` 的终端里 `Ctrl-C`。
-- 脚本改动的所有文件都先备份（`*.claude-bak-<时间戳>`），且文件名/配置块里都带 `claude` 标记，很容易找到并删除。需要完整回滚时，直接让你的 AI 助手读本仓库的脚本带你操作即可。
+## 可选：让隧道走 xray（VLESS）代理
+
+网络较差/受限时，macOS 和 Windows 的引导脚本各多两项。**6) xray client** 安装
+xray 并把你的 `vless://` URL 写进节点列表（macOS 在
+`~/.config/remote-claude/vless-nodes.txt`，Windows 在
+`%LOCALAPPDATA%\remote-claude\vless-nodes.txt`）——一行一个节点、`#` 开头是注释，
+每次 xray 启动随机选一个，改文件下次连接即生效。**7)** 一键开/关隧道走代理。
+Windows 每条连接自带一个 xray、连接断了自动清理；macOS 共享一个按需 xray，
+`pkill xray` 后重连即换节点。
+
+## 卸载
+
+脚本改过的文件都有备份（`*.claude-bak-<时间戳>`），文件名/配置块里都带 `claude`
+标记。让你的 AI 助手读本仓库的脚本带你完整回滚即可。
 
 ## 遇到问题？
 
