@@ -52,6 +52,26 @@ check 'force: unmanaged content kept' "$cfg" 'Host other'
   && printf 'ok   - force: single managed block\n' \
   || { printf 'FAIL - force: managed block duplicated\n'; fail=1; }
 
+# --- optional reverse port ------------------------------------------------------
+write_ssh_config_block '203.0.113.7' 'ubuntu' '22' '' 0 1 >/dev/null
+cfg="$(cat "$SSH_CONFIG")"
+check_absent 'no-rport: RemoteForward omitted'        "$cfg" 'RemoteForward'
+check_absent 'no-rport: ExitOnForwardFailure omitted' "$cfg" 'ExitOnForwardFailure'
+check 'no-rport: base fields still written' "$cfg" 'HostName 203.0.113.7'
+check 'no-rport: keepalive still written'   "$cfg" 'ServerAliveInterval 30'
+check 'no-rport: rport helper empty' "x$(config_block_rport)x" 'xx'
+if status_rport; then
+  printf 'FAIL - no-rport: status_rport should be false\n'; fail=1
+else
+  printf 'ok   - no-rport: status_rport false\n'
+fi
+
+write_ssh_config_block '203.0.113.7' 'ubuntu' '22' '2222' 0 1 >/dev/null
+check 'rport: RemoteForward back' "$(cat "$SSH_CONFIG")" 'RemoteForward 127.0.0.1:2222 127.0.0.1:22'
+check 'rport: helper reads port'  "x$(config_block_rport)x" 'x2222x'
+status_rport && printf 'ok   - rport: status_rport true\n' \
+  || { printf 'FAIL - rport: status_rport should be true\n'; fail=1; }
+
 # --- run_proxy (menu item 7) -------------------------------------------------
 # Reset to a known block without the proxy
 write_ssh_config_block '203.0.113.7' 'ubuntu' '22' '2222' 0 1 >/dev/null

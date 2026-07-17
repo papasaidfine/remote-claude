@@ -131,7 +131,7 @@ add_authorized_key() {
   log "Written to authorized_keys (restricted to loopback logins only)"
 }
 
-write_ssh_config_block() { # <host> <user> <port> <reverse_port> [use_proxy 0|1] [force 0|1]
+write_ssh_config_block() { # <host> <user> <port> <reverse_port|''> [use_proxy 0|1] [force 0|1]
   local SERVER_HOST="$1" SERVER_USER="$2" SERVER_PORT="$3" REVERSE_PORT="$4" USE_PROXY="${5:-0}" FORCE="${6:-0}"
   local block tmp
   block=$(
@@ -143,8 +143,10 @@ write_ssh_config_block() { # <host> <user> <port> <reverse_port> [use_proxy 0|1]
     printf '    IdentityFile ~/.ssh/%s\n' "$KEY_NAME"
     printf '    IdentitiesOnly yes\n'
     [[ "$USE_PROXY" == "1" ]] && printf '    ProxyCommand %s %%h %%p\n' "$XRAY_LAUNCHER"
-    printf '    RemoteForward 127.0.0.1:%s 127.0.0.1:22\n' "$REVERSE_PORT"
-    printf '    ExitOnForwardFailure yes\n'
+    if [[ -n "$REVERSE_PORT" ]]; then
+      printf '    RemoteForward 127.0.0.1:%s 127.0.0.1:22\n' "$REVERSE_PORT"
+      printf '    ExitOnForwardFailure yes\n'
+    fi
     printf '    ServerAliveInterval 30\n'
     printf '    ServerAliveCountMax 3\n'
     printf '    ForwardAgent no\n'
@@ -190,6 +192,13 @@ config_block_value() { # config_block_value <Key> -> that key's value inside the
     $0 == end   { inblk = 0 }
     inblk && $1 == key { print $2; exit }
   ' "$SSH_CONFIG" 2>/dev/null
+}
+
+config_block_rport() { # reverse port from the managed block, empty when absent
+  local rf
+  rf="$(config_block_value RemoteForward)"
+  [[ -z "$rf" ]] && return 0
+  printf '%s\n' "${rf##*:}"
 }
 
 # ---------------------------------------------------------------- sshd helpers
@@ -704,6 +713,7 @@ status_sshd() {
 status_key()       { [[ -f "$KEY_PATH" ]]; }
 status_authorize() { grep -qF 'from="127.0.0.1,::1"' "$AUTH_KEYS" 2>/dev/null; }
 status_config()    { grep -qF "$BEGIN_MARK" "$SSH_CONFIG" 2>/dev/null; }
+status_rport()     { [[ -n "$(config_block_value RemoteForward)" ]]; }
 status_xray() {
   [[ -f "$XRAY_LAUNCHER" ]] || return 1
   xray_bin >/dev/null 2>&1 || return 1
