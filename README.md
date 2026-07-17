@@ -14,7 +14,8 @@ agent  ── ssh my-device ──▶  your machine    (reverse ssh)
 
 ## 1. Set up your local machine
 
-**macOS / Linux** (only the sshd item needs sudo):
+**macOS / Linux** — run as your normal user, no `sudo` in front (item 1 calls
+sudo itself when it needs it):
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-macos.sh)   # macOS

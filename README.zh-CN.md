@@ -13,7 +13,8 @@ agent   ── ssh my-device ──▶  你的电脑    （反向 ssh）
 
 ## 1. 配置本地电脑
 
-**macOS / Linux**（只有 sshd 那一项需要 sudo）：
+**macOS / Linux**——用普通用户直接跑、前面不要加 `sudo`（第 1 项需要时脚本
+自己会调 sudo）：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-macos.sh)   # macOS
