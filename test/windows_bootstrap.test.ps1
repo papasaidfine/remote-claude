@@ -116,6 +116,17 @@ $raw = Get-Content -Raw $SshConfig
 Check 'proxy: ProxyCommand line present' ($raw.Contains("-File `"$XrayLauncher`" %h %p"))
 Check 'proxy: after IdentitiesOnly' ($raw.IndexOf('IdentitiesOnly yes') -lt $raw.IndexOf('ProxyCommand'))
 
+# --- optional reverse port ------------------------------------------------------
+Write-SshConfigBlock -SrvHost '203.0.113.7' -SrvUser 'ubuntu' -SrvPort 22 -RevPort 0 -Force
+$raw = Get-Content -Raw $SshConfig
+Check 'no-rport: RemoteForward omitted' (-not $raw.Contains('RemoteForward'))
+Check 'no-rport: base fields written'   ($raw.Contains('HostName 203.0.113.7'))
+Check 'no-rport: helper empty'          ((Get-ConfigBlockRport) -eq '')
+Check 'no-rport: status false'          (-not (Test-StatusRport))
+Write-SshConfigBlock -SrvHost '203.0.113.7' -SrvUser 'ubuntu' -SrvPort 22 -RevPort 2222 -Force
+Check 'rport: helper reads port' ((Get-ConfigBlockRport) -eq '2222')
+Check 'rport: status true'       (Test-StatusRport)
+
 # --- Write-XrayLauncher -------------------------------------------------------
 Write-XrayLauncher
 Check 'launcher written' (Test-Path $XrayLauncher)
@@ -208,45 +219,55 @@ function Read-Default {
     return $v
 }
 
-# Pre-filled from the existing block; edit the host, apply
+# Known starting block: host/user/port + RemoteForward, no proxy
+Write-SshConfigBlock -SrvHost '203.0.113.7' -SrvUser 'ubuntu' -SrvPort 22 -RevPort 2222 -Force
+
+# Pre-filled 3-field form; edit the host; RemoteForward + proxy state pass through
 '1', '198.51.100.77', 'a' | ForEach-Object { $script:inputQueue.Enqueue($_) }
 Invoke-ItemConfig
 $raw = Get-Content -Raw $SshConfig
 Check 'form: edited host written'       ($raw.Contains('HostName 198.51.100.77'))
 Check 'form: untouched user preserved'  ($raw.Contains('User ubuntu'))
-Check 'form: untouched rport preserved' ($raw.Contains('RemoteForward 127.0.0.1:2222 127.0.0.1:22'))
+Check 'form: RemoteForward preserved'   ($raw.Contains('RemoteForward 127.0.0.1:2222 127.0.0.1:22'))
 Check 'form: single managed block'      (([regex]::Matches($raw, [regex]::Escape($BeginMark))).Count -eq 1)
 
-# Edit a field but keep it via the blank default, then cancel - nothing changes
-'1', '', 'q' | ForEach-Object { $script:inputQueue.Enqueue($_) }
+# Cancel changes nothing
+'1', '203.0.113.99', 'q' | ForEach-Object { $script:inputQueue.Enqueue($_) }
 Invoke-ItemConfig
-Check 'form: cancel leaves config untouched' ((Get-Content -Raw $SshConfig).Contains('HostName 198.51.100.77'))
+Check 'form: cancel leaves config untouched' (-not (Get-Content -Raw $SshConfig).Contains('203.0.113.99'))
 
-# Validation: non-numeric port is rejected, form continues, fix and apply
+# Validation: bad ssh port rejected, then fixed
 '3', 'abc', 'a', '3', '2200', 'a' | ForEach-Object { $script:inputQueue.Enqueue($_) }
 Invoke-ItemConfig
 Check 'form: bad port rejected then fixed' ((Get-Content -Raw $SshConfig).Contains('Port 2200'))
 Check 'form: queue fully consumed' ($script:inputQueue.Count -eq 0)
 
-# Proxy row appears and toggles once xray is configured again
-Set-Content $VlessNodes 'vless://uuid-a@a.example:443?type=tcp#node-a'
-'5', 'a' | ForEach-Object { $script:inputQueue.Enqueue($_) }
-Invoke-ItemConfig
-Check 'form: proxy toggled on' ((Get-Content -Raw $SshConfig).Contains("-File `"$XrayLauncher`" %h %p"))
-'5', 'a' | ForEach-Object { $script:inputQueue.Enqueue($_) }
-Invoke-ItemConfig
-Check 'form: proxy toggled back off' (-not (Get-Content -Raw $SshConfig).Contains('ProxyCommand'))
-Remove-Item $VlessNodes -Force
-
-# Non-interactive parameters skip the form entirely (queue stays empty)
+# --- Invoke-ItemRport ------------------------------------------------------------
 $savedConfig = $SshConfig
+$SshConfig = Join-Path $tmp 'no-block-config'
+$threw = $false
+try { Invoke-ItemRport } catch { $threw = $true }
+Check 'rport item: errors without a block' $threw
+$SshConfig = $savedConfig
+
+'2400' | ForEach-Object { $script:inputQueue.Enqueue($_) }
+Invoke-ItemRport
+$raw = Get-Content -Raw $SshConfig
+Check 'rport item: port updated'    ($raw.Contains('RemoteForward 127.0.0.1:2400 127.0.0.1:22'))
+Check 'rport item: host preserved'  ($raw.Contains('HostName 198.51.100.77'))
+
+$ReversePort = 2500
+Invoke-ItemRport
+Check 'rport item: parameter path' ((Get-Content -Raw $SshConfig).Contains('RemoteForward 127.0.0.1:2500 127.0.0.1:22'))
+$ReversePort = 0
+
+# Non-interactive base config on a fresh path: no RemoteForward
 $SshConfig = Join-Path $tmp 'auto-config'
 $ServerHost = '192.0.2.10'; $ServerUser = 'auto'
 Invoke-ItemConfig
 $raw = Get-Content -Raw $SshConfig
-Check 'auto: host written'  ($raw.Contains('HostName 192.0.2.10'))
-Check 'auto: user written'  ($raw.Contains('User auto'))
-Check 'auto: default ports' ($raw.Contains('RemoteForward 127.0.0.1:2222 127.0.0.1:22'))
+Check 'auto: host written'        ($raw.Contains('HostName 192.0.2.10'))
+Check 'auto: no RemoteForward on fresh config' (-not $raw.Contains('RemoteForward'))
 $ServerHost = ''; $ServerUser = ''
 $SshConfig = $savedConfig
 
