@@ -400,31 +400,19 @@ run_show_key() { # item 8: print the local public key for the server-side handof
   echo
 }
 
-run_xray() { # item 6: install xray + seed/validate the nodes file + write the launcher
+run_xray() { # item 6: download/update the xray binary + write the launcher
   command -v nc >/dev/null 2>&1 || die "nc (netcat) not found — required for the SOCKS ProxyCommand"
-  local url line n=0 nodes
-  nodes="$(read_vless_nodes "$VLESS_NODES" 2>/dev/null || true)"
-  if [[ -n "$nodes" ]]; then
-    while IFS= read -r line; do
-      n=$((n + 1))
-      vless_url_to_json "$line" >/dev/null \
-        || die "Node $n in $VLESS_NODES does not parse (see message above)"
-    done <<< "$nodes"
-    log "Validated $n node(s) from $VLESS_NODES"
+  if xray_bin >/dev/null 2>&1; then
+    update_xray_binary
   else
-    url="${VLESS_URL:-$(ask 'Paste your vless:// URL')}"
-    [[ -n "$url" ]] || die "No URL given; nothing changed"
-    case "$url" in vless://*) ;; *) die "Not a vless:// URL" ;; esac
-    vless_url_to_json "$url" >/dev/null || die "Could not parse the vless:// URL (see message above)"
-    write_vless_nodes_file "$url"
+    install_xray
   fi
-  install_xray
   write_xray_launcher
+  ensure_vless_nodes_file
   rm -f "$XRAY_JSON"   # pre-nodes-file layout; superseded by vless-nodes.txt
-  log "Each xray start picks a random node from $VLESS_NODES — edit that file to"
-  log "add/swap nodes (one vless:// URL per line, # comments); takes effect on the"
-  log "next connect. A running xray keeps its node: pkill xray to re-roll."
-  log "Turn it on for the tunnel via menu item 7 (proxy toggle)."
+  log "Nodes file: $VLESS_NODES — one vless:// URL per line (# comments)."
+  log "Each xray start picks a random node; edits take effect on the next connect."
+  log "Route the tunnel through xray via item 7 (ProxyCommand)."
 }
 
 run_proxy() { # item 7: toggle routing the tunnel through the xray proxy
@@ -604,7 +592,7 @@ pick_random_node() { # pick_random_node <nodes-file> -> one random node URL on s
   while IFS= read -r line; do
     [[ -n "$line" ]] && nodes+=("$line")
   done <<< "$(read_vless_nodes "$1" 2>/dev/null)"
-  [[ ${#nodes[@]} -gt 0 ]] || { err "No vless:// nodes in $1 — re-run bootstrap item 6"; return 1; }
+  [[ ${#nodes[@]} -gt 0 ]] || { err "No vless:// nodes in $1 — edit the file and add one"; return 1; }
   printf '%s\n' "${nodes[RANDOM % ${#nodes[@]}]}"
 }
 
@@ -621,6 +609,10 @@ install_xray() {
     return 0
   fi
   log "Homebrew not found; downloading the xray-core release binary"
+  install_xray_release
+}
+
+install_xray_release() { # download the latest release binary into the vendor path
   local asset tmp
   case "$(uname -m)" in
     arm64)  asset="Xray-macos-arm64-v8a.zip" ;;
@@ -639,16 +631,47 @@ install_xray() {
   log "xray installed to $XRAY_VENDOR_BIN"
 }
 
-write_vless_nodes_file() { # write_vless_nodes_file <vless-url> — seed the nodes file
+xray_local_version() { # xray_local_version <bin> -> e.g. 25.0.0 (empty if unknown)
+  "$1" version 2>/dev/null | awk 'NR==1 {print $2; exit}'
+}
+
+xray_latest_version() { # latest Xray-core release tag from GitHub, 'v' stripped (empty on failure)
+  curl -fsSL --max-time 10 https://api.github.com/repos/XTLS/Xray-core/releases/latest 2>/dev/null \
+    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([^"]*\)".*/\1/p' | head -1
+}
+
+update_xray_binary() { # version-check the resolved binary; refresh the vendor copy when stale
+  local bin cur latest
+  bin="$(xray_bin)" || return 0
+  cur="$(xray_local_version "$bin")"
+  latest="$(xray_latest_version)"
+  if [[ -z "$latest" ]]; then
+    warn "Could not check the latest xray version (GitHub unreachable); keeping ${cur:-unknown}"
+  elif [[ "$cur" == "$latest" ]]; then
+    log "xray $cur is up to date"
+  elif [[ "$bin" == "$XRAY_VENDOR_BIN" ]]; then
+    log "Updating xray ${cur:-unknown} -> $latest"
+    install_xray_release
+  else
+    warn "xray at $bin is ${cur:-unknown} (latest: $latest) — it was installed outside this"
+    warn "script; update it with its own package manager (e.g. brew upgrade xray)."
+  fi
+}
+
+ensure_vless_nodes_file() { # create the nodes file if missing (VLESS_URL seeds the first line)
+  [[ -f "$VLESS_NODES" ]] && return 0
+  if [[ -n "${VLESS_URL:-}" ]]; then
+    vless_url_to_json "$VLESS_URL" >/dev/null || die "Could not parse VLESS_URL (see message above)"
+  fi
   mkdir -p "$RC_CONFIG_DIR"
   {
     printf '# vless nodes for the remote-claude tunnel — one vless:// URL per line.\n'
     printf '# Lines starting with # and blank lines are ignored.\n'
     printf '# Every xray start picks a random node; edits take effect on the next connect.\n'
-    printf '%s\n' "$1"
+    if [[ -n "${VLESS_URL:-}" ]]; then printf '%s\n' "$VLESS_URL"; fi
   } > "$VLESS_NODES"
   chmod 600 "$VLESS_NODES"
-  log "Wrote $VLESS_NODES"
+  log "Created $VLESS_NODES"
 }
 
 write_xray_launcher() {
@@ -709,11 +732,7 @@ status_key()       { [[ -f "$KEY_PATH" ]]; }
 status_authorize() { grep -qF 'from="127.0.0.1,::1"' "$AUTH_KEYS" 2>/dev/null; }
 status_config()    { grep -qF "$BEGIN_MARK" "$SSH_CONFIG" 2>/dev/null; }
 status_rport()     { [[ -n "$(config_block_value RemoteForward)" ]]; }
-status_xray() {
-  [[ -f "$XRAY_LAUNCHER" ]] || return 1
-  xray_bin >/dev/null 2>&1 || return 1
-  [[ -n "$(read_vless_nodes "$VLESS_NODES" 2>/dev/null)" ]]
-}
+status_xray() { [[ -f "$XRAY_LAUNCHER" ]] && xray_bin >/dev/null 2>&1; }
 config_proxy_on()  { grep -qF "ProxyCommand $XRAY_LAUNCHER" "$SSH_CONFIG" 2>/dev/null; }
 
 # ---------------------------------------------------------------- menu
