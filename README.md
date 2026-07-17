@@ -85,13 +85,15 @@ If the connection fails because the reverse port is taken, close the previous
 ## Optional: route the tunnel through an xray (VLESS) proxy
 
 On a poor / censored network, the macOS and Windows bootstraps have two extra
-items. **6) xray client** installs xray and writes your `vless://` URL into a
+items. **6) xray client** downloads xray (or, if it's already installed,
+version-checks it against the latest release and updates it) and creates the
 node list (`~/.config/remote-claude/vless-nodes.txt` on macOS,
-`%LOCALAPPDATA%\remote-claude\vless-nodes.txt` on Windows) — one URL per line,
-`#` comments, a random node per xray start; edits take effect on the next
-connect. **7)** toggles routing the tunnel through the proxy. On Windows each
-connection runs its own xray and it dies with the connection; on macOS one
-on-demand xray is shared — `pkill xray` and reconnect to switch node.
+`%LOCALAPPDATA%\remote-claude\vless-nodes.txt` on Windows) — put your `vless://`
+URLs there, one per line, `#` comments, a random node per xray start; edits
+take effect on the next connect. **7)** toggles routing the tunnel through the
+proxy. On Windows each connection runs its own xray and it dies with the
+connection; on macOS one on-demand xray is shared — `pkill xray` and reconnect
+to switch node.
 
 ## Uninstall
 

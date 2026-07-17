@@ -76,11 +76,12 @@ ssh my-device 'echo ok'                # 应打印 ok
 
 ## 可选：让隧道走 xray（VLESS）代理
 
-网络较差/受限时，macOS 和 Windows 的引导脚本各多两项。**6) xray client** 安装
-xray 并把你的 `vless://` URL 写进节点列表（macOS 在
+网络较差/受限时，macOS 和 Windows 的引导脚本各多两项。**6) xray client** 下载
+xray（已安装则对比最新 release 版本号、需要时更新），并创建节点列表（macOS 在
 `~/.config/remote-claude/vless-nodes.txt`，Windows 在
-`%LOCALAPPDATA%\remote-claude\vless-nodes.txt`）——一行一个节点、`#` 开头是注释，
-每次 xray 启动随机选一个，改文件下次连接即生效。**7)** 一键开/关隧道走代理。
+`%LOCALAPPDATA%\remote-claude\vless-nodes.txt`）——把你的 `vless://` URL 一行一个
+填进去、`#` 开头是注释，每次 xray 启动随机选一个，改文件下次连接即生效。
+**7)** 一键开/关隧道走代理。
 Windows 每条连接自带一个 xray、连接断了自动清理；macOS 共享一个按需 xray，
 `pkill xray` 后重连即换节点。
 
