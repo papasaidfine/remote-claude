@@ -18,8 +18,10 @@
 #   2. Ensure the default ~/.ssh/id_ed25519 exists (local→server hop).
 #   3. Append the server-side public key to authorized_keys with a
 #      from="127.0.0.1,::1" restriction (dedup by key blob).
-#   4. Write a managed "Host remote-claude" block into ~/.ssh/config.
-#   5. Show the local public key to paste into the server-side setup.
+#   4. Write the base "Host remote-claude" block into ~/.ssh/config
+#      (host/user/port only; keeps an existing reverse port).
+#   5. Add or update the reverse tunnel port (RemoteForward) on that block.
+#   6. Show the local public key to paste into the server-side setup.
 #
 # Usage:  ./bootstrap-linux.sh
 # Non-interactive overrides via env vars: SERVER_HOST, SERVER_USER,
@@ -73,6 +75,7 @@ ask_yn() { # ask_yn <prompt> <Y|N>  -> exit status 0 = yes
 }
 
 # ---------------------------------------------------------------- platform
+if [[ -z "${RC_SOURCED_FOR_TEST:-}" ]]; then
 [[ "$(uname -s)" == "Linux" ]] || die "This script is for Linux. Use bootstrap-macos.sh on macOS or bootstrap-windows.ps1 on Windows."
 
 cat <<'EOF'
@@ -86,6 +89,7 @@ and shows whether it is already configured. Files this can modify:
   - ~/.ssh/{config,authorized_keys,id_ed25519}
 All modified system files are backed up first (*.claude-bak-<timestamp>).
 EOF
+fi
 
 # ---------------------------------------------------------------- shared prep
 ensure_ssh_dir() {
@@ -115,30 +119,31 @@ add_authorized_key() {
   log "Written to authorized_keys (restricted to loopback logins only)"
 }
 
-write_ssh_config_block() { # <host> <user> <port> <reverse_port>
-  local SERVER_HOST="$1" SERVER_USER="$2" SERVER_PORT="$3" REVERSE_PORT="$4"
+write_ssh_config_block() { # <host> <user> <port> <reverse_port|''> [force 0|1]
+  local SERVER_HOST="$1" SERVER_USER="$2" SERVER_PORT="$3" REVERSE_PORT="$4" FORCE="${5:-0}"
   local block tmp
-  block="$(cat <<EOF
-$BEGIN_MARK
-Host $TUNNEL_ALIAS
-    HostName $SERVER_HOST
-    User $SERVER_USER
-    Port $SERVER_PORT
-    IdentityFile ~/.ssh/$KEY_NAME
-    IdentitiesOnly yes
-    RemoteForward 127.0.0.1:$REVERSE_PORT 127.0.0.1:22
-    ExitOnForwardFailure yes
-    ServerAliveInterval 30
-    ServerAliveCountMax 3
-    ForwardAgent no
-$END_MARK
-EOF
-)"
+  block=$(
+    printf '%s\n' "$BEGIN_MARK"
+    printf 'Host %s\n' "$TUNNEL_ALIAS"
+    printf '    HostName %s\n' "$SERVER_HOST"
+    printf '    User %s\n' "$SERVER_USER"
+    printf '    Port %s\n' "$SERVER_PORT"
+    printf '    IdentityFile ~/.ssh/%s\n' "$KEY_NAME"
+    printf '    IdentitiesOnly yes\n'
+    if [[ -n "$REVERSE_PORT" ]]; then
+      printf '    RemoteForward 127.0.0.1:%s 127.0.0.1:22\n' "$REVERSE_PORT"
+      printf '    ExitOnForwardFailure yes\n'
+    fi
+    printf '    ServerAliveInterval 30\n'
+    printf '    ServerAliveCountMax 3\n'
+    printf '    ForwardAgent no\n'
+    printf '%s\n' "$END_MARK"
+  )
   touch "$SSH_CONFIG"
   chmod 600 "$SSH_CONFIG"
 
   if grep -qF "$BEGIN_MARK" "$SSH_CONFIG"; then
-    if ! ask_yn "~/.ssh/config already contains a $TUNNEL_ALIAS block, update it" "Y"; then
+    if [[ "$FORCE" != "1" ]] && ! ask_yn "~/.ssh/config already contains a $TUNNEL_ALIAS block, update it" "Y"; then
       warn "Keeping the existing block, skipping the write"
       return 0
     fi
@@ -166,6 +171,27 @@ EOF
 
   { [[ -s "$SSH_CONFIG" ]] && [[ "$(tail -c1 "$SSH_CONFIG")" != "" ]] && echo; printf '%s\n' "$block"; } >> "$SSH_CONFIG"
   log "Wrote Host $TUNNEL_ALIAS to ~/.ssh/config"
+}
+
+config_block_value() { # config_block_value <Key> -> that key's value inside the managed block
+  awk -v begin="$BEGIN_MARK" -v end="$END_MARK" -v key="$1" '
+    $0 == begin { inblk = 1; next }
+    $0 == end   { inblk = 0 }
+    inblk && $1 == key { print $2; exit }
+  ' "$SSH_CONFIG" 2>/dev/null
+}
+
+config_block_rport() { # reverse port from the managed block, empty when absent
+  local rf
+  rf="$(config_block_value RemoteForward)"
+  [[ -z "$rf" ]] && return 0
+  printf '%s\n' "${rf##*:}"
+}
+
+check_config_fields() { # check_config_fields <host> <user> <port>
+  [[ -n "$1" ]] || { err "Server host must not be empty"; return 1; }
+  [[ -n "$2" ]] || { err "SSH user must not be empty"; return 1; }
+  [[ "$3" =~ ^[0-9]+$ ]] || { err "SSH port must be a number"; return 1; }
 }
 
 # ---------------------------------------------------------------- sshd helpers
@@ -324,21 +350,67 @@ run_authorize() { # item 3: authorize the server's connect-back key
   add_authorized_key "$pubkey"
 }
 
-run_config() { # item 4: Host remote-claude block
+run_config() { # item 4: base Host remote-claude block — form: edit fields, then apply
   ensure_ssh_dir
-  local server_host server_user server_port reverse_port
-  server_host="${SERVER_HOST:-$(ask 'Remote server hostname / IP')}"
-  [[ -n "$server_host" ]] || die "Server hostname must not be empty"
-  server_user="${SERVER_USER:-$(ask 'Remote server SSH user')}"
-  [[ -n "$server_user" ]] || die "Server user must not be empty"
-  server_port="${SERVER_PORT:-$(ask 'Remote server SSH port' '22')}"
-  [[ "$server_port" =~ ^[0-9]+$ ]] || die "SSH port must be a number"
-  reverse_port="${REVERSE_PORT:-$(ask 'Reverse SSH port on the server (used by Claude/Codex to connect back)' '2222')}"
-  [[ "$reverse_port" =~ ^[0-9]+$ ]] || die "Reverse port must be a number"
-  write_ssh_config_block "$server_host" "$server_user" "$server_port" "$reverse_port"
+  local host="" user="" port="" rport="" sel
+  # Pre-fill from the existing block; RemoteForward passes through untouched
+  if status_config; then
+    host="$(config_block_value HostName)"
+    user="$(config_block_value User)"
+    port="$(config_block_value Port)"
+    rport="$(config_block_rport)"
+  fi
+  host="${SERVER_HOST:-$host}"
+  user="${SERVER_USER:-$user}"
+  port="${SERVER_PORT:-${port:-22}}"
+
+  if [[ -n "${SERVER_HOST:-}" && -n "${SERVER_USER:-}" ]]; then
+    # Non-interactive (documented env overrides): no form, write immediately
+    check_config_fields "$host" "$user" "$port" || return 1
+    write_ssh_config_block "$host" "$user" "$port" "$rport"
+    return 0
+  fi
+
+  while true; do
+    echo
+    echo "SSH config shortcut (Host $TUNNEL_ALIAS) — edit fields, then apply:"
+    printf '  1) %-22s %s\n' 'Server host / IP' "${host:-(not set)}"
+    printf '  2) %-22s %s\n' 'SSH user'         "${user:-(not set)}"
+    printf '  3) %-22s %s\n' 'SSH port'         "$port"
+    echo '  a) Apply & write config'
+    echo '  q) Cancel (no changes)'
+    read -r -p "Select [1-3, a, q]: " sel \
+      || { warn "No selection (EOF) — nothing changed"; return 0; }
+    case "$sel" in
+      1) host="$(ask 'Server host / IP' "$host")" ;;
+      2) user="$(ask 'SSH user' "$user")" ;;
+      3) port="$(ask 'SSH port' "$port")" ;;
+      a|A)
+        check_config_fields "$host" "$user" "$port" || continue
+        write_ssh_config_block "$host" "$user" "$port" "$rport" 1
+        return 0 ;;
+      q|Q) log "Cancelled — nothing changed"; return 0 ;;
+      *) warn "Unknown selection: $sel" ;;
+    esac
+  done
 }
 
-run_show_key() { # item 5: print the local public key for the server-side handoff
+run_rport() { # item 5: reverse tunnel port (RemoteForward) on the managed block
+  status_config || die "No Host $TUNNEL_ALIAS block yet — run item 4 first"
+  local host user port rport cur
+  host="$(config_block_value HostName)"
+  user="$(config_block_value User)"
+  port="$(config_block_value Port)"
+  [[ -n "$host" && -n "$user" && -n "$port" ]] \
+    || die "Could not read the Host $TUNNEL_ALIAS block — re-run item 4"
+  cur="$(config_block_rport)"
+  rport="${REVERSE_PORT:-$(ask 'Reverse SSH port on the server (used by Claude/Codex to connect back)' "${cur:-2222}")}"
+  [[ "$rport" =~ ^[0-9]+$ ]] || die "Reverse port must be a number"
+  write_ssh_config_block "$host" "$user" "$port" "$rport" 1
+  log "Reverse port $rport set — the tunnel rides on your ssh $TUNNEL_ALIAS connection."
+}
+
+run_show_key() { # item 6: print the local public key for the server-side handoff
   if [[ ! -f "$KEY_PATH.pub" ]]; then
     if [[ ! -f "$KEY_PATH" ]]; then
       ask_yn "No local key yet — generate it now" "Y" || die "No key to show"
@@ -368,6 +440,7 @@ status_sshd() {
 status_key()       { [[ -f "$KEY_PATH" ]]; }
 status_authorize() { grep -qF 'from="127.0.0.1,::1"' "$AUTH_KEYS" 2>/dev/null; }
 status_config()    { grep -qF "$BEGIN_MARK" "$SSH_CONFIG" 2>/dev/null; }
+status_rport()     { [[ -n "$(config_block_value RemoteForward)" ]]; }
 
 # ---------------------------------------------------------------- menu
 mark() { if "$1"; then printf '[done]'; else printf '[ -  ]'; fi; }
@@ -378,8 +451,9 @@ draw_menu() {
   printf '  1) %-50s %s\n' 'Incoming SSH — sshd install + harden  [sudo]' "$(mark status_sshd)"
   printf '  2) %-50s %s\n' 'Local SSH key (~/.ssh/id_ed25519)' "$(mark status_key)"
   printf '  3) %-50s %s\n' "Authorize the server's connect-back key" "$(mark status_authorize)"
-  printf '  4) %-50s %s\n' 'Tunnel config (Host remote-claude)' "$(mark status_config)"
-  printf '  5) %s\n' 'Show local public key (paste into server setup)'
+  printf '  4) %-50s %s\n' 'SSH config shortcut (Host remote-claude)' "$(mark status_config)"
+  printf '  5) %-50s %s\n' 'Reverse tunnel port (RemoteForward)' "$(mark status_rport)"
+  printf '  6) %s\n' 'Show local public key (paste into server setup)'
   echo   '  q) Quit'
 }
 
@@ -392,15 +466,17 @@ run_item() { # run_item <run-function>; failures return to the menu
   fi
 }
 
+if [[ -z "${RC_SOURCED_FOR_TEST:-}" ]]; then
 while true; do
   draw_menu
-  read -r -p "Select [1-5, q]: " choice || break
+  read -r -p "Select [1-6, q]: " choice || break
   case "$choice" in
     1) run_item run_sshd ;;
     2) run_item run_key ;;
     3) run_item run_authorize ;;
     4) run_item run_config ;;
-    5) run_item run_show_key ;;
+    5) run_item run_rport ;;
+    6) run_item run_show_key ;;
     q|Q) break ;;
     *) warn "Unknown selection: $choice" ;;
   esac
@@ -410,3 +486,4 @@ echo
 log "Connect as usual — VSCode Remote-SSH (host $TUNNEL_ALIAS) or: ssh $TUNNEL_ALIAS"
 log "The reverse tunnel rides on that connection (one connection at a time)."
 log "Then on the server: ssh my-device 'echo ok' should print ok"
+fi
