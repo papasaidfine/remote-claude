@@ -121,4 +121,30 @@ check 'toggle off: HostName preserved' "$(cat "$SSH_CONFIG")" 'HostName 203.0.11
   && printf 'ok   - re-toggle: exactly one managed block\n' \
   || { printf 'FAIL - re-toggle: managed block count != 1\n'; fail=1; }
 
+# --- run_rport (menu item 5) ------------------------------------------------------
+if ( SSH_CONFIG="$TMP/no-such-config"; run_rport ) >/dev/null 2>&1; then
+  printf 'FAIL - rport: should error without a managed block\n'; fail=1
+else
+  printf 'ok   - rport: errors without a managed block\n'
+fi
+
+# Base block without reverse port; REVERSE_PORT env drives it non-interactively
+write_ssh_config_block '203.0.113.7' 'ubuntu' '22' '' 0 1 >/dev/null
+( REVERSE_PORT=2400 run_rport ) >/dev/null 2>&1 \
+  || { printf 'FAIL - rport: add exited non-zero\n'; fail=1; }
+check 'rport: RemoteForward added' "$(cat "$SSH_CONFIG")" 'RemoteForward 127.0.0.1:2400 127.0.0.1:22'
+check 'rport: base fields kept'    "$(cat "$SSH_CONFIG")" 'HostName 203.0.113.7'
+
+# Interactive: default offers the current port; typed value replaces it
+( run_rport ) >/dev/null 2>&1 <<< '2500' \
+  || { printf 'FAIL - rport: update exited non-zero\n'; fail=1; }
+check 'rport: port updated interactively' "$(cat "$SSH_CONFIG")" 'RemoteForward 127.0.0.1:2500 127.0.0.1:22'
+
+# Bad port errors
+if ( REVERSE_PORT=abc run_rport ) >/dev/null 2>&1; then
+  printf 'FAIL - rport: non-numeric port should error\n'; fail=1
+else
+  printf 'ok   - rport: non-numeric port errors\n'
+fi
+
 exit $fail

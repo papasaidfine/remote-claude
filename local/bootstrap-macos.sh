@@ -369,7 +369,23 @@ run_config() { # item 4: base Host remote-claude block — form: edit fields, th
   done
 }
 
-run_show_key() { # item 5: print the local public key for the server-side handoff
+run_rport() { # item 5: reverse tunnel port (RemoteForward) on the managed block
+  status_config || die "No Host $TUNNEL_ALIAS block yet — run item 4 first"
+  local host user port rport cur use_proxy=0
+  host="$(config_block_value HostName)"
+  user="$(config_block_value User)"
+  port="$(config_block_value Port)"
+  [[ -n "$host" && -n "$user" && -n "$port" ]] \
+    || die "Could not read the Host $TUNNEL_ALIAS block — re-run item 4"
+  config_proxy_on && use_proxy=1
+  cur="$(config_block_rport)"
+  rport="${REVERSE_PORT:-$(ask 'Reverse SSH port on the server (used by Claude/Codex to connect back)' "${cur:-2222}")}"
+  [[ "$rport" =~ ^[0-9]+$ ]] || die "Reverse port must be a number"
+  write_ssh_config_block "$host" "$user" "$port" "$rport" "$use_proxy" 1
+  log "Reverse port $rport set — the tunnel rides on your ssh $TUNNEL_ALIAS connection."
+}
+
+run_show_key() { # item 8: print the local public key for the server-side handoff
   if [[ ! -f "$KEY_PATH.pub" ]]; then
     if [[ ! -f "$KEY_PATH" ]]; then
       ask_yn "No local key yet — generate it now" "Y" || die "No key to show"
