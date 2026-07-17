@@ -91,12 +91,20 @@ else
 fi
 check_absent 'no xray: ProxyCommand still absent' "$(cat "$SSH_CONFIG")" 'ProxyCommand'
 
-# Fake the xray artifacts so status_xray passes
+# Fake the xray artifacts so status_xray passes (nodes file needed only to ENABLE)
 mkdir -p "$TMP/bin"
-printf 'vless://u@h.example:443?type=tcp#t\n' > "$VLESS_NODES"
 : > "$XRAY_LAUNCHER"
 printf '#!/bin/sh\n' > "$XRAY_VENDOR_BIN"
 chmod +x "$XRAY_VENDOR_BIN"
+
+# Enabling with an empty/missing nodes file must error
+rm -f "$VLESS_NODES"
+if ( run_proxy ) >/dev/null 2>&1; then
+  printf 'FAIL - proxy: enabling without nodes should error\n'; fail=1
+else
+  printf 'ok   - proxy: enabling without nodes errors\n'
+fi
+printf 'vless://u@h.example:443?type=tcp#t\n' > "$VLESS_NODES"
 
 # Toggle ON — the 'n' on stdin must not be consumed by any prompt
 ( run_proxy ) >/dev/null 2>&1 <<< 'n' || { printf 'FAIL - toggle on exited non-zero\n'; fail=1; }
@@ -112,14 +120,25 @@ check 'toggle on: unmanaged content kept' "$cfg" 'Host other'
 check_absent 'toggle off: ProxyCommand removed' "$(cat "$SSH_CONFIG")" 'ProxyCommand'
 check 'toggle off: HostName preserved' "$(cat "$SSH_CONFIG")" 'HostName 203.0.113.7'
 
-# Toggle ON again — nothing duplicated
-( run_proxy ) >/dev/null 2>&1 || { printf 'FAIL - second toggle on exited non-zero\n'; fail=1; }
+# USE_XRAY_PROXY forces the state instead of toggling
+( USE_XRAY_PROXY=1 run_proxy ) >/dev/null 2>&1 || { printf 'FAIL - forced on exited non-zero\n'; fail=1; }
+check 'forced on: ProxyCommand present' "$(cat "$SSH_CONFIG")" 'ProxyCommand'
+( USE_XRAY_PROXY=1 run_proxy ) >/dev/null 2>&1
 [[ "$(grep -cF "ProxyCommand $XRAY_LAUNCHER" "$SSH_CONFIG")" == 1 ]] \
-  && printf 'ok   - re-toggle: exactly one ProxyCommand\n' \
-  || { printf 'FAIL - re-toggle: ProxyCommand count != 1\n'; fail=1; }
+  && printf 'ok   - forced on twice: still exactly one ProxyCommand\n' \
+  || { printf 'FAIL - forced on twice: ProxyCommand count != 1\n'; fail=1; }
+( USE_XRAY_PROXY=0 run_proxy ) >/dev/null 2>&1
+check_absent 'forced off: ProxyCommand removed' "$(cat "$SSH_CONFIG")" 'ProxyCommand'
+
+# Independence: proxy works on a block WITHOUT a reverse port
+write_ssh_config_block '203.0.113.7' 'ubuntu' '22' '' 0 1 >/dev/null
+( run_proxy ) >/dev/null 2>&1 || { printf 'FAIL - proxy on rportless block exited non-zero\n'; fail=1; }
+cfg="$(cat "$SSH_CONFIG")"
+check 'independent: ProxyCommand added'   "$cfg" 'ProxyCommand'
+check_absent 'independent: still no RemoteForward' "$cfg" 'RemoteForward'
 [[ "$(grep -cF "$BEGIN_MARK" "$SSH_CONFIG")" == 1 ]] \
-  && printf 'ok   - re-toggle: exactly one managed block\n' \
-  || { printf 'FAIL - re-toggle: managed block count != 1\n'; fail=1; }
+  && printf 'ok   - independent: single managed block\n' \
+  || { printf 'FAIL - independent: managed block duplicated\n'; fail=1; }
 
 # --- run_rport (menu item 5) ------------------------------------------------------
 if ( SSH_CONFIG="$TMP/no-such-config"; run_rport ) >/dev/null 2>&1; then
