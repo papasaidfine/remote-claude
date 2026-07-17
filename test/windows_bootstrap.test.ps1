@@ -141,29 +141,51 @@ Check 'launcher embeds Read-VlessNodes'     ($launcherSrc.Contains('function Rea
 Check 'launcher picks a random node'        ($launcherSrc.Contains('Get-Random'))
 Check 'launcher reads vless-nodes.txt'      ($launcherSrc.Contains('vless-nodes.txt'))
 Check 'launcher no longer reads xray.json'  (-not $launcherSrc.Contains("'xray.json'"))
+Check 'launcher zero-nodes msg updated'     ($launcherSrc.Contains('edit the file and add one'))
 
-# --- Test-StatusXray ----------------------------------------------------------
-# nodes file + launcher already exist from earlier sections; binary still missing
-Check 'status: xray not ready without binary' (-not (Test-StatusXray))
+# --- Test-StatusXray: launcher + binary only --------------------------------------
+Remove-Item $VlessNodes -Force -ErrorAction SilentlyContinue
+Check 'status: not ready without binary' (-not (Test-StatusXray))
 New-Item -ItemType Directory -Force -Path (Split-Path $XrayVendorBin) | Out-Null
 New-Item -ItemType File -Force -Path $XrayVendorBin | Out-Null
-Check 'status: xray ready with all artifacts' (Test-StatusXray)
-Remove-Item $VlessNodes -Force
-Check 'status: xray not ready without nodes file' (-not (Test-StatusXray))
-Set-Content $VlessNodes 'vless://uuid-a@a.example:443?type=tcp#node-a'
-Check 'status: ready again with nodes file back' (Test-StatusXray)
+Check 'status: ready with launcher + binary (no nodes needed)' (Test-StatusXray)
 
-# --- Invoke-ItemXray: bad nodes file fails fast --------------------------------
-Set-Content $VlessNodes 'vless://bad@h:1?security=weird&type=tcp'
-$threw = $false
-try { Invoke-ItemXray } catch { $threw = $true }
-Check 'item 6: bad nodes file throws' $threw
-Set-Content $VlessNodes 'vless://uuid-a@a.example:443?type=tcp#node-a'
+# --- Invoke-ItemXray: update flow via overrides -----------------------------------
+$script:fakeLatest = ''
+$script:downloaded = $false
+function Get-XrayLocalVersion { param([string]$Exe) return '25.0.0' }
+function Get-XrayLatestVersion { return $script:fakeLatest }
+function Install-XrayRelease { $script:downloaded = $true }
 
-# --- Invoke-ItemXray: valid nodes file, no prompt, stale xray.json removed -----
 New-Item -ItemType File -Force -Path $XrayJson | Out-Null
+$script:fakeLatest = '25.0.0'
 Invoke-ItemXray
-Check 'item 6: stale xray.json removed' (-not (Test-Path $XrayJson))
+Check 'item6: up-to-date -> no download' (-not $script:downloaded)
+Check 'item6: stale xray.json removed'   (-not (Test-Path $XrayJson))
+Check 'item6: nodes template created'    (Test-Path $VlessNodes)
+Check 'item6: template has no nodes'     ((Read-VlessNodes $VlessNodes).Count -eq 0)
+
+$script:fakeLatest = '26.0.0'
+Invoke-ItemXray
+Check 'item6: newer release -> download' $script:downloaded
+
+$script:downloaded = $false
+$script:fakeLatest = ''
+Invoke-ItemXray
+Check 'item6: unreachable API -> no download' (-not $script:downloaded)
+
+# VLESS_URL seeds the first node when the file is created
+Remove-Item $VlessNodes -Force
+$VlessUrl = 'vless://seed@s.example:443?type=tcp#seeded'
+$script:fakeLatest = '25.0.0'
+Invoke-ItemXray
+Check 'item6: VlessUrl seeded' ((Get-Content -Raw $VlessNodes).Contains('vless://seed@s.example:443?type=tcp#seeded'))
+$VlessUrl = ''
+
+# An existing nodes file is left alone
+Set-Content $VlessNodes 'vless://keep@k.example:443?type=tcp#keep'
+Invoke-ItemXray
+Check 'item6: existing nodes file untouched' ((Get-Content -Raw $VlessNodes).Contains('vless://keep@k.example'))
 
 # --- Invoke-ItemProxy (menu item 7) -------------------------------------------
 # Reset to a known block without the proxy (Read-YesNo still throws on any prompt)
@@ -199,9 +221,25 @@ $raw = Get-Content -Raw $SshConfig
 Check 're-toggle: exactly one ProxyCommand'  (([regex]::Matches($raw, 'ProxyCommand')).Count -eq 1)
 Check 're-toggle: exactly one managed block' (([regex]::Matches($raw, [regex]::Escape($BeginMark))).Count -eq 1)
 
-# Enabling without xray must error and leave the config untouched
+# Enabling with an empty nodes file must error
 Invoke-ItemProxy   # back to OFF
-Remove-Item $VlessNodes -Force
+Set-Content $VlessNodes '# comments only'
+$threw = $false
+try { Invoke-ItemProxy } catch { $threw = $true }
+Check 'proxy: enabling without nodes errors' $threw
+Set-Content $VlessNodes 'vless://keep@k.example:443?type=tcp#keep'
+
+# Independence: proxy works on a block WITHOUT a reverse port
+Write-SshConfigBlock -SrvHost '203.0.113.7' -SrvUser 'ubuntu' -SrvPort 22 -RevPort 0 -Force
+Invoke-ItemProxy
+$raw = Get-Content -Raw $SshConfig
+Check 'proxy: on rportless block'     ($raw.Contains('ProxyCommand'))
+Check 'proxy: still no RemoteForward' (-not $raw.Contains('RemoteForward'))
+Invoke-ItemProxy   # OFF again
+Write-SshConfigBlock -SrvHost '203.0.113.7' -SrvUser 'ubuntu' -SrvPort 22 -RevPort 2222 -Force
+
+# Enabling without xray must error and leave the config untouched (proxy is OFF here)
+Remove-Item $XrayLauncher -Force
 $threw = $false
 try { Invoke-ItemProxy } catch { $threw = $true }
 Check 'toggle: enabling without xray errors' $threw

@@ -23,15 +23,16 @@
        (local -> server hop).
     3. Append the server-side public key to authorized_keys with a
        from="127.0.0.1,::1" restriction (dedup by key blob).
-    4. Write a managed "Host remote-claude" block into
-       %USERPROFILE%\.ssh\config.
-    5. Show the local public key to paste into the server-side setup.
-    6. xray client: install xray, seed vless-nodes.txt (one vless:// URL per
-       line) and write the per-connection ProxyCommand launcher; every
-       connection picks a random node from that file.
-    7. Toggle routing the tunnel through the xray proxy - rewrites the
-       managed block reusing its stored values, no re-prompting. Each ssh
-       connection then runs its own xray, which dies with the connection.
+    4. Write the base "Host remote-claude" block into
+       %USERPROFILE%\.ssh\config (host/user/port only; keeps an existing
+       reverse port / proxy).
+    5. Add or update the reverse tunnel port (RemoteForward) on that block.
+    6. xray client: download the xray binary (or version-check and update it)
+       and write the per-connection ProxyCommand launcher; nodes live in
+       vless-nodes.txt (one vless:// URL per line, a random one per connection).
+    7. Toggle routing the tunnel through the xray proxy (ProxyCommand). Each
+       ssh connection then runs its own xray, which dies with the connection.
+    8. Show the local public key to paste into the server-side setup.
 
 .NOTES
   Only item 1 requires an elevated (Administrator) PowerShell; the other
@@ -265,6 +266,10 @@ function Resolve-XrayExe { # path to an xray binary, or $null
 function Install-Xray {
     $existing = Resolve-XrayExe
     if ($existing) { Write-Info "xray already available: $existing"; return }
+    Install-XrayRelease
+}
+
+function Install-XrayRelease { # download the latest release binary into the vendor path
     $asset = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'Xray-windows-arm64-v8a.zip' } else { 'Xray-windows-64.zip' }
     $binDir = Split-Path $XrayVendorBin
     New-Item -ItemType Directory -Force -Path $binDir | Out-Null
@@ -280,6 +285,49 @@ function Install-Xray {
     Remove-Item $zip -ErrorAction SilentlyContinue
     if (-not (Test-Path $XrayVendorBin)) { throw 'xray.exe missing after extraction' }
     Write-Info "xray installed to $XrayVendorBin"
+}
+
+function Get-XrayLocalVersion { # e.g. 25.0.0; '' when unknown
+    param([string]$Exe)
+    try {
+        $line = (& $Exe version 2>$null | Select-Object -First 1)
+        if ("$line" -match 'Xray (\S+)') { return $Matches[1] }
+    } catch {}
+    return ''
+}
+
+function Get-XrayLatestVersion { # latest release tag, 'v' stripped; '' on failure
+    try {
+        $r = Invoke-RestMethod -UseBasicParsing -TimeoutSec 10 `
+            -Uri 'https://api.github.com/repos/XTLS/Xray-core/releases/latest'
+        return ("$($r.tag_name)" -replace '^v', '')
+    } catch { return '' }
+}
+
+function Update-XrayBinary { # version-check the resolved binary; refresh the vendor copy when stale
+    $exe = Resolve-XrayExe
+    if (-not $exe) { return }
+    $cur = Get-XrayLocalVersion $exe
+    if (-not $cur) { $cur = 'unknown' }
+    $latest = Get-XrayLatestVersion
+    if (-not $latest) { Write-Warn "Could not check the latest xray version (GitHub unreachable); keeping $cur" }
+    elseif ($cur -eq $latest) { Write-Info "xray $cur is up to date" }
+    elseif ($exe -eq $XrayVendorBin) { Write-Info "Updating xray $cur -> $latest"; Install-XrayRelease }
+    else { Write-Warn "xray at $exe is $cur (latest: $latest) - it was installed outside this script; update it yourself." }
+}
+
+function Ensure-VlessNodesFile { # create the nodes file if missing ($VlessUrl seeds the first line)
+    if (Test-Path $VlessNodes) { return }
+    if ($VlessUrl) { ConvertTo-VlessJson $VlessUrl | Out-Null }  # throws on a bad URL
+    New-Item -ItemType Directory -Force -Path $RcConfigDir | Out-Null
+    $lines = @(
+        '# vless nodes for the remote-claude tunnel - one vless:// URL per line.',
+        '# Lines starting with # and blank lines are ignored.',
+        '# Every xray start picks a random node; edits take effect on the next connect.'
+    )
+    if ($VlessUrl) { $lines += $VlessUrl }
+    [System.IO.File]::WriteAllText($VlessNodes, ($lines -join "`r`n") + "`r`n")
+    Write-Info "Created $VlessNodes"
 }
 
 function Write-XrayLauncher {
@@ -364,7 +412,7 @@ if (-not (Test-Path $xrayExe)) {
 $nodesFile = Join-Path $RcDir 'vless-nodes.txt'
 $nodes = Read-VlessNodes $nodesFile
 if ($nodes.Count -eq 0) {
-    [Console]::Error.WriteLine("no vless:// nodes in $nodesFile - re-run bootstrap item 6")
+    [Console]::Error.WriteLine("no vless:// nodes in $nodesFile - edit the file and add one")
     exit 1
 }
 $node = $nodes | Get-Random
@@ -433,52 +481,34 @@ try {
     Write-Info "Wrote $XrayLauncher"
 }
 
-function Invoke-ItemXray {   # item 6: install xray + seed/validate nodes file + launcher
-    $nodes = Read-VlessNodes $VlessNodes
-    if ($nodes.Count -gt 0) {
-        for ($i = 0; $i -lt $nodes.Count; $i++) {
-            try { ConvertTo-VlessJson $nodes[$i] | Out-Null }
-            catch { throw "Node $($i + 1) in $VlessNodes does not parse: $_" }
-        }
-        Write-Info "Validated $($nodes.Count) node(s) from $VlessNodes"
-    } else {
-        $url = $VlessUrl
-        if (-not $url) { $url = Read-Default 'Paste your vless:// URL' }
-        if (-not $url) { throw 'No URL given; nothing changed' }
-        ConvertTo-VlessJson $url | Out-Null    # throws before any side effect
-        New-Item -ItemType Directory -Force -Path $RcConfigDir | Out-Null
-        $seed = @(
-            '# vless nodes for the remote-claude tunnel - one vless:// URL per line.',
-            '# Lines starting with # and blank lines are ignored.',
-            '# Every connection picks a random node; edits take effect on the next connect.',
-            $url
-        ) -join "`r`n"
-        [System.IO.File]::WriteAllText($VlessNodes, $seed + "`r`n")
-        Write-Info "Wrote $VlessNodes"
-    }
-    Install-Xray
+function Invoke-ItemXray {   # item 6: download/update the xray binary + write the launcher
+    if (Resolve-XrayExe) { Update-XrayBinary } else { Install-Xray }
     Write-XrayLauncher
+    Ensure-VlessNodesFile
     Remove-Item $XrayJson -Force -ErrorAction SilentlyContinue  # pre-nodes-file layout
-    Write-Info "Each connection picks a random node from $VlessNodes - edit that file to add/swap nodes."
-    Write-Info 'xray client ready. Turn it on for the tunnel via menu item 7 (proxy toggle).'
+    Write-Info "Nodes file: $VlessNodes - one vless:// URL per line (# comments)."
+    Write-Info 'Each connection picks a random node; edits take effect on the next connect.'
+    Write-Info 'Route the tunnel through xray via item 7 (ProxyCommand).'
 }
 
-function Invoke-ItemProxy {  # item 7: toggle routing the tunnel through xray
-    if (-not (Test-StatusConfig)) { throw "No managed Host $TunnelAlias block yet - run item 4 first" }
+function Invoke-ItemProxy {  # item 7: toggle ProxyCommand (route ssh through xray)
+    if (-not (Test-StatusConfig)) { throw "No Host $TunnelAlias block yet - run item 4 first" }
     $srvHost = Get-ConfigBlockValue 'HostName'
     $srvUser = Get-ConfigBlockValue 'User'
     $srvPort = Get-ConfigBlockValue 'Port'
-    $revPort = ((Get-ConfigBlockValue 'RemoteForward') -split ':')[-1]
-    if (-not ($srvHost -and $srvUser -and $srvPort -and $revPort)) {
-        throw "Could not read the Host $TunnelAlias block - re-run item 4"
-    }
-    if (Test-ConfigProxyOn) {
-        Write-SshConfigBlock -SrvHost $srvHost -SrvUser $srvUser -SrvPort ([int]$srvPort) -RevPort ([int]$revPort) -Force
-        Write-Info "Proxy OFF - ssh $TunnelAlias connects directly again"
-    } else {
-        if (-not (Test-StatusXray)) { throw 'xray client not configured - run item 6 first' }
-        Write-SshConfigBlock -SrvHost $srvHost -SrvUser $srvUser -SrvPort ([int]$srvPort) -RevPort ([int]$revPort) -UseProxy -Force
+    if (-not ($srvHost -and $srvUser -and $srvPort)) { throw "Could not read the Host $TunnelAlias block - re-run item 4" }
+    $rev = Get-ConfigBlockRport
+    $revInt = if ($rev) { [int]$rev } else { 0 }
+    $want = -not (Test-ConfigProxyOn)
+    if ($UseXrayProxy -ne '') { $want = ($UseXrayProxy -eq '1') }
+    if ($want) {
+        if (-not (Test-StatusXray)) { throw 'xray client not set up - run item 6 first' }
+        if ((Read-VlessNodes $VlessNodes).Count -eq 0) { throw "No nodes in $VlessNodes - add a vless:// URL there first" }
+        Write-SshConfigBlock -SrvHost $srvHost -SrvUser $srvUser -SrvPort ([int]$srvPort) -RevPort $revInt -UseProxy -Force
         Write-Info "Proxy ON - ssh $TunnelAlias now routes through xray"
+    } else {
+        Write-SshConfigBlock -SrvHost $srvHost -SrvUser $srvUser -SrvPort ([int]$srvPort) -RevPort $revInt -Force
+        Write-Info "Proxy OFF - ssh $TunnelAlias connects directly again"
     }
 }
 
@@ -834,9 +864,7 @@ function Test-StatusConfig {
     $raw = Get-Content -Raw $SshConfig -ErrorAction SilentlyContinue
     return [bool]($raw -and $raw.Contains($BeginMark))
 }
-function Test-StatusXray {
-    return ((Read-VlessNodes $VlessNodes).Count -gt 0) -and (Test-Path $XrayLauncher) -and [bool](Resolve-XrayExe)
-}
+function Test-StatusXray { return (Test-Path $XrayLauncher) -and [bool](Resolve-XrayExe) }
 function Test-ConfigProxyOn {
     $raw = Get-Content -Raw $SshConfig -ErrorAction SilentlyContinue
     return [bool]($raw -and $raw.Contains('ProxyCommand') -and $raw.Contains($XrayLauncher))
@@ -851,28 +879,28 @@ function Show-Menu {
     Write-Host ('  1) {0,-50} {1}' -f 'Incoming SSH - OpenSSH Server + harden  [admin]', (Format-Mark (Test-StatusSshd)))
     Write-Host ('  2) {0,-50} {1}' -f 'Local SSH key (~\.ssh\id_ed25519)', (Format-Mark (Test-StatusKey)))
     Write-Host ('  3) {0,-50} {1}' -f "Authorize the server's connect-back key", (Format-Mark (Test-StatusAuthorize)))
-    $cfgLabel = 'Tunnel config (Host remote-claude)'
-    if (Test-ConfigProxyOn) { $cfgLabel += ' [xray]' }
-    Write-Host ('  4) {0,-50} {1}' -f $cfgLabel, (Format-Mark (Test-StatusConfig)))
-    Write-Host  '  5) Show local public key (paste into server setup)'
-    Write-Host ('  6) {0,-50} {1}' -f 'xray client (vless-nodes.txt)', (Format-Mark (Test-StatusXray)))
+    Write-Host ('  4) {0,-50} {1}' -f 'SSH config shortcut (Host remote-claude)', (Format-Mark (Test-StatusConfig)))
+    Write-Host ('  5) {0,-50} {1}' -f 'Reverse tunnel port (RemoteForward)', (Format-Mark (Test-StatusRport)))
+    Write-Host ('  6) {0,-50} {1}' -f 'xray client (binary + launcher)', (Format-Mark (Test-StatusXray)))
     Write-Host ('  7) {0,-50} {1}' -f 'Route tunnel through xray (ProxyCommand)', (Format-Mark (Test-ConfigProxyOn)))
+    Write-Host  '  8) Show local public key (paste into server setup)'
     Write-Host  '  q) Quit'
 }
 
 if (-not $env:RC_SOURCED_FOR_TEST) {
     :menu while ($true) {
         Show-Menu
-        $choice = (Read-Host 'Select [1-7, q]').Trim()
+        $choice = (Read-Host 'Select [1-8, q]').Trim()
         if ($choice -match '^[Qq]$') { break menu }
         $fn = switch ($choice) {
             '1' { 'Invoke-ItemSshd' }
             '2' { 'Invoke-ItemKey' }
             '3' { 'Invoke-ItemAuthorize' }
             '4' { 'Invoke-ItemConfig' }
-            '5' { 'Invoke-ItemShowKey' }
+            '5' { 'Invoke-ItemRport' }
             '6' { 'Invoke-ItemXray' }
             '7' { 'Invoke-ItemProxy' }
+            '8' { 'Invoke-ItemShowKey' }
             default { $null }
         }
         if (-not $fn) { Write-Warn "Unknown selection: $choice"; continue }
