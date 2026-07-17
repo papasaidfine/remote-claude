@@ -12,24 +12,9 @@ you    ── VSCode Remote-SSH / ssh remote-claude ──▶  server
 agent  ── ssh my-device ──▶  your machine    (through the reverse tunnel)
 ```
 
-- **Nothing extra to run** — connecting to the server the way you always do
-  (VSCode Remote-SSH, or `ssh remote-claude` in a terminal) brings the reverse
-  tunnel up with it and closes it when you disconnect.
-- **One connection at a time** — the reverse port can only be held once; a
-  second `remote-claude` connection fails until the first one closes.
-- **Private by construction** — the reverse port stays on `127.0.0.1` at both
-  ends, is never exposed to LAN or internet, and the server-side key only
-  works through the tunnel.
-- **Menu-driven setup on both sides** — independent, idempotent items that
-  show what's already configured; safe to re-run any time. Key exchange is
-  copy-paste; the scripts never SSH anywhere themselves.
-- **Agent-ready server** — installs `~/.claude/CLAUDE.md` so `claude` works on
-  your machine through `ssh my-device`, plus an agent-maintained facts file
-  (your OS, project paths) so new sessions skip rediscovery.
-- **Optional xray (VLESS) proxy** for bad networks — nodes live in a plain
-  text file; every xray start picks one at random.
-- **Easy rollback** — every file the scripts touch is backed up first
-  (`*.claude-bak-<timestamp>`) and marked with `claude`.
+You don't run anything special to keep the tunnel up: connect to the server the
+way you always do and it comes with you. Only one connection can hold it at a
+time.
 
 ## 1. Set up your local machine
 
