@@ -14,15 +14,19 @@ agent  ── ssh my-device ──▶  your machine    (reverse ssh)
 
 ## 1. Set up your local machine
 
-**macOS / Linux** — run as your normal user, no `sudo` in front (item 1 calls
-sudo itself when it needs it):
+**macOS:**
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-macos.sh)   # macOS
-bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-linux.sh)   # Linux
+bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-macos.sh)
 ```
 
-**Windows** — in an **Administrator** PowerShell:
+**Linux:**
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-linux.sh)
+```
+
+**Windows** (run as administrator):
 
 ```powershell
 irm https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-windows.ps1 -OutFile bootstrap-windows.ps1

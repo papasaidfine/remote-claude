@@ -13,15 +13,19 @@ agent   ── ssh my-device ──▶  你的电脑    （反向 ssh）
 
 ## 1. 配置本地电脑
 
-**macOS / Linux**——用普通用户直接跑、前面不要加 `sudo`（第 1 项需要时脚本
-自己会调 sudo）：
+**macOS：**
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-macos.sh)   # macOS
-bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-linux.sh)   # Linux
+bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-macos.sh)
 ```
 
-**Windows** — 在**管理员** PowerShell 中：
+**Linux：**
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-linux.sh)
+```
+
+**Windows**（以管理员身份运行）：
 
 ```powershell
 irm https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-windows.ps1 -OutFile bootstrap-windows.ps1
