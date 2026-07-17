@@ -2,17 +2,14 @@
 
 [English](README.md) | 中文
 
-让远程服务器上的 Claude / Codex 在**你自己电脑**（Windows / macOS / Linux）的代码上
+让远程服务器上的 Claude 在**你自己电脑**（Windows / macOS / Linux）的代码上
 干活：你平时连服务器的那条 SSH 连接会顺带建立一条反向隧道，agent 通过它
 `ssh my-device` 回到你的电脑，所有项目操作都在本地执行。
 
 ```
 你      ── VSCode Remote-SSH / ssh remote-claude ──▶  服务器
-agent   ── ssh my-device ──▶  你的电脑    （走反向隧道）
+agent   ── ssh my-device ──▶  你的电脑    （反向 ssh）
 ```
-
-你不用额外跑任何东西来维持隧道：像平时那样连服务器，隧道就跟着建立。同一时刻
-只能有一条连接占用它。
 
 ## 1. 配置本地电脑
 
@@ -31,8 +28,18 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 .\bootstrap-windows.ps1
 ```
 
-按菜单从上到下做即可。问到 "server-side public key" 时，粘贴第 2 步打印的公钥
-（也可以先跳过，之后重跑该项）。
+菜单（每项显示是否已配置，从上到下做即可）：
+
+1. 接收 SSH 连接（sshd）
+2. 本地 SSH key
+3. 授权服务器的反连公钥
+4. SSH config 快捷方式（`Host remote-claude`）
+5. 反向隧道端口
+6. xray 代理客户端——可选，网络差时用
+7. 隧道走 xray
+8. 显示本地公钥
+
+Linux 没有 xray，菜单为 1–5 加"显示本地公钥"。
 
 ## 2. 配置服务器
 
@@ -42,42 +49,10 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/server/setup-server.sh)
 ```
 
-- 第一项打印服务器公钥 → 粘到本地 bootstrap 询问 "server-side public key" 的地方。
-- 另一项询问**你本地电脑的公钥**（本地菜单的"显示公钥"项会打印）→ 授权隧道登录。
-- 其余项安装 `~/.claude/CLAUDE.md` 指令和 facts 文件，让 `claude` 在你电脑上干活。
-- 两边的反向端口填一样的（默认 2222）。
+菜单：
 
-## 3. 开始使用
-
-像平时一样连服务器——**VSCode Remote-SSH**（host 选 `remote-claude`）或终端里
-`ssh remote-claude`——然后启动 `claude`，告诉它做哪个本地项目
-（"在 `~/projects/foo` 上工作"）。
-
-快速验证（在服务器上）：
-
-```bash
-ssh my-device 'echo ok'                # 应打印 ok
-```
-
-如果因为反向端口被占用而连接失败：先断开上一条 `remote-claude` 连接——
-隧道同时只能有一条。
-
-## 可选：让隧道走 xray（VLESS）代理
-
-网络较差/受限时，macOS 和 Windows 的引导脚本各多两项。**6) xray client** 下载
-xray（已安装则对比最新 release 版本号、需要时更新），并创建节点列表（macOS 在
-`~/.config/remote-claude/vless-nodes.txt`，Windows 在
-`%LOCALAPPDATA%\remote-claude\vless-nodes.txt`）——把你的 `vless://` URL 一行一个
-填进去、`#` 开头是注释，每次 xray 启动随机选一个，改文件下次连接即生效。
-**7)** 一键开/关隧道走代理。
-Windows 每条连接自带一个 xray、连接断了自动清理；macOS 共享一个按需 xray，
-`pkill xray` 后重连即换节点。
-
-## 卸载
-
-脚本改过的文件都有备份（`*.claude-bak-<时间戳>`），文件名/配置块里都带 `claude`
-标记。让你的 AI 助手读本仓库的脚本带你完整回滚即可。
-
-## 遇到问题？
-
-看 [TROUBLESHOOTING.zh-CN.md](TROUBLESHOOTING.zh-CN.md)——按症状逐跳排查。
+1. 反连 key（生成 + 显示公钥）
+2. 授权你本地电脑的公钥（隧道登录用）
+3. `my-device` ssh 别名
+4. Agent 指令（`~/.claude/CLAUDE.md`）
+5. Agent facts 文件（`facts.json`）
