@@ -40,7 +40,7 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 3. 授权服务器的反连公钥
 4. SSH config 快捷方式（`Host remote-claude`）
 5. 反向隧道端口
-6. xray 代理客户端——可选，网络差时用
+6. xray 代理客户端——可选，网络差时用；会先询问下载代理（回车 = 直连）
 7. 隧道走 xray
 8. 显示本地公钥
 

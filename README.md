@@ -41,7 +41,7 @@ Menu (each item shows whether it's already configured; work top to bottom):
 3. Authorize the server's connect-back key
 4. SSH config shortcut (`Host remote-claude`)
 5. Reverse tunnel port
-6. xray proxy client — optional, for bad networks
+6. xray proxy client — optional, for bad networks; asks for a download proxy first (Enter = direct)
 7. Route the tunnel through xray
 8. Show the local public key
 
