@@ -858,6 +858,9 @@ function Invoke-ItemKey {    # item 2: ensure %USERPROFILE%\.ssh\id_ed25519 exis
 function Invoke-ItemTest {   # item 3: test the connection (adaptive; never modifies files)
     if (-not (Test-StatusConfig)) { throw "No Host $TunnelAlias block yet - run item 1 first" }
     $rport = Get-ConfigBlockRport
+    if ($rport -and $rport -notmatch '^\d+$') {
+        throw "RemoteForward port '$rport' in the managed block is not numeric - re-run item 6"
+    }
     $ok = $true
     $prevEap = $ErrorActionPreference
 
