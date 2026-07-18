@@ -111,6 +111,12 @@ if [[ "$got" == 'unset' ]]; then
 else
   printf 'FAIL - proxy: empty answer should not export, got %s\n' "$got"; fail=1
 fi
+got="$(printf '  http://127.0.0.1:7890  \n' | { ask_dl_proxy >/dev/null 2>&1; printf '%s' "${https_proxy:-}"; })"
+if [[ "$got" == 'http://127.0.0.1:7890' ]]; then
+  printf 'ok   - proxy: answer is trimmed before export\n'
+else
+  printf 'FAIL - proxy: expected trimmed export, got [%s]\n' "$got"; fail=1
+fi
 
 # --- run_xray (item 6): update flow via overrides ---------------------------------
 # Stub the network-facing pieces; overrides are inherited by the ( run_xray ) subshells.
