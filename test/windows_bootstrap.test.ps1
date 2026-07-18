@@ -165,6 +165,13 @@ Check 'proxy: Get-ProxyArgs carries the proxy' ($pa.Proxy -eq 'http://127.0.0.1:
 $script:DlProxy = ''
 Check 'proxy: Get-ProxyArgs empty when direct' ((Get-ProxyArgs).Count -eq 0)
 
+# EOF/non-interactive stdin: Read-Host yields $null; must degrade to direct
+function Read-Host { param([string]$Prompt) return $null }
+$script:DlProxy = 'http://stale.example'
+Read-DlProxy
+Check 'proxy: EOF prompt degrades to direct' ($script:DlProxy -eq '')
+Remove-Item Function:Read-Host
+
 function Invoke-WebRequest {
     param([switch]$UseBasicParsing, [string]$OutFile, [int]$TimeoutSec, [uri]$Proxy, [string]$Uri)
     $script:iwrCall = $PSBoundParameters

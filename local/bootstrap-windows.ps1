@@ -89,7 +89,7 @@ function Read-Default {
         if ([string]::IsNullOrWhiteSpace($reply)) { return $Default }
         return $reply.Trim()
     }
-    return (Read-Host $Prompt).Trim()
+    return "$(Read-Host $Prompt)".Trim()
 }
 
 function Read-YesNo {
