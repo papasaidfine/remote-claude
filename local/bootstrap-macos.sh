@@ -610,6 +610,14 @@ xray_bin() { # echo path to an xray binary, or return 1
   command -v xray 2>/dev/null
 }
 
+ask_dl_proxy() { # item 6: optional proxy for the GitHub downloads (empty = direct)
+  local p
+  p="$(ask 'Proxy for the xray download (e.g. http://127.0.0.1:7890, empty = direct)')"
+  [[ -n "$p" ]] || return 0
+  export https_proxy="$p" HTTPS_PROXY="$p" all_proxy="$p" ALL_PROXY="$p"
+  log "Using proxy $p for this item's downloads"
+}
+
 install_xray() {
   if xray_bin >/dev/null; then log "xray already available: $(xray_bin)"; return 0; fi
   if command -v brew >/dev/null 2>&1; then

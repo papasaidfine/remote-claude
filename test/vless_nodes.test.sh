@@ -96,6 +96,22 @@ printf '#!/bin/sh\necho "Xray 25.0.0 (Xray, Penetrates Everything.)"\n' > "$XRAY
 chmod +x "$XRAY_VENDOR_BIN"
 check 'version: local parsed from binary' "x$(xray_local_version "$XRAY_VENDOR_BIN")x" 'x25.0.0x'
 
+# --- ask_dl_proxy: optional download proxy ---------------------------------------
+# Host machines may have proxy vars set; clear them so the checks are honest.
+unset https_proxy HTTPS_PROXY all_proxy ALL_PROXY
+got="$(printf 'http://127.0.0.1:7890\n' | { ask_dl_proxy >/dev/null 2>&1; printf '%s|%s|%s|%s' "${https_proxy:-}" "${HTTPS_PROXY:-}" "${all_proxy:-}" "${ALL_PROXY:-}"; })"
+if [[ "$got" == 'http://127.0.0.1:7890|http://127.0.0.1:7890|http://127.0.0.1:7890|http://127.0.0.1:7890' ]]; then
+  printf 'ok   - proxy: entered proxy exported to all four vars\n'
+else
+  printf 'FAIL - proxy: expected all four vars exported, got %s\n' "$got"; fail=1
+fi
+got="$(printf '\n' | { ask_dl_proxy >/dev/null 2>&1; printf '%s' "${https_proxy:-unset}"; })"
+if [[ "$got" == 'unset' ]]; then
+  printf 'ok   - proxy: empty answer leaves the environment alone\n'
+else
+  printf 'FAIL - proxy: empty answer should not export, got %s\n' "$got"; fail=1
+fi
+
 # --- run_xray (item 6): update flow via overrides ---------------------------------
 # Stub the network-facing pieces; overrides are inherited by the ( run_xray ) subshells.
 nc() { :; }
