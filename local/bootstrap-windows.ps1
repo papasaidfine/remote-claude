@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Reverse SSH dev-environment bootstrap for Windows.
 
@@ -12,31 +12,40 @@
   Presents a menu of independent items -- each is idempotent, shows whether
   it is already configured, and can be run (or fail, or be re-run) on its own:
 
-    1. Incoming SSH: install OpenSSH Server if missing, start sshd, set it
-       to auto-start, and harden %ProgramData%\ssh\sshd_config: pubkey auth
-       on, password auth off (optional), and comment out the
-       "Match Group administrators" block so admin users also use their own
-       %USERPROFILE%\.ssh\authorized_keys. Backs up the config and validates
-       with `sshd -t` before restarting. The only item that needs an
-       elevated (Administrator) PowerShell.
-    2. Ensure the default %USERPROFILE%\.ssh\id_ed25519 exists
-       (local -> server hop).
-    3. Append the server-side public key to authorized_keys with a
-       from="127.0.0.1,::1" restriction (dedup by key blob).
-    4. Write the base "Host remote-claude" block into
-       %USERPROFILE%\.ssh\config (host/user/port only; keeps an existing
-       reverse port / proxy).
-    5. Add or update the reverse tunnel port (RemoteForward) on that block.
-    6. xray client: ask for an optional download proxy, then download the xray
-       binary (or version-check and update it) and write the per-connection
-       ProxyCommand launcher; nodes live in vless-nodes.txt (one vless:// URL
-       per line, a random one per connection).
-    7. Toggle routing the tunnel through the xray proxy (ProxyCommand). Each
-       ssh connection then runs its own xray, which dies with the connection.
-    8. Show the local public key to paste into the server-side setup.
+    Phase 1 - Local -> Claude (reach the server running Claude Code):
+      1. Write the base "Host remote-claude" block into
+         %USERPROFILE%\.ssh\config (host/user/port only; keeps an existing
+         reverse port / proxy).
+      2. Ensure the default %USERPROFILE%\.ssh\id_ed25519 exists
+         (local -> server hop) and print the public key to paste into the
+         server-side setup.
+      3. Test connection: outbound ssh check, plus a reverse-tunnel probe
+         when configured; read-only.
+
+    Phase 2 - Claude -> Local (let the agent ssh back into this machine):
+      4. Incoming SSH: install OpenSSH Server if missing, start sshd, set it
+         to auto-start, and harden %ProgramData%\ssh\sshd_config: pubkey auth
+         on, password auth off (optional), and comment out the
+         "Match Group administrators" block so admin users also use their own
+         %USERPROFILE%\.ssh\authorized_keys. Backs up the config and validates
+         with `sshd -t` before restarting. The only item that needs an
+         elevated (Administrator) PowerShell.
+      5. Append the server-side public key to authorized_keys with a
+         from="127.0.0.1,::1" restriction (dedup by key blob).
+      6. Add or update the reverse tunnel port (RemoteForward) on that block.
+
+    Phase 3 - xray wrap (optional, for bad networks):
+      7. xray client: ask for an optional download proxy, then download the
+         xray binary (or version-check and update it), write the config
+         launcher, and compile the rc-stdio-relay.exe ProxyCommand helper;
+         nodes live in vless-nodes.txt (one vless:// URL per line, a random
+         one per connection).
+      8. Toggle routing the tunnel through the xray proxy (ProxyCommand).
+         Each ssh connection then runs its own xray, which dies with the
+         connection.
 
 .NOTES
-  Only item 1 requires an elevated (Administrator) PowerShell; the other
+  Only item 4 requires an elevated (Administrator) PowerShell; the other
   items run fine without elevation.
 
 .EXAMPLE
@@ -56,6 +65,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# The banner/menu use Unicode glyphs; switch the console to UTF-8 for this run
+# (restored on exit). The file itself is saved UTF-8 with BOM for PS 5.1.
+$PrevConsoleEncoding = $null
+try {
+    $PrevConsoleEncoding = [Console]::OutputEncoding
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+} catch {}
+
 $TunnelAlias  = 'remote-claude'
 $KeyName      = 'id_ed25519'
 $SshDir       = Join-Path $env:USERPROFILE '.ssh'
@@ -70,18 +87,20 @@ $Ts           = Get-Date -Format 'yyyyMMdd-HHmmss'
 $BeginMark = "# >>> $TunnelAlias (managed by reverse-ssh-bootstrap) >>>"
 $EndMark   = "# <<< $TunnelAlias <<<"
 
-# xray / VLESS client (items 6 and 7)
+# xray / VLESS client (items 7 and 8)
 $RcConfigDir  = Join-Path $env:LOCALAPPDATA 'remote-claude'
 $XrayJson     = Join-Path $RcConfigDir 'xray.json'
 $XrayLauncher = Join-Path $RcConfigDir 'xray-proxy.ps1'
 $XrayVendorBin = Join-Path (Join-Path $RcConfigDir 'bin') 'xray.exe'
 $XrayRelay    = Join-Path (Join-Path $RcConfigDir 'bin') 'rc-stdio-relay.exe'
 $VlessNodes   = Join-Path $RcConfigDir 'vless-nodes.txt'
-$DlProxy      = ''        # optional proxy for the GitHub downloads; item 6 asks each run
+$DlProxy      = ''        # optional proxy for the GitHub downloads; item 7 asks each run
 
 function Write-Info { param([string]$Msg) Write-Host "[+] $Msg" -ForegroundColor Green }
 function Write-Warn { param([string]$Msg) Write-Host "[!] $Msg" -ForegroundColor Yellow }
 function Write-Err  { param([string]$Msg) Write-Host "[x] $Msg" -ForegroundColor Red }
+function Write-Pass     { param([string]$Msg) Write-Host "  ✔ $Msg" -ForegroundColor Green }
+function Write-FailMark { param([string]$Msg) Write-Host "  ✘ $Msg" -ForegroundColor Red }
 
 function Read-Default {
     param([string]$Prompt, [string]$Default = '')
@@ -266,7 +285,7 @@ function Resolve-XrayExe { # path to an xray binary, or $null
     return $null
 }
 
-function Read-DlProxy { # item 6: optional proxy for the GitHub downloads (empty = direct)
+function Read-DlProxy { # item 7: optional proxy for the GitHub downloads (empty = direct)
     $script:DlProxy = Read-Default 'Proxy for the xray download (e.g. http://127.0.0.1:7890, empty = direct)'
     if ($script:DlProxy) { Write-Info "Using proxy $script:DlProxy for this item's downloads" }
 }
@@ -368,7 +387,7 @@ $xrayExe = Join-Path (Join-Path $RcDir 'bin') 'xray.exe'
 if (-not (Test-Path $xrayExe)) {
     $cmd = Get-Command xray.exe -ErrorAction SilentlyContinue
     if ($cmd) { $xrayExe = $cmd.Source }
-    else { [Console]::Error.WriteLine('xray.exe not found - re-run bootstrap item 6'); exit 1 }
+    else { [Console]::Error.WriteLine('xray.exe not found - re-run bootstrap item 7'); exit 1 }
 }
 
 # Random node for THIS connection
@@ -381,14 +400,14 @@ if ($nodes.Count -eq 0) {
 $node = $nodes | Get-Random
 
 # The native relay supplies all paths and the port. The legacy branch remains
-# only so an old ProxyCommand fails cleanly until item 6 migrates its config.
+# only so an old ProxyCommand fails cleanly until item 7 migrates its config.
 if ($PrepareOnly) {
     if ($PreparePort -lt 1 -or -not $PrepareConfig) {
         throw 'PrepareOnly requires PreparePort and PrepareConfig'
     }
     $dokoPort = $PreparePort
 } else {
-    [Console]::Error.WriteLine('legacy PowerShell ProxyCommand is unsupported; re-run bootstrap item 6 to install the native relay')
+    [Console]::Error.WriteLine('legacy PowerShell ProxyCommand is unsupported; re-run bootstrap item 7 to install the native relay')
     exit 1
 }
 
@@ -650,7 +669,7 @@ public static class RcStdioRelay {
     Write-Info "Wrote $XrayRelay"
 }
 
-function Invoke-ItemXray {   # item 6: download/update the xray binary + write the launcher
+function Invoke-ItemXray {   # item 7: download/update the xray binary + write the launcher
     $legacyProxy = $false
     if (Test-Path $SshConfig) {
         $configBefore = Get-Content -Raw $SshConfig -ErrorAction SilentlyContinue
@@ -675,21 +694,21 @@ function Invoke-ItemXray {   # item 6: download/update the xray binary + write t
             Write-Info 'Migrated the legacy PowerShell ProxyCommand to rc-stdio-relay.exe'
         }
     }
-    Write-Info 'Route the tunnel through xray via item 7 (ProxyCommand).'
+    Write-Info 'Route the tunnel through xray via item 8 (ProxyCommand).'
 }
 
-function Invoke-ItemProxy {  # item 7: toggle ProxyCommand (route ssh through xray)
-    if (-not (Test-StatusConfig)) { throw "No Host $TunnelAlias block yet - run item 4 first" }
+function Invoke-ItemProxy {  # item 8: toggle ProxyCommand (route ssh through xray)
+    if (-not (Test-StatusConfig)) { throw "No Host $TunnelAlias block yet - run item 1 first" }
     $srvHost = Get-ConfigBlockValue 'HostName'
     $srvUser = Get-ConfigBlockValue 'User'
     $srvPort = Get-ConfigBlockValue 'Port'
-    if (-not ($srvHost -and $srvUser -and $srvPort)) { throw "Could not read the Host $TunnelAlias block - re-run item 4" }
+    if (-not ($srvHost -and $srvUser -and $srvPort)) { throw "Could not read the Host $TunnelAlias block - re-run item 1" }
     $rev = Get-ConfigBlockRport
     $revInt = if ($rev) { [int]$rev } else { 0 }
     $want = -not (Test-ConfigProxyOn)
     if ($UseXrayProxy -ne '') { $want = ($UseXrayProxy -eq '1') }
     if ($want) {
-        if (-not (Test-StatusXray)) { throw 'xray client not set up - run item 6 first' }
+        if (-not (Test-StatusXray)) { throw 'xray client not set up - run item 7 first' }
         if ((Read-VlessNodes $VlessNodes).Count -eq 0) { throw "No nodes in $VlessNodes - add a vless:// URL there first" }
         Write-SshConfigBlock -SrvHost $srvHost -SrvUser $srvUser -SrvPort ([int]$srvPort) -RevPort $revInt -UseProxy -Force
         Write-Info "Proxy ON - ssh $TunnelAlias now routes through xray"
@@ -700,27 +719,35 @@ function Invoke-ItemProxy {  # item 7: toggle ProxyCommand (route ssh through xr
 }
 
 # ---------------------------------------------------------------- platform
+function Show-Banner {
+    Write-Host @'
+
+╭──────────────────────────────────────────────────────────────╮
+│  remote-claude · reverse SSH bootstrap (Windows)             │
+│                                                              │
+│    Local ──────ssh─────▶ Claude   (you reach the server)     │
+│    Local ◀──reverse ssh── Claude  (the agent reaches back)   │
+│    xray ═[ ssh ]═▶  optional wrap for hostile networks       │
+╰──────────────────────────────────────────────────────────────╯
+ Each item is independent and idempotent; work top to bottom.
+ Files this can modify: OpenSSH Server / sshd_config (item 4,
+ Administrator) and %USERPROFILE%\.ssh\{config,authorized_keys,
+ id_ed25519}. Modified system files are backed up first
+ (*.claude-bak-<timestamp>).
+'@
+}
+
 if (-not $env:RC_SOURCED_FOR_TEST) {
     if ($env:OS -ne 'Windows_NT') {
         Write-Err 'This script is for Windows. On macOS, run ./bootstrap-macos.sh instead.'
         exit 1
     }
 
-    Write-Host @'
-==========================================================
- Reverse SSH bootstrap (Windows)
- local PC  ->  remote server  ->  (reverse tunnel)  -> local PC
-==========================================================
-Pick items from the menu below; each one is independent, idempotent,
-and shows whether it is already configured. Files this can modify:
-  - OpenSSH Server install / sshd service / sshd_config (item 1, Administrator)
-  - %USERPROFILE%\.ssh\{config,authorized_keys,id_ed25519}
-All modified system files are backed up first (*.claude-bak-<timestamp>).
-'@
+    Show-Banner
 }
 
 # ---------------------------------------------------------------- menu items
-function Invoke-ItemSshd {   # item 1: OpenSSH Server install + harden (admin)
+function Invoke-ItemSshd {   # item 4: OpenSSH Server install + harden (admin)
     if (-not (Test-IsAdmin)) {
         Write-Host ('    Start-Process powershell -Verb RunAs -ArgumentList ''-ExecutionPolicy Bypass -File "{0}"''' -f $PSCommandPath)
         throw 'Administrator privileges are required for this item (OpenSSH Server install / sshd_config / service control). Re-run this script from an elevated PowerShell (e.g. the line above) to use it.'
@@ -821,9 +848,62 @@ function Invoke-ItemKey {    # item 2: ensure %USERPROFILE%\.ssh\id_ed25519 exis
         if ($LASTEXITCODE -ne 0) { throw 'ssh-keygen failed' }
     }
     Set-StrictAcl -Path $KeyPath
+    Write-Host ''
+    Write-Info "Local public key - paste it into server/setup-server.sh (item 2) on the server; that authorizes the tunnel login (ssh $TunnelAlias):"
+    Write-Host ''
+    Get-Content "$KeyPath.pub" | Write-Host
+    Write-Host ''
 }
 
-function Invoke-ItemAuthorize {  # item 3: authorize the server's connect-back key
+function Invoke-ItemTest {   # item 3: test the connection (adaptive; never modifies files)
+    if (-not (Test-StatusConfig)) { throw "No Host $TunnelAlias block yet - run item 1 first" }
+    $rport = Get-ConfigBlockRport
+    $ok = $true
+    $prevEap = $ErrorActionPreference
+
+    Write-Info "Testing outbound hop: ssh $TunnelAlias ..."
+    # ssh writes progress to stderr; with EAP=Stop, 2>&1 would wrap it into a
+    # terminating NativeCommandError on PS 5.1 (same pattern as Invoke-ItemSshd)
+    $ErrorActionPreference = 'Continue'
+    $out = @(& ssh -o BatchMode=yes -o ConnectTimeout=10 -o ClearAllForwardings=yes $TunnelAlias 'echo ok' 2>&1 | ForEach-Object { "$_" })
+    $ErrorActionPreference = $prevEap
+    if ($out -contains 'ok') {
+        Write-Pass "outbound: ssh $TunnelAlias works"
+    } else {
+        Write-FailMark 'outbound: could not log in to the server'
+        $out | Select-Object -Last 3 | ForEach-Object { Write-Host "      $_" }
+        Write-Warn 'Most common cause: the server has not authorized your local key yet -'
+        Write-Warn 'item 2 prints it; paste it into server/setup-server.sh (item 2) there.'
+        $ok = $false
+    }
+
+    if ($ok -and $rport) {
+        Write-Info "Testing reverse tunnel: server 127.0.0.1:$rport -> this machine's sshd ..."
+        # This connection carries the RemoteForward from the managed block, so
+        # probing the port on the server lands back on the local sshd.
+        # ExitOnForwardFailure=no: an already-open tunnel session holding the
+        # forward is still a valid end-to-end path to probe through.
+        $probe = "bash -c 'exec 3<>/dev/tcp/127.0.0.1/$rport' 2>/dev/null && echo tunnel-ok"
+        $ErrorActionPreference = 'Continue'
+        $out = @(& ssh -o BatchMode=yes -o ConnectTimeout=10 -o ExitOnForwardFailure=no $TunnelAlias $probe 2>&1 | ForEach-Object { "$_" })
+        $ErrorActionPreference = $prevEap
+        if ($out -contains 'tunnel-ok') {
+            Write-Pass "reverse tunnel: server port $rport reaches this machine's sshd"
+        } else {
+            Write-FailMark "reverse tunnel: server port $rport did not answer"
+            Write-Warn 'Check phase 2 - incoming sshd (item 4), authorized key (item 5), reverse port (item 6).'
+            $ok = $false
+        }
+    } elseif (-not $rport) {
+        Write-Warn 'No reverse tunnel port yet (item 6) - skipped the tunnel check.'
+    }
+
+    if (Test-ConfigProxyOn) { Write-Info 'Path: via xray (ProxyCommand) - a passing test also validates phase 3.' }
+    else { Write-Info 'Path: direct (xray proxy off).' }
+    if (-not $ok) { throw 'Some checks failed (see above)' }
+}
+
+function Invoke-ItemAuthorize {  # item 5: authorize the server's connect-back key
     Initialize-SshDir
     Write-Host 'Server-side public key: the .pub of the key that Claude / Codex on the'
     Write-Host 'server will use to SSH back into this machine (setup-server.sh item 1'
@@ -954,7 +1034,7 @@ function Test-ConfigFields { # $true when all fields are valid; else Write-Err +
     return $true
 }
 
-function Invoke-ItemConfig {     # item 4: base Host block - form: edit fields, then apply
+function Invoke-ItemConfig {     # item 1: base Host block - form: edit fields, then apply
     Initialize-SshDir
     $srvHost = ''; $srvUser = ''; $srvPort = ''; $useProxy = $false; $revInt = 0
     # Pre-fill from the existing block; RemoteForward/ProxyCommand pass through untouched
@@ -1005,12 +1085,12 @@ function Invoke-ItemConfig {     # item 4: base Host block - form: edit fields, 
     }
 }
 
-function Invoke-ItemRport {   # item 5: reverse tunnel port (RemoteForward)
-    if (-not (Test-StatusConfig)) { throw "No Host $TunnelAlias block yet - run item 4 first" }
+function Invoke-ItemRport {   # item 6: reverse tunnel port (RemoteForward)
+    if (-not (Test-StatusConfig)) { throw "No Host $TunnelAlias block yet - run item 1 first" }
     $srvHost = Get-ConfigBlockValue 'HostName'
     $srvUser = Get-ConfigBlockValue 'User'
     $srvPort = Get-ConfigBlockValue 'Port'
-    if (-not ($srvHost -and $srvUser -and $srvPort)) { throw "Could not read the Host $TunnelAlias block - re-run item 4" }
+    if (-not ($srvHost -and $srvUser -and $srvPort)) { throw "Could not read the Host $TunnelAlias block - re-run item 1" }
     $useProxy = Test-ConfigProxyOn
     $cur = Get-ConfigBlockRport
     $revPort = if ($ReversePort -gt 0) { "$ReversePort" } else {
@@ -1019,20 +1099,6 @@ function Invoke-ItemRport {   # item 5: reverse tunnel port (RemoteForward)
     if ($revPort -notmatch '^\d+$') { throw 'Reverse port must be a number' }
     Write-SshConfigBlock -SrvHost $srvHost -SrvUser $srvUser -SrvPort ([int]$srvPort) -RevPort ([int]$revPort) -UseProxy:$useProxy -Force
     Write-Info "Reverse port $revPort set - the tunnel rides on your ssh $TunnelAlias connection."
-}
-
-function Invoke-ItemShowKey {    # item 8: print the local public key
-    if (-not (Test-Path "$KeyPath.pub")) {
-        if (-not (Test-Path $KeyPath)) {
-            if (-not (Read-YesNo 'No local key yet - generate it now' $true)) { throw 'No key to show' }
-        }
-        Invoke-ItemKey
-    }
-    Write-Host ''
-    Write-Info "Local public key - paste it into server/setup-server.sh (item 2) on the server; that authorizes the tunnel login (ssh $TunnelAlias):"
-    Write-Host ''
-    Get-Content "$KeyPath.pub" | Write-Host
-    Write-Host ''
 }
 
 # ---------------------------------------------------------------- status checks
@@ -1058,20 +1124,29 @@ function Test-ConfigProxyOn {
 }
 
 # ---------------------------------------------------------------- menu
-function Format-Mark { param([bool]$Ok) if ($Ok) { '[done]' } else { '[ -  ]' } }
+function Format-Mark   { param([bool]$Ok) if ($Ok) { '[ ✔ ]' } else { '[   ]' } }
+function Format-Toggle { param([bool]$On) if ($On) { '[ on]' } else { '[off]' } }
 
 function Show-Menu {
     Write-Host ''
-    Write-Host '----------------------------------------------------------'
-    Write-Host ('  1) {0,-50} {1}' -f 'Incoming SSH - OpenSSH Server + harden  [admin]', (Format-Mark (Test-StatusSshd)))
-    Write-Host ('  2) {0,-50} {1}' -f 'Local SSH key (~\.ssh\id_ed25519)', (Format-Mark (Test-StatusKey)))
-    Write-Host ('  3) {0,-50} {1}' -f "Authorize the server's connect-back key", (Format-Mark (Test-StatusAuthorize)))
-    Write-Host ('  4) {0,-50} {1}' -f 'SSH config shortcut (Host remote-claude)', (Format-Mark (Test-StatusConfig)))
-    Write-Host ('  5) {0,-50} {1}' -f 'Reverse tunnel port (RemoteForward)', (Format-Mark (Test-StatusRport)))
-    Write-Host ('  6) {0,-50} {1}' -f 'xray client (binary + launcher)', (Format-Mark (Test-StatusXray)))
-    Write-Host ('  7) {0,-50} {1}' -f 'Route tunnel through xray (ProxyCommand)', (Format-Mark (Test-ConfigProxyOn)))
-    Write-Host  '  8) Show local public key (paste into server setup)'
-    Write-Host  '  q) Quit'
+    Write-Host '  ① Local ──▶ Claude' -ForegroundColor Cyan -NoNewline
+    Write-Host '          reach the server running Claude Code' -ForegroundColor DarkGray
+    Write-Host ('     1) {0,-48} {1}' -f 'SSH config shortcut (Host remote-claude)', (Format-Mark (Test-StatusConfig)))
+    Write-Host ('     2) {0,-48} {1}' -f 'Local SSH key - create & show public key', (Format-Mark (Test-StatusKey)))
+    Write-Host  '     3) Test connection'
+    Write-Host ''
+    Write-Host '  ② Claude ──▶ Local' -ForegroundColor Cyan -NoNewline
+    Write-Host '          let the agent ssh back into this machine' -ForegroundColor DarkGray
+    Write-Host ('     4) {0,-48} {1}' -f 'Incoming SSH - OpenSSH Server + harden  [admin]', (Format-Mark (Test-StatusSshd)))
+    Write-Host ('     5) {0,-48} {1}' -f "Authorize the server's connect-back key", (Format-Mark (Test-StatusAuthorize)))
+    Write-Host ('     6) {0,-48} {1}' -f 'Reverse tunnel port (RemoteForward)', (Format-Mark (Test-StatusRport)))
+    Write-Host ''
+    Write-Host '  ③ xray ═[ ssh ]═▶' -ForegroundColor Cyan -NoNewline
+    Write-Host '           optional - wrap the tunnel for bad networks' -ForegroundColor DarkGray
+    Write-Host ('     7) {0,-48} {1}' -f 'xray client (binary + launcher + relay)', (Format-Mark (Test-StatusXray)))
+    Write-Host ('     8) {0,-48} {1}' -f 'Route the tunnel through xray', (Format-Toggle (Test-ConfigProxyOn)))
+    Write-Host ''
+    Write-Host '     q) Quit'
 }
 
 if (-not $env:RC_SOURCED_FOR_TEST) {
@@ -1080,14 +1155,14 @@ if (-not $env:RC_SOURCED_FOR_TEST) {
         $choice = (Read-Host 'Select [1-8, q]').Trim()
         if ($choice -match '^[Qq]$') { break menu }
         $fn = switch ($choice) {
-            '1' { 'Invoke-ItemSshd' }
+            '1' { 'Invoke-ItemConfig' }
             '2' { 'Invoke-ItemKey' }
-            '3' { 'Invoke-ItemAuthorize' }
-            '4' { 'Invoke-ItemConfig' }
-            '5' { 'Invoke-ItemRport' }
-            '6' { 'Invoke-ItemXray' }
-            '7' { 'Invoke-ItemProxy' }
-            '8' { 'Invoke-ItemShowKey' }
+            '3' { 'Invoke-ItemTest' }
+            '4' { 'Invoke-ItemSshd' }
+            '5' { 'Invoke-ItemAuthorize' }
+            '6' { 'Invoke-ItemRport' }
+            '7' { 'Invoke-ItemXray' }
+            '8' { 'Invoke-ItemProxy' }
             default { $null }
         }
         if (-not $fn) { Write-Warn "Unknown selection: $choice"; continue }
@@ -1103,4 +1178,6 @@ if (-not $env:RC_SOURCED_FOR_TEST) {
     Write-Info "Connect as usual - VSCode Remote-SSH (host $TunnelAlias) or: ssh $TunnelAlias"
     Write-Info 'The reverse tunnel rides on that connection (one connection at a time).'
     Write-Info "Then on the server: ssh my-device 'echo ok' should print ok"
+
+    if ($PrevConsoleEncoding) { try { [Console]::OutputEncoding = $PrevConsoleEncoding } catch {} }
 }

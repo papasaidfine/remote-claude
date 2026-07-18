@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $bootstrap = Join-Path (Join-Path $here '..') (Join-Path 'local' 'bootstrap-windows.ps1')
 $realSystemRoot = $env:SystemRoot
@@ -261,7 +261,7 @@ Set-Content $VlessNodes 'vless://keep@k.example:443?type=tcp#keep'
 Invoke-ItemXray
 Check 'item6: existing nodes file untouched' ((Get-Content -Raw $VlessNodes).Contains('vless://keep@k.example'))
 
-# --- Invoke-ItemProxy (menu item 7) -------------------------------------------
+# --- Invoke-ItemProxy (menu item 8) -------------------------------------------
 # Reset to a known block without the proxy (Read-YesNo still throws on any prompt)
 Write-SshConfigBlock -SrvHost '203.0.113.7' -SrvUser 'ubuntu' -SrvPort 22 -RevPort 2222 -Force
 
@@ -382,6 +382,73 @@ Check 'auto: host written'        ($raw.Contains('HostName 192.0.2.10'))
 Check 'auto: no RemoteForward on fresh config' (-not $raw.Contains('RemoteForward'))
 $ServerHost = ''; $ServerUser = ''
 $SshConfig = $savedConfig
+
+# --- Show-Menu / Show-Banner ---------------------------------------------------
+# Get-Service does not exist on non-Windows pwsh; Show-Menu only needs it to
+# draw a status mark, so a null stub is enough.
+function Get-Service { param([string]$Name, [string]$ErrorAction) return $null }
+$menu = (Show-Menu 6>&1 | ForEach-Object { "$_" }) -join "`n"
+Check 'menu: phase 1 header'   ($menu.Contains('① Local ──▶ Claude'))
+Check 'menu: phase 2 header'   ($menu.Contains('② Claude ──▶ Local'))
+Check 'menu: phase 3 header'   ($menu.Contains('③ xray ═[ ssh ]═▶'))
+Check 'menu: item 1 config'    ($menu.Contains('1) SSH config shortcut'))
+Check 'menu: item 2 key'       ($menu.Contains('2) Local SSH key'))
+Check 'menu: item 3 test'      ($menu.Contains('3) Test connection'))
+Check 'menu: item 4 sshd'      ($menu.Contains('4) Incoming SSH'))
+Check 'menu: item 7 xray'      ($menu.Contains('7) xray client'))
+Check 'menu: item 8 toggle'    ($menu.Contains('8) Route the tunnel through xray'))
+Check 'menu: phases in order'  ($menu.IndexOf('1) SSH config') -lt $menu.IndexOf('4) Incoming SSH'))
+Check 'menu: show-key item gone' (-not $menu.Contains('Show local public key'))
+$banner = (Show-Banner 6>&1 | ForEach-Object { "$_" }) -join "`n"
+Check 'banner: box drawn'   ($banner.Contains('╭'))
+Check 'banner: title'       ($banner.Contains('remote-claude · reverse SSH bootstrap (Windows)'))
+Check 'banner: border aligned' ((@($banner -split "`r?`n" | Where-Object { $_.StartsWith('│') -and -not $_.EndsWith('│') })).Count -eq 0)
+Remove-Item Function:Get-Service
+
+# --- Invoke-ItemTest -----------------------------------------------------------
+$script:sshCalls = @()
+$script:sshMode = 'ok'
+function ssh { # mock: records each call's argv, output driven by sshMode
+    $script:sshCalls += ,(@($args) -join ' ')
+    $joined = @($args) -join ' '
+    switch ($script:sshMode) {
+        'ok'        { if ($joined -match 'ClearAllForwardings') { 'ok' } else { 'tunnel-ok' } }
+        'no-login'  { 'Permission denied (publickey).' }
+        'no-tunnel' { if ($joined -match 'ClearAllForwardings') { 'ok' } }
+    }
+}
+
+Write-SshConfigBlock -SrvHost 'h.example' -SrvUser 'dave' -SrvPort 22 -RevPort 2345 -Force
+$script:sshCalls = @(); $script:sshMode = 'ok'
+Invoke-ItemTest
+Check 'itest: two ssh calls'      ($script:sshCalls.Count -eq 2)
+Check 'itest: outbound flags'     ($script:sshCalls[0] -match 'BatchMode=yes' -and $script:sshCalls[0] -match 'ClearAllForwardings=yes')
+Check 'itest: tunnel probe flags' ($script:sshCalls[1] -match 'ExitOnForwardFailure=no' -and $script:sshCalls[1] -match '/dev/tcp/127.0.0.1/2345')
+
+Write-SshConfigBlock -SrvHost 'h.example' -SrvUser 'dave' -SrvPort 22 -RevPort 0 -Force
+$script:sshCalls = @()
+Invoke-ItemTest
+Check 'itest: rportless skips the probe' ($script:sshCalls.Count -eq 1)
+
+Write-SshConfigBlock -SrvHost 'h.example' -SrvUser 'dave' -SrvPort 22 -RevPort 2345 -Force
+$script:sshCalls = @(); $script:sshMode = 'no-login'
+$threw = $false
+try { Invoke-ItemTest } catch { $threw = $true }
+Check 'itest: login failure throws'      $threw
+Check 'itest: no probe after login fail' ($script:sshCalls.Count -eq 1)
+
+$script:sshCalls = @(); $script:sshMode = 'no-tunnel'
+$threw = $false
+try { Invoke-ItemTest } catch { $threw = $true }
+Check 'itest: tunnel failure throws' $threw
+
+$savedConfig = $SshConfig
+$SshConfig = Join-Path $tmp 'no-itest-config'
+$threw = $false
+try { Invoke-ItemTest } catch { $threw = $true }
+Check 'itest: no managed block errors' $threw
+$SshConfig = $savedConfig
+Remove-Item Function:ssh
 
 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 exit $script:fail
