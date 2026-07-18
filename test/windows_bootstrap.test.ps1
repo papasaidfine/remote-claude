@@ -165,12 +165,44 @@ Check 'proxy: Get-ProxyArgs carries the proxy' ($pa.Proxy -eq 'http://127.0.0.1:
 $script:DlProxy = ''
 Check 'proxy: Get-ProxyArgs empty when direct' ((Get-ProxyArgs).Count -eq 0)
 
+function Invoke-WebRequest {
+    param([switch]$UseBasicParsing, [string]$OutFile, [int]$TimeoutSec, [string]$Proxy, [string]$Uri)
+    $script:iwrCall = $PSBoundParameters
+}
+function Expand-Archive {
+    param([string]$Path, [string]$DestinationPath, [switch]$Force)
+    New-Item -ItemType Directory -Force -Path $DestinationPath | Out-Null
+    Set-Content -Path $XrayVendorBin -Value 'stub'
+}
+$script:DlProxy = 'http://127.0.0.1:7890'
+Install-XrayRelease
+Check 'iwr: -Proxy passed when a proxy is set' ($script:iwrCall['Proxy'] -eq 'http://127.0.0.1:7890')
+Check 'iwr: -TimeoutSec 30 on the zip download' ($script:iwrCall['TimeoutSec'] -eq 30)
+$script:DlProxy = ''
+$script:iwrCall = $null
+Install-XrayRelease
+Check 'iwr: no -Proxy when direct' (-not $script:iwrCall.ContainsKey('Proxy'))
+
+function Invoke-RestMethod {
+    param([switch]$UseBasicParsing, [int]$TimeoutSec, [string]$Proxy, [string]$Uri)
+    $script:irmCall = $PSBoundParameters
+    return [pscustomobject]@{ tag_name = 'v25.1.0' }
+}
+$script:DlProxy = 'http://127.0.0.1:7890'
+Check 'irm: version parsed through the mock'   ((Get-XrayLatestVersion) -eq '25.1.0')
+Check 'irm: -Proxy passed when a proxy is set' ($script:irmCall['Proxy'] -eq 'http://127.0.0.1:7890')
+$script:DlProxy = ''
+$script:irmCall = $null
+Get-XrayLatestVersion | Out-Null
+Check 'irm: no -Proxy when direct' (-not $script:irmCall.ContainsKey('Proxy'))
+
 # --- Invoke-ItemXray: update flow via overrides -----------------------------------
 $script:fakeLatest = ''
 $script:downloaded = $false
 function Get-XrayLocalVersion { param([string]$Exe) return '25.0.0' }
 function Get-XrayLatestVersion { return $script:fakeLatest }
 function Install-XrayRelease { $script:downloaded = $true }
+function Read-DlProxy { $script:DlProxy = '' }
 
 New-Item -ItemType File -Force -Path $XrayJson | Out-Null
 $script:fakeLatest = '25.0.0'

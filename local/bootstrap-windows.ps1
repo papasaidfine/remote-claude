@@ -27,9 +27,10 @@
        %USERPROFILE%\.ssh\config (host/user/port only; keeps an existing
        reverse port / proxy).
     5. Add or update the reverse tunnel port (RemoteForward) on that block.
-    6. xray client: download the xray binary (or version-check and update it)
-       and write the per-connection ProxyCommand launcher; nodes live in
-       vless-nodes.txt (one vless:// URL per line, a random one per connection).
+    6. xray client: ask for an optional download proxy, then download the xray
+       binary (or version-check and update it) and write the per-connection
+       ProxyCommand launcher; nodes live in vless-nodes.txt (one vless:// URL
+       per line, a random one per connection).
     7. Toggle routing the tunnel through the xray proxy (ProxyCommand). Each
        ssh connection then runs its own xray, which dies with the connection.
     8. Show the local public key to paste into the server-side setup.
@@ -288,8 +289,9 @@ function Install-XrayRelease { # download the latest release binary into the ven
     Write-Info "Downloading $asset (github.com/XTLS/Xray-core)"
     $prevPp = $ProgressPreference
     $ProgressPreference = 'SilentlyContinue'
+    $proxyArgs = Get-ProxyArgs
     try {
-        Invoke-WebRequest -UseBasicParsing -OutFile $zip `
+        Invoke-WebRequest -UseBasicParsing -OutFile $zip -TimeoutSec 30 @proxyArgs `
             -Uri "https://github.com/XTLS/Xray-core/releases/latest/download/$asset"
     } finally { $ProgressPreference = $prevPp }
     Expand-Archive -Path $zip -DestinationPath $binDir -Force
@@ -309,7 +311,8 @@ function Get-XrayLocalVersion { # e.g. 25.0.0; '' when unknown
 
 function Get-XrayLatestVersion { # latest release tag, 'v' stripped; '' on failure
     try {
-        $r = Invoke-RestMethod -UseBasicParsing -TimeoutSec 10 `
+        $proxyArgs = Get-ProxyArgs
+        $r = Invoke-RestMethod -UseBasicParsing -TimeoutSec 10 @proxyArgs `
             -Uri 'https://api.github.com/repos/XTLS/Xray-core/releases/latest'
         return ("$($r.tag_name)" -replace '^v', '')
     } catch { return '' }
@@ -493,6 +496,7 @@ try {
 }
 
 function Invoke-ItemXray {   # item 6: download/update the xray binary + write the launcher
+    Read-DlProxy
     if (Resolve-XrayExe) { Update-XrayBinary } else { Install-Xray }
     Write-XrayLauncher
     Ensure-VlessNodesFile
