@@ -166,7 +166,7 @@ $script:DlProxy = ''
 Check 'proxy: Get-ProxyArgs empty when direct' ((Get-ProxyArgs).Count -eq 0)
 
 function Invoke-WebRequest {
-    param([switch]$UseBasicParsing, [string]$OutFile, [int]$TimeoutSec, [string]$Proxy, [string]$Uri)
+    param([switch]$UseBasicParsing, [string]$OutFile, [int]$TimeoutSec, [uri]$Proxy, [string]$Uri)
     $script:iwrCall = $PSBoundParameters
 }
 function Expand-Archive {
@@ -181,10 +181,10 @@ Check 'iwr: -TimeoutSec 30 on the zip download' ($script:iwrCall['TimeoutSec'] -
 $script:DlProxy = ''
 $script:iwrCall = $null
 Install-XrayRelease
-Check 'iwr: no -Proxy when direct' (-not $script:iwrCall.ContainsKey('Proxy'))
+Check 'iwr: no -Proxy when direct' ($null -ne $script:iwrCall -and -not $script:iwrCall.ContainsKey('Proxy'))
 
 function Invoke-RestMethod {
-    param([switch]$UseBasicParsing, [int]$TimeoutSec, [string]$Proxy, [string]$Uri)
+    param([switch]$UseBasicParsing, [int]$TimeoutSec, [uri]$Proxy, [string]$Uri)
     $script:irmCall = $PSBoundParameters
     return [pscustomobject]@{ tag_name = 'v25.1.0' }
 }
@@ -194,7 +194,7 @@ Check 'irm: -Proxy passed when a proxy is set' ($script:irmCall['Proxy'] -eq 'ht
 $script:DlProxy = ''
 $script:irmCall = $null
 Get-XrayLatestVersion | Out-Null
-Check 'irm: no -Proxy when direct' (-not $script:irmCall.ContainsKey('Proxy'))
+Check 'irm: no -Proxy when direct' ($null -ne $script:irmCall -and -not $script:irmCall.ContainsKey('Proxy'))
 
 # --- Invoke-ItemXray: update flow via overrides -----------------------------------
 $script:fakeLatest = ''
