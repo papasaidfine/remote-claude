@@ -60,7 +60,7 @@ check 'prefill: port updated'   "$cfg" 'Port 2200'
   && printf 'ok   - prefill: single managed block\n' \
   || { printf 'FAIL - prefill: managed block duplicated\n'; fail=1; }
 
-# --- cross-preservation: item 4 must keep RemoteForward + ProxyCommand ----------
+# --- cross-preservation: item 1 must keep RemoteForward + ProxyCommand ----------
 write_ssh_config_block '203.0.113.9' 'dave' '2200' '2345' 1 1 >/dev/null
 ( run_config ) >/dev/null 2>&1 <<'IN'
 1

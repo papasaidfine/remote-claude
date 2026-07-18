@@ -72,7 +72,7 @@ check 'rport: helper reads port'  "x$(config_block_rport)x" 'x2222x'
 status_rport && printf 'ok   - rport: status_rport true\n' \
   || { printf 'FAIL - rport: status_rport should be true\n'; fail=1; }
 
-# --- run_proxy (menu item 7) -------------------------------------------------
+# --- run_proxy (menu item 8) -------------------------------------------------
 # Reset to a known block without the proxy
 write_ssh_config_block '203.0.113.7' 'ubuntu' '22' '2222' 0 1 >/dev/null
 
@@ -140,7 +140,7 @@ check_absent 'independent: still no RemoteForward' "$cfg" 'RemoteForward'
   && printf 'ok   - independent: single managed block\n' \
   || { printf 'FAIL - independent: managed block duplicated\n'; fail=1; }
 
-# --- run_rport (menu item 5) ------------------------------------------------------
+# --- run_rport (menu item 6) ------------------------------------------------------
 if ( SSH_CONFIG="$TMP/no-such-config"; run_rport ) >/dev/null 2>&1; then
   printf 'FAIL - rport: should error without a managed block\n'; fail=1
 else
