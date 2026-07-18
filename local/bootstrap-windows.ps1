@@ -75,6 +75,7 @@ $XrayJson     = Join-Path $RcConfigDir 'xray.json'
 $XrayLauncher = Join-Path $RcConfigDir 'xray-proxy.ps1'
 $XrayVendorBin = Join-Path (Join-Path $RcConfigDir 'bin') 'xray.exe'
 $VlessNodes   = Join-Path $RcConfigDir 'vless-nodes.txt'
+$DlProxy      = ''        # optional proxy for the GitHub downloads; item 6 asks each run
 
 function Write-Info { param([string]$Msg) Write-Host "[+] $Msg" -ForegroundColor Green }
 function Write-Warn { param([string]$Msg) Write-Host "[!] $Msg" -ForegroundColor Yellow }
@@ -261,6 +262,16 @@ function Resolve-XrayExe { # path to an xray binary, or $null
     $cmd = Get-Command xray.exe -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
     return $null
+}
+
+function Read-DlProxy { # item 6: optional proxy for the GitHub downloads (empty = direct)
+    $script:DlProxy = Read-Default 'Proxy for the xray download (e.g. http://127.0.0.1:7890, empty = direct)'
+    if ($script:DlProxy) { Write-Info "Using proxy $script:DlProxy for this item's downloads" }
+}
+
+function Get-ProxyArgs { # splat for Invoke-WebRequest / Invoke-RestMethod
+    if ($script:DlProxy) { return @{ Proxy = $script:DlProxy } }
+    return @{}
 }
 
 function Install-Xray {

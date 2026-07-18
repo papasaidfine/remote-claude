@@ -158,6 +158,13 @@ New-Item -ItemType Directory -Force -Path (Split-Path $XrayVendorBin) | Out-Null
 New-Item -ItemType File -Force -Path $XrayVendorBin | Out-Null
 Check 'status: ready with launcher + binary (no nodes needed)' (Test-StatusXray)
 
+# --- Download proxy plumbing --------------------------------------------------
+$script:DlProxy = 'http://127.0.0.1:7890'
+$pa = Get-ProxyArgs
+Check 'proxy: Get-ProxyArgs carries the proxy' ($pa.Proxy -eq 'http://127.0.0.1:7890')
+$script:DlProxy = ''
+Check 'proxy: Get-ProxyArgs empty when direct' ((Get-ProxyArgs).Count -eq 0)
+
 # --- Invoke-ItemXray: update flow via overrides -----------------------------------
 $script:fakeLatest = ''
 $script:downloaded = $false
