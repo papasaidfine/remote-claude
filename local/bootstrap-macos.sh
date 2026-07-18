@@ -16,7 +16,8 @@
 #        (host/user/port only; keeps an existing reverse port / proxy).
 #     2. Ensure the default ~/.ssh/id_ed25519 exists (local→server hop) and
 #        print the local public key to paste into the server-side setup.
-#     3. Test connection.
+#     3. Test connection: outbound ssh check, plus a reverse-tunnel probe when
+#        configured; read-only.
 #
 #   Phase 2 — Claude -> Local (let the agent ssh back into this machine):
 #     4. Incoming SSH: enable Remote Login (sshd) via systemsetup and harden
@@ -337,7 +338,50 @@ run_key() { # item 2: ensure ~/.ssh/id_ed25519 exists
   echo
 }
 
-run_test() { die "not implemented yet"; }
+run_test() { # item 3: test the connection (adaptive; never modifies files)
+  status_config || die "No Host $TUNNEL_ALIAS block yet — run item 1 first"
+  local rport out ok=1
+  rport="$(config_block_rport)"
+
+  log "Testing outbound hop: ssh $TUNNEL_ALIAS ..."
+  out="$(ssh -o BatchMode=yes -o ConnectTimeout=10 -o ClearAllForwardings=yes \
+        "$TUNNEL_ALIAS" 'echo ok' 2>&1)"
+  if grep -qx 'ok' <<<"$out"; then
+    tick "outbound: ssh $TUNNEL_ALIAS works"
+  else
+    cross "outbound: could not log in to the server"
+    printf '%s\n' "$out" | tail -n 3 | sed 's/^/      /'
+    warn "Most common cause: the server has not authorized your local key yet —"
+    warn "item 2 prints it; paste it into server/setup-server.sh (item 2) there."
+    ok=0
+  fi
+
+  if [[ "$ok" == 1 && -n "$rport" ]]; then
+    log "Testing reverse tunnel: server 127.0.0.1:$rport -> this machine's sshd ..."
+    # This very connection carries the RemoteForward from the managed block, so
+    # probing the port on the server lands back on the local sshd — a full-loop
+    # check. ExitOnForwardFailure=no: if another session already holds the
+    # forward, probing through it is still a valid end-to-end test.
+    out="$(ssh -o BatchMode=yes -o ConnectTimeout=10 -o ExitOnForwardFailure=no \
+          "$TUNNEL_ALIAS" "bash -c 'exec 3<>/dev/tcp/127.0.0.1/$rport' 2>/dev/null && echo tunnel-ok" 2>&1)"
+    if grep -qx 'tunnel-ok' <<<"$out"; then
+      tick "reverse tunnel: server port $rport reaches this machine's sshd"
+    else
+      cross "reverse tunnel: server port $rport did not answer"
+      warn "Check phase ② — incoming sshd (item 4), authorized key (item 5), reverse port (item 6)."
+      ok=0
+    fi
+  elif [[ -z "$rport" ]]; then
+    warn "No reverse tunnel port yet (item 6) — skipped the tunnel check."
+  fi
+
+  if config_proxy_on; then
+    log "Path: via xray (ProxyCommand) — a passing test also validates phase ③."
+  else
+    log "Path: direct (xray proxy off)."
+  fi
+  [[ "$ok" == 1 ]] || die "Some checks failed (see above)"
+}
 
 run_authorize() { # item 5: authorize the server's connect-back key
   ensure_ssh_dir
