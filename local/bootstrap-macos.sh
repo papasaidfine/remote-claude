@@ -342,10 +342,15 @@ run_test() { # item 3: test the connection (adaptive; never modifies files)
   status_config || die "No Host $TUNNEL_ALIAS block yet — run item 1 first"
   local rport out ok=1
   rport="$(config_block_rport)"
+  [[ -z "$rport" || "$rport" =~ ^[0-9]+$ ]] \
+    || die "RemoteForward port '$rport' in the managed block is not numeric — re-run item 6"
 
   log "Testing outbound hop: ssh $TUNNEL_ALIAS ..."
+  # `|| true` on both probes: success is judged by the output marker alone, and
+  # the menu's run_item wrapper runs items under set -e — without it a failing
+  # ssh would abort at this assignment before any diagnostics print.
   out="$(ssh -o BatchMode=yes -o ConnectTimeout=10 -o ClearAllForwardings=yes \
-        "$TUNNEL_ALIAS" 'echo ok' 2>&1)"
+        "$TUNNEL_ALIAS" 'echo ok' 2>&1)" || true
   if grep -qx 'ok' <<<"$out"; then
     tick "outbound: ssh $TUNNEL_ALIAS works"
   else
@@ -363,7 +368,7 @@ run_test() { # item 3: test the connection (adaptive; never modifies files)
     # check. ExitOnForwardFailure=no: if another session already holds the
     # forward, probing through it is still a valid end-to-end test.
     out="$(ssh -o BatchMode=yes -o ConnectTimeout=10 -o ExitOnForwardFailure=no \
-          "$TUNNEL_ALIAS" "bash -c 'exec 3<>/dev/tcp/127.0.0.1/$rport' 2>/dev/null && echo tunnel-ok" 2>&1)"
+          "$TUNNEL_ALIAS" "bash -c 'exec 3<>/dev/tcp/127.0.0.1/$rport' 2>/dev/null && echo tunnel-ok" 2>&1)" || true
     if grep -qx 'tunnel-ok' <<<"$out"; then
       tick "reverse tunnel: server port $rport reaches this machine's sshd"
     else

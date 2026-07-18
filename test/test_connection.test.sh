@@ -97,4 +97,33 @@ write_ssh_config_block 'h.example' 'dave' '22' '2345' 1 1 >/dev/null
 out="$( run_test 2>&1 )" || { printf 'FAIL - proxy-path run exited non-zero\n'; fail=1; }
 check 'report: xray path' "$out" 'via xray'
 
+# --- regression: diagnostics must survive the menu's set -e wrapper --------------
+# run_item invokes items as a plain `( set -e; fn )` statement and checks $?
+# afterwards; a failing ssh must not abort run_test at the out="$(...)"
+# assignment before the diagnostics print. The subshell must NOT sit in an
+# if-condition here: bash ignores set -e (even an explicit one) throughout an
+# if-condition, which would mask exactly the bug this guards against.
+write_ssh_config_block 'h.example' 'dave' '22' '2345' 0 1 >/dev/null
+: > "$MOCK_LOG"
+( set -e; MOCK_MODE=no-login run_test ) > "$TMP/set-e.out" 2>&1
+rc=$?
+out="$(cat "$TMP/set-e.out")"
+if [[ $rc -eq 0 ]]; then
+  printf 'FAIL - set-e: no-login should still fail\n'; fail=1
+else
+  printf 'ok   - set-e: no-login still fails\n'
+fi
+check 'set-e: authorize hint still printed' "$out" 'authorized your local key'
+check 'set-e: ssh stderr still shown'       "$out" 'Permission denied'
+: > "$MOCK_LOG"
+( set -e; MOCK_MODE=no-tunnel run_test ) > "$TMP/set-e.out" 2>&1
+rc=$?
+out="$(cat "$TMP/set-e.out")"
+if [[ $rc -eq 0 ]]; then
+  printf 'FAIL - set-e: no-tunnel should still fail\n'; fail=1
+else
+  printf 'ok   - set-e: no-tunnel still fails\n'
+fi
+check 'set-e: phase-2 hint still printed' "$out" 'reverse port (item 6)'
+
 exit $fail
