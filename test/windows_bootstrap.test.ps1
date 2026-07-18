@@ -12,6 +12,14 @@ $parseErrors = $null
 [System.Management.Automation.Language.Parser]::ParseFile($bootstrap, [ref]$null, [ref]$parseErrors) | Out-Null
 Check 'bootstrap parses without errors' ($parseErrors.Count -eq 0)
 
+# Prime the JSON cmdlets before SystemRoot gets sandboxed below: they lazily
+# load System.Web.Extensions assemblies (e.g. JavaScriptSerializer for
+# ConvertTo-Json -Depth), which read the system.web/httpRuntime config
+# section. On some hosts, first use after SystemRoot points outside the real
+# Windows install throws a ConfigurationErrorsException / FileLoadException
+# resolving that section's GAC assembly.
+[ordered]@{ warm = 1 } | ConvertTo-Json -Depth 10 | ConvertFrom-Json | Out-Null
+
 # Sandbox: every profile path the script derives must land in a temp dir
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("rcwin-" + [System.IO.Path]::GetRandomFileName())
 New-Item -ItemType Directory -Path $tmp | Out-Null
