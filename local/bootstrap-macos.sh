@@ -11,23 +11,29 @@
 # Presents a menu of independent items — each is idempotent, shows whether
 # it is already configured, and can be run (or fail, or be re-run) on its own:
 #
-#   1. Incoming SSH: enable Remote Login (sshd) via systemsetup and harden
-#      sshd (pubkey auth on, password auth off optional). Backs up config,
-#      validates with `sshd -t` before reloading. The only item that needs
-#      sudo.
-#   2. Ensure the default ~/.ssh/id_ed25519 exists (local→server hop).
-#   3. Append the server-side public key to authorized_keys with a
-#      from="127.0.0.1,::1" restriction (dedup by key blob).
-#   4. Write the base "Host remote-claude" block into ~/.ssh/config
-#      (host/user/port only; keeps an existing reverse port / proxy).
-#   5. Add or update the reverse tunnel port (RemoteForward) on that block.
-#   6. xray client: ask for an optional download proxy, then download the xray
-#      binary (or version-check and update it) and write the on-demand SOCKS
-#      launcher used by ProxyCommand; nodes live in
-#      ~/.config/remote-claude/vless-nodes.txt (one vless:// URL per line, a
-#      random one per xray start).
-#   7. Toggle routing the tunnel through the xray proxy (ProxyCommand).
-#   8. Show the local public key to paste into the server-side setup.
+#   Phase 1 — Local -> Claude (reach the server running Claude Code):
+#     1. Write the base "Host remote-claude" block into ~/.ssh/config
+#        (host/user/port only; keeps an existing reverse port / proxy).
+#     2. Ensure the default ~/.ssh/id_ed25519 exists (local→server hop) and
+#        print the local public key to paste into the server-side setup.
+#     3. Test connection.
+#
+#   Phase 2 — Claude -> Local (let the agent ssh back into this machine):
+#     4. Incoming SSH: enable Remote Login (sshd) via systemsetup and harden
+#        sshd (pubkey auth on, password auth off optional). Backs up config,
+#        validates with `sshd -t` before reloading. The only item that needs
+#        sudo.
+#     5. Append the server-side public key to authorized_keys with a
+#        from="127.0.0.1,::1" restriction (dedup by key blob).
+#     6. Add or update the reverse tunnel port (RemoteForward) on that block.
+#
+#   Phase 3 — xray (optional wrap for hostile networks):
+#     7. xray client: ask for an optional download proxy, then download the
+#        xray binary (or version-check and update it) and write the
+#        on-demand SOCKS launcher used by ProxyCommand; nodes live in
+#        ~/.config/remote-claude/vless-nodes.txt (one vless:// URL per line,
+#        a random one per xray start).
+#     8. Toggle routing the tunnel through the xray proxy (ProxyCommand).
 #
 # Usage:  ./bootstrap-macos.sh
 # Non-interactive overrides via env vars: SERVER_HOST, SERVER_USER,
@@ -48,7 +54,7 @@ SSHD_DROPIN_DIR="/etc/ssh/sshd_config.d"
 SSHD_DROPIN="$SSHD_DROPIN_DIR/100-remote-claude.conf"
 TS="$(date +%Y%m%d-%H%M%S)"
 
-# xray / VLESS client (item 6)
+# xray / VLESS client (item 7)
 RC_CONFIG_DIR="$HOME/.config/remote-claude"
 XRAY_JSON="$RC_CONFIG_DIR/xray.json"
 XRAY_LAUNCHER="$RC_CONFIG_DIR/xray-proxy.sh"
@@ -64,6 +70,15 @@ log()  { printf '\033[1;32m[+]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; }
 die()  { err "$*"; exit 1; }
+
+C_HDR=$'\033[1;36m'   # bold cyan — phase headers
+C_DIM=$'\033[2m'      # dim — header annotations
+C_GRN=$'\033[1;32m'
+C_RED=$'\033[1;31m'
+C_RST=$'\033[0m'
+
+tick()  { printf '  %s✔%s %s\n' "$C_GRN" "$C_RST" "$*"; }
+cross() { printf '  %s✘%s %s\n' "$C_RED" "$C_RST" "$*"; }
 
 ask() { # ask <prompt> [default]  -> echoes answer
   local prompt="$1" default="${2:-}" reply
@@ -89,21 +104,28 @@ ask_yn() { # ask_yn <prompt> <Y|N>  -> exit status 0 = yes
   done
 }
 
+print_banner() {
+  cat <<'EOF'
+
+╭──────────────────────────────────────────────────────────────╮
+│  remote-claude · reverse SSH bootstrap (macOS)               │
+│                                                              │
+│    Local ──────ssh─────▶ Claude   (you reach the server)     │
+│    Local ◀──reverse ssh── Claude  (the agent reaches back)   │
+│    xray ═[ ssh ]═▶  optional wrap for hostile networks       │
+╰──────────────────────────────────────────────────────────────╯
+ Each item is independent and idempotent; work top to bottom.
+ Files this can modify: Remote Login / sshd settings (item 4, sudo)
+ and ~/.ssh/{config,authorized_keys,id_ed25519}. Modified system
+ files are backed up first (*.claude-bak-<timestamp>).
+EOF
+}
+
 # ---------------------------------------------------------------- platform
 if [[ -z "${RC_SOURCED_FOR_TEST:-}" ]]; then
 [[ "$(uname -s)" == "Darwin" ]] || die "This script is for macOS. On Windows, run bootstrap-windows.ps1 in an elevated PowerShell."
 
-cat <<'EOF'
-==========================================================
- Reverse SSH bootstrap (macOS)
- local mac  ->  remote server  ->  (reverse tunnel)  -> local mac
-==========================================================
-Pick items from the menu below; each one is independent, idempotent,
-and shows whether it is already configured. Files this can modify:
-  - Remote Login / sshd settings (item 1, sudo)
-  - ~/.ssh/{config,authorized_keys,id_ed25519}
-All modified system files are backed up first (*.claude-bak-<timestamp>).
-EOF
+print_banner
 fi
 
 # ---------------------------------------------------------------- shared prep
@@ -279,7 +301,7 @@ AuthorizedKeysFile .ssh/authorized_keys"
 }
 
 # ---------------------------------------------------------------- menu items
-run_sshd() { # item 1: enable Remote Login + harden sshd (sudo)
+run_sshd() { # item 4: enable Remote Login + harden sshd (sudo)
   log "This item enables Remote Login and hardens sshd (requires sudo)"
   local DISABLE_PASSWORD
   if ask_yn "Disable password login for the local sshd (recommended, public key only)" "Y"; then
@@ -307,9 +329,17 @@ run_key() { # item 2: ensure ~/.ssh/id_ed25519 exists
     ssh-keygen -t ed25519 -f "$KEY_PATH" -N "" >/dev/null
   fi
   chmod 600 "$KEY_PATH"
+  echo
+  log "Local public key — paste it into server/setup-server.sh (item 2) on the"
+  log "server; that authorizes the tunnel login (ssh $TUNNEL_ALIAS):"
+  echo
+  cat "$KEY_PATH.pub"
+  echo
 }
 
-run_authorize() { # item 3: authorize the server's connect-back key
+run_test() { die "not implemented yet"; }
+
+run_authorize() { # item 5: authorize the server's connect-back key
   ensure_ssh_dir
   local pubkey
   echo "Server-side public key: the .pub of the key that Claude / Codex on the"
@@ -326,7 +356,7 @@ check_config_fields() { # check_config_fields <host> <user> <port>
   [[ "$3" =~ ^[0-9]+$ ]] || { err "SSH port must be a number"; return 1; }
 }
 
-run_config() { # item 4: base Host remote-claude block — form: edit fields, then apply
+run_config() { # item 1: base Host remote-claude block — form: edit fields, then apply
   ensure_ssh_dir
   local host="" user="" port="" rport="" use_proxy=0 sel
   # Pre-fill from the existing block; RemoteForward/ProxyCommand pass through untouched
@@ -372,14 +402,14 @@ run_config() { # item 4: base Host remote-claude block — form: edit fields, th
   done
 }
 
-run_rport() { # item 5: reverse tunnel port (RemoteForward) on the managed block
-  status_config || die "No Host $TUNNEL_ALIAS block yet — run item 4 first"
+run_rport() { # item 6: reverse tunnel port (RemoteForward) on the managed block
+  status_config || die "No Host $TUNNEL_ALIAS block yet — run item 1 first"
   local host user port rport cur use_proxy=0
   host="$(config_block_value HostName)"
   user="$(config_block_value User)"
   port="$(config_block_value Port)"
   [[ -n "$host" && -n "$user" && -n "$port" ]] \
-    || die "Could not read the Host $TUNNEL_ALIAS block — re-run item 4"
+    || die "Could not read the Host $TUNNEL_ALIAS block — re-run item 1"
   config_proxy_on && use_proxy=1
   cur="$(config_block_rport)"
   rport="${REVERSE_PORT:-$(ask 'Reverse SSH port on the server (used by Claude/Codex to connect back)' "${cur:-2222}")}"
@@ -388,22 +418,7 @@ run_rport() { # item 5: reverse tunnel port (RemoteForward) on the managed block
   log "Reverse port $rport set — the tunnel rides on your ssh $TUNNEL_ALIAS connection."
 }
 
-run_show_key() { # item 8: print the local public key for the server-side handoff
-  if [[ ! -f "$KEY_PATH.pub" ]]; then
-    if [[ ! -f "$KEY_PATH" ]]; then
-      ask_yn "No local key yet — generate it now" "Y" || die "No key to show"
-    fi
-    run_key
-  fi
-  echo
-  log "Local public key — paste it into server/setup-server.sh (item 2) on the"
-  log "server; that authorizes the tunnel login (ssh $TUNNEL_ALIAS):"
-  echo
-  cat "$KEY_PATH.pub"
-  echo
-}
-
-run_xray() { # item 6: download/update the xray binary + write the launcher
+run_xray() { # item 7: download/update the xray binary + write the launcher
   command -v nc >/dev/null 2>&1 || die "nc (netcat) not found — required for the SOCKS ProxyCommand"
   ask_dl_proxy
   if xray_bin >/dev/null 2>&1; then
@@ -416,25 +431,25 @@ run_xray() { # item 6: download/update the xray binary + write the launcher
   rm -f "$XRAY_JSON"   # pre-nodes-file layout; superseded by vless-nodes.txt
   log "Nodes file: $VLESS_NODES — one vless:// URL per line (# comments)."
   log "Each xray start picks a random node; edits take effect on the next connect."
-  log "Route the tunnel through xray via item 7 (ProxyCommand)."
+  log "Route the tunnel through xray via item 8 (ProxyCommand)."
 }
 
-run_proxy() { # item 7: toggle ProxyCommand (route ssh remote-claude through xray)
-  status_config || die "No Host $TUNNEL_ALIAS block yet — run item 4 first"
+run_proxy() { # item 8: toggle ProxyCommand (route ssh remote-claude through xray)
+  status_config || die "No Host $TUNNEL_ALIAS block yet — run item 1 first"
   local host user port rport on=0 want
   host="$(config_block_value HostName)"
   user="$(config_block_value User)"
   port="$(config_block_value Port)"
   rport="$(config_block_rport)"
   [[ -n "$host" && -n "$user" && -n "$port" ]] \
-    || die "Could not read the Host $TUNNEL_ALIAS block — re-run item 4"
+    || die "Could not read the Host $TUNNEL_ALIAS block — re-run item 1"
   config_proxy_on && on=1
   want=$((1 - on))
   if [[ -n "${USE_XRAY_PROXY:-}" ]]; then
     want=0; [[ "$USE_XRAY_PROXY" == "1" ]] && want=1
   fi
   if [[ "$want" == 1 ]]; then
-    status_xray || die "xray client not set up — run item 6 first"
+    status_xray || die "xray client not set up — run item 7 first"
     [[ -n "$(read_vless_nodes "$VLESS_NODES" 2>/dev/null)" ]] \
       || die "No nodes in $VLESS_NODES — add a vless:// URL there first"
     write_ssh_config_block "$host" "$user" "$port" "$rport" 1 1
@@ -612,7 +627,7 @@ xray_bin() { # echo path to an xray binary, or return 1
   command -v xray 2>/dev/null
 }
 
-ask_dl_proxy() { # item 6: optional proxy for the GitHub downloads (empty = direct)
+ask_dl_proxy() { # item 7: optional proxy for the GitHub downloads (empty = direct)
   local p
   p="$(ask 'Proxy for the xray download (e.g. http://127.0.0.1:7890, empty = direct)')"
   [[ -n "$p" ]] || return 0
@@ -755,20 +770,33 @@ status_xray() { [[ -f "$XRAY_LAUNCHER" ]] && xray_bin >/dev/null 2>&1; }
 config_proxy_on()  { grep -qF "ProxyCommand $XRAY_LAUNCHER" "$SSH_CONFIG" 2>/dev/null; }
 
 # ---------------------------------------------------------------- menu
-mark() { if "$1"; then printf '[done]'; else printf '[ -  ]'; fi; }
+mark() { # mark <status-fn> -> [ ✔ ] / [   ]
+  if "$1"; then printf '[ %s✔%s ]' "$C_GRN" "$C_RST"; else printf '[   ]'; fi
+}
+mark_toggle() { # mark_toggle <status-fn> -> [ on] / [off]
+  if "$1"; then printf '[ %son%s]' "$C_GRN" "$C_RST"; else printf '[off]'; fi
+}
 
 draw_menu() {
   echo
-  echo "----------------------------------------------------------"
-  printf '  1) %-50s %s\n' 'Incoming SSH — Remote Login + harden  [sudo]' "$(mark status_sshd)"
-  printf '  2) %-50s %s\n' 'Local SSH key (~/.ssh/id_ed25519)' "$(mark status_key)"
-  printf '  3) %-50s %s\n' "Authorize the server's connect-back key" "$(mark status_authorize)"
-  printf '  4) %-50s %s\n' 'SSH config shortcut (Host remote-claude)' "$(mark status_config)"
-  printf '  5) %-50s %s\n' 'Reverse tunnel port (RemoteForward)' "$(mark status_rport)"
-  printf '  6) %-50s %s\n' 'xray client (binary + launcher)' "$(mark status_xray)"
-  printf '  7) %-50s %s\n' 'Route tunnel through xray (ProxyCommand)' "$(mark config_proxy_on)"
-  printf '  8) %s\n' 'Show local public key (paste into server setup)'
-  echo   '  q) Quit'
+  printf '  %s① Local ──▶ Claude%s%s          reach the server running Claude Code%s\n' \
+    "$C_HDR" "$C_RST" "$C_DIM" "$C_RST"
+  printf '     1) %-48s %s\n' "SSH config shortcut (Host $TUNNEL_ALIAS)" "$(mark status_config)"
+  printf '     2) %-48s %s\n' 'Local SSH key - create & show public key' "$(mark status_key)"
+  printf '     3) %s\n'       'Test connection'
+  echo
+  printf '  %s② Claude ──▶ Local%s%s          let the agent ssh back into this machine%s\n' \
+    "$C_HDR" "$C_RST" "$C_DIM" "$C_RST"
+  printf '     4) %-48s %s\n' 'Incoming SSH - Remote Login + harden  [sudo]' "$(mark status_sshd)"
+  printf '     5) %-48s %s\n' "Authorize the server's connect-back key" "$(mark status_authorize)"
+  printf '     6) %-48s %s\n' 'Reverse tunnel port (RemoteForward)' "$(mark status_rport)"
+  echo
+  printf '  %s③ xray ═[ ssh ]═▶%s%s           optional - wrap the tunnel for bad networks%s\n' \
+    "$C_HDR" "$C_RST" "$C_DIM" "$C_RST"
+  printf '     7) %-48s %s\n' 'xray client (binary + launcher)' "$(mark status_xray)"
+  printf '     8) %-48s %s\n' 'Route the tunnel through xray' "$(mark_toggle config_proxy_on)"
+  echo
+  echo   '     q) Quit'
 }
 
 run_item() { # run_item <run-function>; failures return to the menu
@@ -785,14 +813,14 @@ while true; do
   draw_menu
   read -r -p "Select [1-8, q]: " choice || break
   case "$choice" in
-    1) run_item run_sshd ;;
+    1) run_item run_config ;;
     2) run_item run_key ;;
-    3) run_item run_authorize ;;
-    4) run_item run_config ;;
-    5) run_item run_rport ;;
-    6) run_item run_xray ;;
-    7) run_item run_proxy ;;
-    8) run_item run_show_key ;;
+    3) run_item run_test ;;
+    4) run_item run_sshd ;;
+    5) run_item run_authorize ;;
+    6) run_item run_rport ;;
+    7) run_item run_xray ;;
+    8) run_item run_proxy ;;
     q|Q) break ;;
     *) warn "Unknown selection: $choice" ;;
   esac
