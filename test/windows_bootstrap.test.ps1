@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $bootstrap = Join-Path (Join-Path $here '..') (Join-Path 'local' 'bootstrap-windows.ps1')
+$realSystemRoot = $env:SystemRoot
 
 $script:fail = 0
 function Check([string]$Desc, [bool]$Cond) {
@@ -73,10 +74,10 @@ $inb = $j.inbounds[0]
 Check 'inbound: dokodemo'          ($inb.protocol -eq 'dokodemo-door')
 Check 'inbound: port placeholder'  ($inb.port -eq '__DOKO_PORT__')
 Check 'inbound: dest placeholders' ($inb.settings.address -eq '__DEST_HOST__' -and $inb.settings.port -eq '__DEST_PORT__')
-Check 'log placeholder' ($j.log.error -eq '__LOG_FILE__')
+Check 'log: no credential-bearing temp log' ($null -eq $j.log.error)
 
 # The launcher's materialization contract: quoted numeric placeholders become numbers
-$mat = $tpl.Replace('"__DOKO_PORT__"', '12345').Replace('"__DEST_PORT__"', '22').Replace('__DEST_HOST__', '203.0.113.7').Replace('__LOG_FILE__', 'C:/t/x.log')
+$mat = $tpl.Replace('"__DOKO_PORT__"', '12345').Replace('"__DEST_PORT__"', '22').Replace('__DEST_HOST__', '203.0.113.7')
 $mj = $mat | ConvertFrom-Json
 Check 'materialized: numeric ports' ($mj.inbounds[0].port -eq 12345 -and $mj.inbounds[0].settings.port -eq 22)
 Check 'materialized: dest host'     ($mj.inbounds[0].settings.address -eq '203.0.113.7')
@@ -121,7 +122,7 @@ Check 'force: single managed block' (([regex]::Matches($raw, [regex]::Escape($Be
 # -UseProxy injects the launcher ProxyCommand line
 Write-SshConfigBlock -SrvHost '203.0.113.7' -SrvUser 'ubuntu' -SrvPort 22 -RevPort 2222 -UseProxy -Force
 $raw = Get-Content -Raw $SshConfig
-Check 'proxy: ProxyCommand line present' ($raw.Contains("-File `"$XrayLauncher`" %h %p"))
+Check 'proxy: ProxyCommand line present' ($raw.Contains("`"$XrayRelay`" %h %p"))
 Check 'proxy: after IdentitiesOnly' ($raw.IndexOf('IdentitiesOnly yes') -lt $raw.IndexOf('ProxyCommand'))
 
 # --- optional reverse port ------------------------------------------------------
@@ -142,7 +143,6 @@ $launchErrors = $null
 [System.Management.Automation.Language.Parser]::ParseFile($XrayLauncher, [ref]$null, [ref]$launchErrors) | Out-Null
 Check 'launcher parses without errors' ($launchErrors.Count -eq 0)
 $launcherSrc = Get-Content -Raw $XrayLauncher
-Check 'launcher: kill-on-close job'     ($launcherSrc.Contains('0x2000'))
 Check 'launcher: replaces placeholders' ($launcherSrc.Contains('"__DOKO_PORT__"') -and $launcherSrc.Contains('__DEST_HOST__'))
 Check 'launcher embeds ConvertTo-VlessJson' ($launcherSrc.Contains('function ConvertTo-VlessJson'))
 Check 'launcher embeds Read-VlessNodes'     ($launcherSrc.Contains('function Read-VlessNodes'))
@@ -150,13 +150,33 @@ Check 'launcher picks a random node'        ($launcherSrc.Contains('Get-Random')
 Check 'launcher reads vless-nodes.txt'      ($launcherSrc.Contains('vless-nodes.txt'))
 Check 'launcher no longer reads xray.json'  (-not $launcherSrc.Contains("'xray.json'"))
 Check 'launcher zero-nodes msg updated'     ($launcherSrc.Contains('edit the file and add one'))
+Check 'launcher: prepare-only protocol'      ($launcherSrc.Contains('[switch]$PrepareOnly') -and $launcherSrc.Contains('$PrepareConfig'))
+Check 'launcher: legacy stdio bridge removed' (-not $launcherSrc.Contains('CopyToAsync'))
+$relayFunction = [string]${function:Install-XrayRelay}
+Check 'relay: uses raw Win32 pipes' ($relayFunction.Contains('ReadFile') -and $relayFunction.Contains('WriteFile'))
+Check 'relay: owns kill-on-close job' ($relayFunction.Contains('JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE'))
+if ($env:OS -eq 'Windows_NT') {
+    $sandboxSystemRoot = $env:SystemRoot
+    try {
+        $env:SystemRoot = $realSystemRoot
+        Install-XrayRelay
+    } finally { $env:SystemRoot = $sandboxSystemRoot }
+    Check 'relay: compiles to an executable' ((Test-Path $XrayRelay) -and (Get-Item $XrayRelay).Length -gt 0)
+}
+
+# Avoid recompiling the helper in each mocked item-6 update below.
+function Install-XrayRelay {
+    New-Item -ItemType Directory -Force -Path (Split-Path $XrayRelay) | Out-Null
+    Set-Content -Path $XrayRelay -Value 'stub'
+}
+Install-XrayRelay
 
 # --- Test-StatusXray: launcher + binary only --------------------------------------
 Remove-Item $VlessNodes -Force -ErrorAction SilentlyContinue
 Check 'status: not ready without binary' (-not (Test-StatusXray))
 New-Item -ItemType Directory -Force -Path (Split-Path $XrayVendorBin) | Out-Null
 New-Item -ItemType File -Force -Path $XrayVendorBin | Out-Null
-Check 'status: ready with launcher + binary (no nodes needed)' (Test-StatusXray)
+Check 'status: ready with launcher + binary + relay (no nodes needed)' (Test-StatusXray)
 
 # --- Download proxy plumbing --------------------------------------------------
 $script:DlProxy = 'http://127.0.0.1:7890'
@@ -256,7 +276,7 @@ $SshConfig = $savedConfig
 # xray artifacts exist from the launcher tests, so enabling must work, promptless
 Invoke-ItemProxy
 $raw = Get-Content -Raw $SshConfig
-Check 'toggle on: ProxyCommand added'     ($raw.Contains("-File `"$XrayLauncher`" %h %p"))
+Check 'toggle on: ProxyCommand added'     ($raw.Contains("`"$XrayRelay`" %h %p"))
 Check 'toggle on: HostName preserved'     ($raw.Contains('HostName 203.0.113.7'))
 Check 'toggle on: User preserved'         ($raw.Contains('User ubuntu'))
 Check 'toggle on: reverse port preserved' ($raw.Contains('RemoteForward 127.0.0.1:2222 127.0.0.1:22'))
