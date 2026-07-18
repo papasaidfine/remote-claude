@@ -21,10 +21,11 @@
 #   4. Write the base "Host remote-claude" block into ~/.ssh/config
 #      (host/user/port only; keeps an existing reverse port / proxy).
 #   5. Add or update the reverse tunnel port (RemoteForward) on that block.
-#   6. xray client: download the xray binary (or version-check and update it)
-#      and write the on-demand SOCKS launcher used by ProxyCommand; nodes live
-#      in ~/.config/remote-claude/vless-nodes.txt (one vless:// URL per line,
-#      a random one per xray start).
+#   6. xray client: ask for an optional download proxy, then download the xray
+#      binary (or version-check and update it) and write the on-demand SOCKS
+#      launcher used by ProxyCommand; nodes live in
+#      ~/.config/remote-claude/vless-nodes.txt (one vless:// URL per line, a
+#      random one per xray start).
 #   7. Toggle routing the tunnel through the xray proxy (ProxyCommand).
 #   8. Show the local public key to paste into the server-side setup.
 #
@@ -404,6 +405,7 @@ run_show_key() { # item 8: print the local public key for the server-side handof
 
 run_xray() { # item 6: download/update the xray binary + write the launcher
   command -v nc >/dev/null 2>&1 || die "nc (netcat) not found — required for the SOCKS ProxyCommand"
+  ask_dl_proxy
   if xray_bin >/dev/null 2>&1; then
     update_xray_binary
   else
@@ -638,7 +640,7 @@ install_xray_release() { # download the latest release binary into the vendor pa
   esac
   mkdir -p "$(dirname "$XRAY_VENDOR_BIN")"
   tmp="$(mktemp -d)"
-  curl -fsSL "https://github.com/XTLS/Xray-core/releases/latest/download/$asset" -o "$tmp/xray.zip" \
+  curl -fsSL --connect-timeout 15 "https://github.com/XTLS/Xray-core/releases/latest/download/$asset" -o "$tmp/xray.zip" \
     || die "Failed to download $asset"
   unzip -o "$tmp/xray.zip" xray -d "$(dirname "$XRAY_VENDOR_BIN")" >/dev/null \
     || die "Failed to unzip xray"
@@ -653,7 +655,7 @@ xray_local_version() { # xray_local_version <bin> -> e.g. 25.0.0 (empty if unkno
 }
 
 xray_latest_version() { # latest Xray-core release tag from GitHub, 'v' stripped (empty on failure)
-  curl -fsSL --max-time 10 https://api.github.com/repos/XTLS/Xray-core/releases/latest 2>/dev/null \
+  curl -fsSL --connect-timeout 15 --max-time 10 https://api.github.com/repos/XTLS/Xray-core/releases/latest 2>/dev/null \
     | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([^"]*\)".*/\1/p' | head -1
 }
 
