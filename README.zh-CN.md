@@ -33,18 +33,26 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 .\bootstrap-windows.ps1
 ```
 
-菜单（每项显示是否已配置，从上到下做即可）：
+菜单分三个阶段（每项显示是否已配置，从上到下做即可）：
 
-1. 接收 SSH 连接（sshd）
-2. 本地 SSH key
-3. 授权服务器的反连公钥
-4. SSH config 快捷方式（`Host remote-claude`）
-5. 反向隧道端口
-6. xray 代理客户端——可选，网络差时用；会先询问下载代理（回车 = 直连）
-7. 隧道走 xray
-8. 显示本地公钥
+**① 本机 ──▶ Claude**——先连上跑 Claude Code 的服务器
 
-Linux 没有 xray，菜单为 1–5 加"显示本地公钥"。
+1. SSH config 快捷方式（`Host remote-claude`）
+2. 本地 SSH key——生成并显示公钥
+3. 测试连接——检查出向连接；反向隧道配置好后也会一并验证整条回路
+
+**② Claude ──▶ 本机**——让 agent 能 ssh 回你的电脑
+
+4. 接收 SSH 连接（sshd）
+5. 授权服务器的反连公钥
+6. 反向隧道端口
+
+**③ xray ═[ ssh ]═▶**——可选，网络差时用；会先询问下载代理（回车 = 直连）
+
+7. xray 代理客户端
+8. 隧道走 xray
+
+Linux 没有 xray，菜单为阶段 ①–②（第 1–6 项）。
 
 ## 2. 配置服务器
 

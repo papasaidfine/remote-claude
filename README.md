@@ -34,18 +34,29 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 .\bootstrap-windows.ps1
 ```
 
-Menu (each item shows whether it's already configured; work top to bottom):
+Menu — three phases, work top to bottom (each item shows whether it's
+already configured):
 
-1. Incoming SSH (sshd)
-2. Local SSH key
-3. Authorize the server's connect-back key
-4. SSH config shortcut (`Host remote-claude`)
-5. Reverse tunnel port
-6. xray proxy client — optional, for bad networks; asks for a download proxy first (Enter = direct)
-7. Route the tunnel through xray
-8. Show the local public key
+**① Local ──▶ Claude** — reach the server running Claude Code
 
-Linux has no xray, so its menu is 1–5 followed by "Show the local public key".
+1. SSH config shortcut (`Host remote-claude`)
+2. Local SSH key — create & show the public key
+3. Test connection — checks the outbound hop; once the reverse tunnel is
+   configured it validates the whole loop too
+
+**② Claude ──▶ Local** — let the agent ssh back into this machine
+
+4. Incoming SSH (sshd)
+5. Authorize the server's connect-back key
+6. Reverse tunnel port
+
+**③ xray ═[ ssh ]═▶** — optional, for bad networks; asks for a download
+proxy first (Enter = direct)
+
+7. xray proxy client
+8. Route the tunnel through xray
+
+Linux has no xray, so its menu is phases ①–② (items 1–6).
 
 ## 2. Set up the server
 
