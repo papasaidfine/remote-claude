@@ -177,9 +177,9 @@ check 'item6: existing nodes file untouched' "$(cat "$VLESS_NODES")" 'vless://ke
 # The proxy answer must be visible to the download step (update path re-downloads)
 FAKE_LATEST=27.0.0
 install_xray_release() { printf '%s' "${https_proxy:-none}" > "$TMP/proxy-seen"; }
-( run_xray ) <<< 'http://127.0.0.1:7890' >/dev/null 2>&1
+( set -e; run_xray ) <<< 'http://127.0.0.1:7890' >/dev/null 2>&1
 check 'item6: proxy reaches the download step' "$(cat "$TMP/proxy-seen")" 'http://127.0.0.1:7890'
-( run_xray ) </dev/null >/dev/null 2>&1
+( set -e; run_xray ) </dev/null >/dev/null 2>&1
 check 'item6: direct download when no proxy entered' "$(cat "$TMP/proxy-seen")" 'none'
 
 # --- status_xray: nodes no longer required ----------------------------------------

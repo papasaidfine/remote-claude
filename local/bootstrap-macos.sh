@@ -655,7 +655,7 @@ xray_local_version() { # xray_local_version <bin> -> e.g. 25.0.0 (empty if unkno
 }
 
 xray_latest_version() { # latest Xray-core release tag from GitHub, 'v' stripped (empty on failure)
-  curl -fsSL --connect-timeout 15 --max-time 10 https://api.github.com/repos/XTLS/Xray-core/releases/latest 2>/dev/null \
+  curl -fsSL --connect-timeout 5 --max-time 10 https://api.github.com/repos/XTLS/Xray-core/releases/latest 2>/dev/null \
     | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([^"]*\)".*/\1/p' | head -1
 }
 
