@@ -350,7 +350,7 @@ run_key_show() { # item 1: ensure the connect-back key exists + print its .pub
   fi
   chmod 600 "$KEY_PATH"
   echo
-  log "Connect-back public key — paste it into the LOCAL bootstrap (item 3,"
+  log "Connect-back public key — paste it into the LOCAL bootstrap (item 5,"
   log "'server-side public key'); it adds the loopback-only restriction:"
   echo
   cat "$KEY_PATH.pub"
@@ -362,7 +362,7 @@ run_authorize_local() { # item 2: authorize the local machine's key (tunnel logi
   local pubkey
   echo "Public key of the LOCAL machine: the .pub of the key the tunnel"
   echo "(ssh remote-claude) logs in to this server with. The local bootstrap"
-  echo "shows it (item 5), or run: cat ~/.ssh/id_ed25519.pub  on your machine."
+  echo "shows it (item 2), or run: cat ~/.ssh/id_ed25519.pub  on your machine."
   pubkey="${LOCAL_PUBKEY:-$(ask 'Local machine public key' '')}"
   [[ -n "$pubkey" ]] || die "No key pasted; nothing changed"
   add_authorized_key "$pubkey"
