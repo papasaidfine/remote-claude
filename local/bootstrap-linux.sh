@@ -11,17 +11,22 @@
 # Presents a menu of independent items — each is idempotent, shows whether
 # it is already configured, and can be run (or fail, or be re-run) on its own:
 #
-#   1. Incoming SSH: install openssh-server if missing (apt/dnf/yum/pacman/
-#      zypper), enable and start the service, harden sshd (pubkey auth on,
-#      password auth off optional). Backs up config, validates with
-#      `sshd -t` before restarting. The only item that needs sudo.
-#   2. Ensure the default ~/.ssh/id_ed25519 exists (local→server hop).
-#   3. Append the server-side public key to authorized_keys with a
-#      from="127.0.0.1,::1" restriction (dedup by key blob).
-#   4. Write the base "Host remote-claude" block into ~/.ssh/config
-#      (host/user/port only; keeps an existing reverse port).
-#   5. Add or update the reverse tunnel port (RemoteForward) on that block.
-#   6. Show the local public key to paste into the server-side setup.
+#   Phase 1 — Local -> Claude (reach the server running Claude Code):
+#     1. Write the base "Host remote-claude" block into ~/.ssh/config
+#        (host/user/port only; keeps an existing reverse port).
+#     2. Ensure the default ~/.ssh/id_ed25519 exists (local→server hop) and
+#        print the local public key to paste into the server-side setup.
+#     3. Test connection: outbound ssh check, plus a reverse-tunnel probe when
+#        configured; read-only.
+#
+#   Phase 2 — Claude -> Local (let the agent ssh back into this machine):
+#     4. Incoming SSH: install openssh-server if missing (apt/dnf/yum/pacman/
+#        zypper), enable and start the service, harden sshd (pubkey auth on,
+#        password auth off optional). Backs up config, validates with
+#        `sshd -t` before restarting. The only item that needs sudo.
+#     5. Append the server-side public key to authorized_keys with a
+#        from="127.0.0.1,::1" restriction (dedup by key blob).
+#     6. Add or update the reverse tunnel port (RemoteForward) on that block.
 #
 # Usage:  ./bootstrap-linux.sh
 # Non-interactive overrides via env vars: SERVER_HOST, SERVER_USER,
@@ -50,6 +55,15 @@ warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; }
 die()  { err "$*"; exit 1; }
 
+C_HDR=$'\033[1;36m'   # bold cyan — phase headers
+C_DIM=$'\033[2m'      # dim — header annotations
+C_GRN=$'\033[1;32m'
+C_RED=$'\033[1;31m'
+C_RST=$'\033[0m'
+
+tick()  { printf '  %s✔%s %s\n' "$C_GRN" "$C_RST" "$*"; }
+cross() { printf '  %s✘%s %s\n' "$C_RED" "$C_RST" "$*"; }
+
 ask() { # ask <prompt> [default]  -> echoes answer
   local prompt="$1" default="${2:-}" reply
   if [[ -n "$default" ]]; then
@@ -74,21 +88,27 @@ ask_yn() { # ask_yn <prompt> <Y|N>  -> exit status 0 = yes
   done
 }
 
+print_banner() {
+  cat <<'EOF'
+
+╭──────────────────────────────────────────────────────────────╮
+│  remote-claude · reverse SSH bootstrap (Linux)               │
+│                                                              │
+│    Local ──────ssh─────▶ Claude   (you reach the server)     │
+│    Local ◀──reverse ssh── Claude  (the agent reaches back)   │
+╰──────────────────────────────────────────────────────────────╯
+ Each item is independent and idempotent; work top to bottom.
+ Files this can modify: openssh-server / sshd_config (item 4, sudo)
+ and ~/.ssh/{config,authorized_keys,id_ed25519}. Modified system
+ files are backed up first (*.claude-bak-<timestamp>).
+EOF
+}
+
 # ---------------------------------------------------------------- platform
 if [[ -z "${RC_SOURCED_FOR_TEST:-}" ]]; then
 [[ "$(uname -s)" == "Linux" ]] || die "This script is for Linux. Use bootstrap-macos.sh on macOS or bootstrap-windows.ps1 on Windows."
 
-cat <<'EOF'
-==========================================================
- Reverse SSH bootstrap (Linux)
- local linux  ->  remote server  ->  (reverse tunnel)  -> local linux
-==========================================================
-Pick items from the menu below; each one is independent, idempotent,
-and shows whether it is already configured. Files this can modify:
-  - openssh-server install / sshd service / sshd_config (item 1, sudo)
-  - ~/.ssh/{config,authorized_keys,id_ed25519}
-All modified system files are backed up first (*.claude-bak-<timestamp>).
-EOF
+print_banner
 fi
 
 # ---------------------------------------------------------------- shared prep
@@ -298,7 +318,7 @@ AuthorizedKeysFile .ssh/authorized_keys"
 }
 
 # ---------------------------------------------------------------- menu items
-run_sshd() { # item 1: install/enable sshd + harden (sudo)
+run_sshd() { # item 4: install/enable sshd + harden (sudo)
   log "This item installs/enables the system sshd and hardens its config (requires sudo)"
   local DISABLE_PASSWORD
   if ask_yn "Disable password login for the local sshd (recommended, public key only)" "Y"; then
@@ -337,9 +357,60 @@ run_key() { # item 2: ensure ~/.ssh/id_ed25519 exists
     ssh-keygen -t ed25519 -f "$KEY_PATH" -N "" >/dev/null
   fi
   chmod 600 "$KEY_PATH"
+  echo
+  log "Local public key — paste it into server/setup-server.sh (item 2) on the"
+  log "server; that authorizes the tunnel login (ssh $TUNNEL_ALIAS):"
+  echo
+  cat "$KEY_PATH.pub"
+  echo
 }
 
-run_authorize() { # item 3: authorize the server's connect-back key
+run_test() { # item 3: test the connection (adaptive; never modifies files)
+  status_config || die "No Host $TUNNEL_ALIAS block yet — run item 1 first"
+  local rport out ok=1
+  rport="$(config_block_rport)"
+  [[ -z "$rport" || "$rport" =~ ^[0-9]+$ ]] \
+    || die "RemoteForward port '$rport' in the managed block is not numeric — re-run item 6"
+
+  log "Testing outbound hop: ssh $TUNNEL_ALIAS ..."
+  # `|| true` on both probes: success is judged by the output marker alone, and
+  # the menu's run_item wrapper runs items under set -e — without it a failing
+  # ssh would abort at this assignment before any diagnostics print.
+  out="$(ssh -o BatchMode=yes -o ConnectTimeout=10 -o ClearAllForwardings=yes \
+        "$TUNNEL_ALIAS" 'echo ok' 2>&1)" || true
+  if grep -qx 'ok' <<<"$out"; then
+    tick "outbound: ssh $TUNNEL_ALIAS works"
+  else
+    cross "outbound: could not log in to the server"
+    printf '%s\n' "$out" | tail -n 3 | sed 's/^/      /'
+    warn "Most common cause: the server has not authorized your local key yet —"
+    warn "item 2 prints it; paste it into server/setup-server.sh (item 2) there."
+    ok=0
+  fi
+
+  if [[ "$ok" == 1 && -n "$rport" ]]; then
+    log "Testing reverse tunnel: server 127.0.0.1:$rport -> this machine's sshd ..."
+    # This very connection carries the RemoteForward from the managed block, so
+    # probing the port on the server lands back on the local sshd — a full-loop
+    # check. ExitOnForwardFailure=no: if another session already holds the
+    # forward, probing through it is still a valid end-to-end test.
+    out="$(ssh -o BatchMode=yes -o ConnectTimeout=10 -o ExitOnForwardFailure=no \
+          "$TUNNEL_ALIAS" "bash -c 'exec 3<>/dev/tcp/127.0.0.1/$rport' 2>/dev/null && echo tunnel-ok" 2>&1)" || true
+    if grep -qx 'tunnel-ok' <<<"$out"; then
+      tick "reverse tunnel: server port $rport reaches this machine's sshd"
+    else
+      cross "reverse tunnel: server port $rport did not answer"
+      warn "Check phase ② — incoming sshd (item 4), authorized key (item 5), reverse port (item 6)."
+      ok=0
+    fi
+  elif [[ -z "$rport" ]]; then
+    warn "No reverse tunnel port yet (item 6) — skipped the tunnel check."
+  fi
+
+  [[ "$ok" == 1 ]] || die "Some checks failed (see above)"
+}
+
+run_authorize() { # item 5: authorize the server's connect-back key
   ensure_ssh_dir
   local pubkey
   echo "Server-side public key: the .pub of the key that Claude / Codex on the"
@@ -350,7 +421,7 @@ run_authorize() { # item 3: authorize the server's connect-back key
   add_authorized_key "$pubkey"
 }
 
-run_config() { # item 4: base Host remote-claude block — form: edit fields, then apply
+run_config() { # item 1: base Host remote-claude block — form: edit fields, then apply
   ensure_ssh_dir
   local host="" user="" port="" rport="" sel
   # Pre-fill from the existing block; RemoteForward passes through untouched
@@ -395,34 +466,19 @@ run_config() { # item 4: base Host remote-claude block — form: edit fields, th
   done
 }
 
-run_rport() { # item 5: reverse tunnel port (RemoteForward) on the managed block
-  status_config || die "No Host $TUNNEL_ALIAS block yet — run item 4 first"
+run_rport() { # item 6: reverse tunnel port (RemoteForward) on the managed block
+  status_config || die "No Host $TUNNEL_ALIAS block yet — run item 1 first"
   local host user port rport cur
   host="$(config_block_value HostName)"
   user="$(config_block_value User)"
   port="$(config_block_value Port)"
   [[ -n "$host" && -n "$user" && -n "$port" ]] \
-    || die "Could not read the Host $TUNNEL_ALIAS block — re-run item 4"
+    || die "Could not read the Host $TUNNEL_ALIAS block — re-run item 1"
   cur="$(config_block_rport)"
   rport="${REVERSE_PORT:-$(ask 'Reverse SSH port on the server (used by Claude/Codex to connect back)' "${cur:-2222}")}"
   [[ "$rport" =~ ^[0-9]+$ ]] || die "Reverse port must be a number"
   write_ssh_config_block "$host" "$user" "$port" "$rport" 1
   log "Reverse port $rport set — the tunnel rides on your ssh $TUNNEL_ALIAS connection."
-}
-
-run_show_key() { # item 6: print the local public key for the server-side handoff
-  if [[ ! -f "$KEY_PATH.pub" ]]; then
-    if [[ ! -f "$KEY_PATH" ]]; then
-      ask_yn "No local key yet — generate it now" "Y" || die "No key to show"
-    fi
-    run_key
-  fi
-  echo
-  log "Local public key — paste it into server/setup-server.sh (item 2) on the"
-  log "server; that authorizes the tunnel login (ssh $TUNNEL_ALIAS):"
-  echo
-  cat "$KEY_PATH.pub"
-  echo
 }
 
 # ---------------------------------------------------------------- status checks
@@ -443,18 +499,25 @@ status_config()    { grep -qF "$BEGIN_MARK" "$SSH_CONFIG" 2>/dev/null; }
 status_rport()     { [[ -n "$(config_block_value RemoteForward)" ]]; }
 
 # ---------------------------------------------------------------- menu
-mark() { if "$1"; then printf '[done]'; else printf '[ -  ]'; fi; }
+mark() { # mark <status-fn> -> [ ✔ ] / [   ]
+  if "$1"; then printf '[ %s✔%s ]' "$C_GRN" "$C_RST"; else printf '[   ]'; fi
+}
 
 draw_menu() {
   echo
-  echo "----------------------------------------------------------"
-  printf '  1) %-50s %s\n' 'Incoming SSH — sshd install + harden  [sudo]' "$(mark status_sshd)"
-  printf '  2) %-50s %s\n' 'Local SSH key (~/.ssh/id_ed25519)' "$(mark status_key)"
-  printf '  3) %-50s %s\n' "Authorize the server's connect-back key" "$(mark status_authorize)"
-  printf '  4) %-50s %s\n' 'SSH config shortcut (Host remote-claude)' "$(mark status_config)"
-  printf '  5) %-50s %s\n' 'Reverse tunnel port (RemoteForward)' "$(mark status_rport)"
-  printf '  6) %s\n' 'Show local public key (paste into server setup)'
-  echo   '  q) Quit'
+  printf '  %s① Local ──▶ Claude%s%s          reach the server running Claude Code%s\n' \
+    "$C_HDR" "$C_RST" "$C_DIM" "$C_RST"
+  printf '     1) %-48s %s\n' "SSH config shortcut (Host $TUNNEL_ALIAS)" "$(mark status_config)"
+  printf '     2) %-48s %s\n' 'Local SSH key - create & show public key' "$(mark status_key)"
+  printf '     3) %s\n'       'Test connection'
+  echo
+  printf '  %s② Claude ──▶ Local%s%s          let the agent ssh back into this machine%s\n' \
+    "$C_HDR" "$C_RST" "$C_DIM" "$C_RST"
+  printf '     4) %-48s %s\n' 'Incoming SSH - sshd install + harden  [sudo]' "$(mark status_sshd)"
+  printf '     5) %-48s %s\n' "Authorize the server's connect-back key" "$(mark status_authorize)"
+  printf '     6) %-48s %s\n' 'Reverse tunnel port (RemoteForward)' "$(mark status_rport)"
+  echo
+  echo   '     q) Quit'
 }
 
 run_item() { # run_item <run-function>; failures return to the menu
@@ -471,12 +534,12 @@ while true; do
   draw_menu
   read -r -p "Select [1-6, q]: " choice || break
   case "$choice" in
-    1) run_item run_sshd ;;
+    1) run_item run_config ;;
     2) run_item run_key ;;
-    3) run_item run_authorize ;;
-    4) run_item run_config ;;
-    5) run_item run_rport ;;
-    6) run_item run_show_key ;;
+    3) run_item run_test ;;
+    4) run_item run_sshd ;;
+    5) run_item run_authorize ;;
+    6) run_item run_rport ;;
     q|Q) break ;;
     *) warn "Unknown selection: $choice" ;;
   esac

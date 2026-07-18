@@ -55,18 +55,17 @@ else
   printf 'FAIL - macos: banner right border misaligned\n'; fail=1
 fi
 
-# --- Linux assertions are enabled in the Linux task ---
-# l="$(menu_of "$HERE/../local/bootstrap-linux.sh" | strip_ansi)"
-# check 'linux: phase 1 header' "$l" '① Local ──▶ Claude'
-# check 'linux: item 3 test'    "$l" '3) Test connection'
-# check 'linux: item 6 rport'   "$l" '6) Reverse tunnel port'
-# check 'linux: banner title'   "$l" 'remote-claude · reverse SSH bootstrap (Linux)'
-# check_absent 'linux: no xray phase' "$l" 'xray'
-# check_absent 'linux: show-key item gone' "$l" 'Show local public key'
-# if printf '%s\n' "$l" | awk '/^│/ && !/│$/ { bad = 1 } END { exit bad }'; then
-#   printf 'ok   - linux: banner right border aligned\n'
-# else
-#   printf 'FAIL - linux: banner right border misaligned\n'; fail=1
-# fi
+l="$(menu_of "$HERE/../local/bootstrap-linux.sh" | strip_ansi)"
+check 'linux: phase 1 header' "$l" '① Local ──▶ Claude'
+check 'linux: item 3 test'    "$l" '3) Test connection'
+check 'linux: item 6 rport'   "$l" '6) Reverse tunnel port'
+check 'linux: banner title'   "$l" 'remote-claude · reverse SSH bootstrap (Linux)'
+check_absent 'linux: no xray phase' "$l" 'xray'
+check_absent 'linux: show-key item gone' "$l" 'Show local public key'
+if printf '%s\n' "$l" | awk '/^│/ && !/│$/ { bad = 1 } END { exit bad }'; then
+  printf 'ok   - linux: banner right border aligned\n'
+else
+  printf 'FAIL - linux: banner right border misaligned\n'; fail=1
+fi
 
 exit $fail
