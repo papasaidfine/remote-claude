@@ -13,25 +13,21 @@ agent   ── ssh my-device ──▶  你的电脑    （反向 ssh）
 
 ## 1. 配置本地电脑
 
-**macOS：**
+**macOS / Linux：**
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-macos.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.sh)
 ```
 
-**Linux：**
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-linux.sh)
-```
-
-**Windows**（以管理员身份运行）：
+**Windows：**
 
 ```powershell
-irm https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-windows.ps1 -OutFile bootstrap-windows.ps1
-Set-ExecutionPolicy -Scope Process Bypass -Force
-.\bootstrap-windows.ps1
+irm https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.ps1 | iex
 ```
+
+会下载 `remote-claude` 二进制并打开配置菜单（重新运行即可更新）。只有
+**接收 SSH 连接**那一项需要提权——Windows 用管理员 PowerShell，macOS/Linux 用
+`sudo`。
 
 菜单分三个阶段（每项显示是否已配置，从上到下做即可）：
 

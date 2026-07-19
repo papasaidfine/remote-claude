@@ -14,25 +14,21 @@ agent  ── ssh my-device ──▶  your machine    (reverse ssh)
 
 ## 1. Set up your local machine
 
-**macOS:**
+**macOS / Linux:**
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-macos.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.sh)
 ```
 
-**Linux:**
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-linux.sh)
-```
-
-**Windows** (run as administrator):
+**Windows:**
 
 ```powershell
-irm https://raw.githubusercontent.com/papasaidfine/remote-claude/main/local/bootstrap-windows.ps1 -OutFile bootstrap-windows.ps1
-Set-ExecutionPolicy -Scope Process Bypass -Force
-.\bootstrap-windows.ps1
+irm https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.ps1 | iex
 ```
+
+This downloads the `remote-claude` binary and opens the setup menu (re-run to
+update). Only the **Incoming SSH** item needs an elevated session —
+Administrator PowerShell on Windows, `sudo` on macOS/Linux.
 
 Menu — three phases, work top to bottom (each item shows whether it's
 already configured):
