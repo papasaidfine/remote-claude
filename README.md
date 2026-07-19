@@ -30,6 +30,19 @@ This downloads the `remote-claude` binary and opens the setup menu (re-run to
 update). Only the **Incoming SSH** item needs an elevated session —
 Administrator PowerShell on Windows, `sudo` on macOS/Linux.
 
+**GitHub blocked or slow?** Route both the script and the binary through your
+own proxy with `RC_PROXY`:
+
+```bash
+export RC_PROXY=http://127.0.0.1:7890   # your local proxy
+bash <(curl -fsSL --proxy "$RC_PROXY" https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.sh)
+```
+
+```powershell
+$env:RC_PROXY = 'http://127.0.0.1:7890'
+(irm -Proxy $env:RC_PROXY https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.ps1) | iex
+```
+
 Menu — three phases, work top to bottom (each item shows whether it's
 already configured):
 

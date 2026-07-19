@@ -29,6 +29,18 @@ irm https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.ps
 **接收 SSH 连接**那一项需要提权——Windows 用管理员 PowerShell，macOS/Linux 用
 `sudo`。
 
+**GitHub 连不上或很慢？** 用 `RC_PROXY` 让脚本和二进制都走你自己的代理：
+
+```bash
+export RC_PROXY=http://127.0.0.1:7890   # 你的本地代理
+bash <(curl -fsSL --proxy "$RC_PROXY" https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.sh)
+```
+
+```powershell
+$env:RC_PROXY = 'http://127.0.0.1:7890'
+(irm -Proxy $env:RC_PROXY https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.ps1) | iex
+```
+
 菜单分三个阶段（每项显示是否已配置，从上到下做即可）：
 
 **① 本机 ──▶ Claude**——先连上跑 Claude Code 的服务器

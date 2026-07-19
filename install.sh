@@ -26,8 +26,17 @@ dest_dir="$HOME/.local/bin"
 dest="$dest_dir/remote-claude"
 
 mkdir -p "$dest_dir"
+
+# Optional proxy for the download — some regions can't reach GitHub directly.
+# RC_PROXY is the explicit knob; curl also honors the standard ALL_PROXY /
+# HTTPS_PROXY environment variables on its own.
 echo "Downloading ${asset} ..."
-curl -fsSL "$url" -o "$dest"
+if [ -n "${RC_PROXY:-}" ]; then
+  echo "Using proxy ${RC_PROXY}"
+  curl -fsSL --proxy "${RC_PROXY}" "$url" -o "$dest"
+else
+  curl -fsSL "$url" -o "$dest"
+fi
 chmod +x "$dest"
 echo "Installed to $dest"
 
