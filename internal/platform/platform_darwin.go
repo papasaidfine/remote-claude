@@ -22,7 +22,7 @@ type darwinPlatform struct{}
 
 func newPlatform() Platform { return darwinPlatform{} }
 
-func (darwinPlatform) Name() string           { return "macOS" }
+func (darwinPlatform) Name() string            { return "macOS" }
 func (darwinPlatform) SupportsXray() bool      { return true }
 func (darwinPlatform) RequireElevation() error { return nil }
 

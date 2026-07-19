@@ -21,19 +21,19 @@ type params struct {
 // Config is the marshaled xray config; fields use omitempty so absent transport
 // or security settings drop out cleanly.
 type Config struct {
-	Log       logCfg      `json:"log"`
-	Inbounds  []inbound   `json:"inbounds"`
-	Outbounds []outbound  `json:"outbounds"`
+	Log       logCfg     `json:"log"`
+	Inbounds  []inbound  `json:"inbounds"`
+	Outbounds []outbound `json:"outbounds"`
 }
 
 type logCfg struct {
 	Loglevel string `json:"loglevel"`
 }
 type inbound struct {
-	Listen   string      `json:"listen"`
-	Port     int         `json:"port"`
-	Protocol string      `json:"protocol"`
-	Settings inboundSet  `json:"settings"`
+	Listen   string     `json:"listen"`
+	Port     int        `json:"port"`
+	Protocol string     `json:"protocol"`
+	Settings inboundSet `json:"settings"`
 }
 type inboundSet struct {
 	Address string `json:"address"`
@@ -41,9 +41,9 @@ type inboundSet struct {
 	Network string `json:"network"`
 }
 type outbound struct {
-	Protocol       string     `json:"protocol"`
-	Settings       outSet     `json:"settings"`
-	StreamSettings stream     `json:"streamSettings"`
+	Protocol       string `json:"protocol"`
+	Settings       outSet `json:"settings"`
+	StreamSettings stream `json:"streamSettings"`
 }
 type outSet struct {
 	Vnext []vnext `json:"vnext"`
@@ -59,13 +59,13 @@ type user struct {
 	Flow       string `json:"flow,omitempty"`
 }
 type stream struct {
-	Network         string       `json:"network"`
-	Security        string       `json:"security"`
-	RealitySettings *realitySet  `json:"realitySettings,omitempty"`
-	TLSSettings     *tlsSet      `json:"tlsSettings,omitempty"`
-	WSSettings      *wsSet       `json:"wsSettings,omitempty"`
-	GRPCSettings    *grpcSet     `json:"grpcSettings,omitempty"`
-	TCPSettings     *struct{}    `json:"tcpSettings,omitempty"`
+	Network         string      `json:"network"`
+	Security        string      `json:"security"`
+	RealitySettings *realitySet `json:"realitySettings,omitempty"`
+	TLSSettings     *tlsSet     `json:"tlsSettings,omitempty"`
+	WSSettings      *wsSet      `json:"wsSettings,omitempty"`
+	GRPCSettings    *grpcSet    `json:"grpcSettings,omitempty"`
+	TCPSettings     *struct{}   `json:"tcpSettings,omitempty"`
 }
 type realitySet struct {
 	ServerName  string `json:"serverName"`
@@ -197,7 +197,7 @@ func ToJSON(rawURL string, dokoPort int, destHost string, destPort int) (string,
 	}
 
 	cfg := Config{
-		Log:      logCfg{Loglevel: "warning"},
+		Log: logCfg{Loglevel: "warning"},
 		Inbounds: []inbound{{Listen: "127.0.0.1", Port: dokoPort, Protocol: "dokodemo-door",
 			Settings: inboundSet{Address: destHost, Port: destPort, Network: "tcp"}}},
 		Outbounds: []outbound{{Protocol: "vless",

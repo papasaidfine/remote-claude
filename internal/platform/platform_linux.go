@@ -22,7 +22,7 @@ type linuxPlatform struct{}
 func newPlatform() Platform { return linuxPlatform{} }
 
 func (linuxPlatform) Name() string       { return "Linux" }
-func (linuxPlatform) SupportsXray() bool  { return false }
+func (linuxPlatform) SupportsXray() bool { return false }
 func (linuxPlatform) RequireElevation() error {
 	return nil // item 4 uses sudo per-command
 }

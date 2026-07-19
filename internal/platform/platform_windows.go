@@ -37,7 +37,7 @@ type windowsPlatform struct{}
 
 func newPlatform() Platform { return windowsPlatform{} }
 
-func (windowsPlatform) Name() string      { return "Windows" }
+func (windowsPlatform) Name() string       { return "Windows" }
 func (windowsPlatform) SupportsXray() bool { return true }
 
 func isAdmin() bool {

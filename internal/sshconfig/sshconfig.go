@@ -157,7 +157,7 @@ type Deps struct {
 	Confirm  func(prompt string, defYes bool) bool // interactive yes/no
 	SetPerms func(path string) error               // strict perms (chmod / icacls)
 	Backup   func(path string) (string, error)     // copy → returns backup path
-	Force    bool                                   // skip the "update it?" confirm
+	Force    bool                                  // skip the "update it?" confirm
 }
 
 // WriteFile writes the managed block into cfgPath, replacing any existing
