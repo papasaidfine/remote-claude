@@ -86,3 +86,5 @@ dialog h3 { margin: 0 0 14px; }
 #host-form label.check input { width: auto; }
 .form-err { color: var(--danger); font-size: 13px; min-height: 18px; }
 .empty { color: var(--dim); padding: 20px; text-align: center; border: 1px dashed var(--line); border-radius: 10px; }
+label.check.inline { display: inline-flex; align-items: center; gap: 6px; color: var(--text); font-size: 13px; }
+label.check.inline input { width: auto; }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/papasaidfine/remote-claude/internal/bridge"
 	"github.com/papasaidfine/remote-claude/internal/paths"
+	"github.com/papasaidfine/remote-claude/internal/provision"
 	"github.com/papasaidfine/remote-claude/internal/store"
 )
 
@@ -54,6 +55,15 @@ func (f *fakeProv) EnsureClient(h store.Host, alias string) error {
 	f.lastAlias = alias
 	return f.err
 }
+
+func (f *fakeProv) ServerBootstrap(h store.Host, alias string) (provision.ServerResult, error) {
+	if f.err != nil {
+		return provision.ServerResult{}, f.err
+	}
+	return provision.ServerResult{ServerPubKey: "ssh-ed25519 AAAAkey server", Authorized: true, Alias: alias}, nil
+}
+
+func (f *fakeProv) EnsureLocalSSHD(disablePassword bool) error { return f.err }
 
 func newTestServer(t *testing.T, prov Provisioner) (*Server, *fakeManager) {
 	t.Helper()
@@ -199,6 +209,35 @@ func TestAliasPersistedAndSanitized(t *testing.T) {
 	_, st := do(t, s, "GET", "/api/state", nil)
 	if st["client_alias"] != "lisalaptop" {
 		t.Errorf("alias not persisted in state: %v", st["client_alias"])
+	}
+}
+
+func TestSetupServerSuccess(t *testing.T) {
+	s, _ := newTestServer(t, &fakeProv{})
+	do(t, s, "POST", "/api/alias", map[string]string{"alias": "lisa"})
+	id := addHost(t, s)
+	code, resp := do(t, s, "POST", "/api/hosts/"+id+"/setup-server", nil)
+	if code != 200 {
+		t.Fatalf("setup-server code %d (%v)", code, resp)
+	}
+	if resp["server_pubkey"] == "" || resp["authorized"] != true {
+		t.Errorf("unexpected result: %v", resp)
+	}
+}
+
+func TestSetupServerUnknownHost(t *testing.T) {
+	s, _ := newTestServer(t, &fakeProv{})
+	code, _ := do(t, s, "POST", "/api/hosts/nope/setup-server", nil)
+	if code != 404 {
+		t.Fatalf("expected 404, got %d", code)
+	}
+}
+
+func TestLocalSSHD(t *testing.T) {
+	s, _ := newTestServer(t, &fakeProv{})
+	code, _ := do(t, s, "POST", "/api/local-sshd", map[string]bool{"disable_password": true})
+	if code != 200 {
+		t.Fatalf("local-sshd code %d", code)
 	}
 }
 

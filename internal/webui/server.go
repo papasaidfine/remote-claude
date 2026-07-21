@@ -17,6 +17,7 @@ import (
 	"github.com/papasaidfine/remote-claude/internal/bridge"
 	"github.com/papasaidfine/remote-claude/internal/nodes"
 	"github.com/papasaidfine/remote-claude/internal/paths"
+	"github.com/papasaidfine/remote-claude/internal/provision"
 	"github.com/papasaidfine/remote-claude/internal/store"
 	"github.com/papasaidfine/remote-claude/internal/vless"
 )
@@ -24,11 +25,13 @@ import (
 //go:embed static
 var staticFS embed.FS
 
-// Provisioner performs the side-effecting client setup before a tunnel starts
-// (write the ssh managed block, ensure the key, etc.). Injected so the server
-// stays testable; may be nil (then start just supervises with no client setup).
+// Provisioner performs the side-effecting setup the UI drives: client setup
+// before a tunnel starts, one-shot server bootstrap over the connection, and
+// local sshd. Injected so the server stays testable; may be nil.
 type Provisioner interface {
 	EnsureClient(h store.Host, clientAlias string) error
+	ServerBootstrap(h store.Host, clientAlias string) (provision.ServerResult, error)
+	EnsureLocalSSHD(disablePassword bool) error
 }
 
 // TunnelManager is the subset of *bridge.Manager the server drives (seam for
@@ -75,8 +78,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/hosts/{id}", s.handleDeleteHost)
 	mux.HandleFunc("POST /api/hosts/{id}/start", s.handleStart)
 	mux.HandleFunc("POST /api/hosts/{id}/stop", s.handleStop)
+	mux.HandleFunc("POST /api/hosts/{id}/setup-server", s.handleSetupServer)
 	mux.HandleFunc("GET /api/nodes", s.handleGetNodes)
 	mux.HandleFunc("POST /api/nodes", s.handleSetNodes)
+	mux.HandleFunc("POST /api/local-sshd", s.handleLocalSSHD)
 
 	sub, _ := fs.Sub(staticFS, "static")
 	fileServer := http.FileServerFS(sub)
@@ -243,6 +248,53 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	s.mgr.Stop(id)
 	writeJSON(w, http.StatusOK, s.mgr.Status(id))
+}
+
+// handleSetupServer configures the server side over the outbound connection and
+// authorizes the returned connect-back key locally.
+func (s *Server) handleSetupServer(w http.ResponseWriter, r *http.Request) {
+	if s.prov == nil {
+		httpErr(w, http.StatusNotImplemented, "provisioning unavailable")
+		return
+	}
+	id := r.PathValue("id")
+	s.mu.Lock()
+	h := s.cfg.Find(id)
+	var host store.Host
+	if h != nil {
+		host = *h
+	}
+	alias := s.cfg.ClientAlias
+	s.mu.Unlock()
+	if h == nil {
+		httpErr(w, http.StatusNotFound, "no such host")
+		return
+	}
+	res, err := s.prov.ServerBootstrap(host, alias)
+	if err != nil {
+		httpErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// handleLocalSSHD installs/ensures the local ssh server (may need sudo).
+func (s *Server) handleLocalSSHD(w http.ResponseWriter, r *http.Request) {
+	if s.prov == nil {
+		httpErr(w, http.StatusNotImplemented, "provisioning unavailable")
+		return
+	}
+	var body struct {
+		DisablePassword bool `json:"disable_password"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if err := s.prov.EnsureLocalSSHD(body.DisablePassword); err != nil {
+		httpErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true, "running": s.plat.StatusIncomingSSH()})
 }
 
 // ---- xray nodes (raw text of vless-nodes.txt) ----

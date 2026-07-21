@@ -31,6 +31,16 @@
     </section>
 
     <section>
+      <h2>Local ssh server <span id="sshd-state" class="pill"></span></h2>
+      <p class="hint">The server reaches you back through the tunnel into this machine's sshd, so it must be running. Installing/hardening it may prompt for <code>sudo</code> in the terminal where you launched the app.</p>
+      <div class="row">
+        <button id="sshd-ensure" class="secondary">Install / ensure running</button>
+        <label class="check inline"><input id="sshd-nopass" type="checkbox" checked> also disable password login (recommended)</label>
+        <span id="sshd-msg" class="msg"></span>
+      </div>
+    </section>
+
+    <section>
       <h2>Xray vless nodes <span id="node-count" class="pill"></span></h2>
       <p class="hint">One <code>vless://</code> URL per line (<code>#</code> comments allowed). Used by the bridge and by <code>ssh remote-claude</code> when xray is enabled. Each connection picks a random node.</p>
       <textarea id="nodes" rows="6" spellcheck="false" placeholder="vless://uuid@host:port?...#name"></textarea>
@@ -61,6 +71,7 @@
       <div class="host-actions">
         <button class="start">Start tunnel</button>
         <button class="stop secondary">Stop</button>
+        <button class="setupserver secondary" title="Configure the server side over the connection (needs the tunnel login to work already)">Set up server</button>
         <button class="edit secondary">Edit</button>
         <button class="del danger">Delete</button>
       </div>

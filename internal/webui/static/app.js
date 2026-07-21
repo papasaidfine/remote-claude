@@ -52,6 +52,10 @@ function renderHosts(state) {
 
     $(".start", node).onclick = () => act(() => api("POST", `/api/hosts/${h.id}/start`));
     $(".stop", node).onclick = () => act(() => api("POST", `/api/hosts/${h.id}/stop`));
+    $(".setupserver", node).onclick = () => act(async () => {
+      const res = await api("POST", `/api/hosts/${h.id}/setup-server`);
+      alert(`Server configured as “${res.alias}”. Its connect-back key was ${res.authorized ? "authorized" : "already present"} on this machine.`);
+    });
     $(".edit", node).onclick = () => openHostDialog(h);
     $(".del", node).onclick = () => {
       if (confirm(`Delete host “${h.name}”? This stops its tunnel.`)) {
@@ -66,7 +70,23 @@ function renderFooter(state) {
   $("#platform").textContent = `Platform: ${state.platform}${state.xray_supported ? "" : " (xray optional on this OS)"}`;
   $("#local-ssh").textContent = `Local ssh server: ${state.local_ssh_ok ? "✔ running" : "✘ not detected"}`;
   $("#node-count").textContent = `${state.node_count} node${state.node_count === 1 ? "" : "s"}`;
+  $("#sshd-state").textContent = state.local_ssh_ok ? "running" : "not running";
 }
+
+$("#sshd-ensure").onclick = async () => {
+  const msg = $("#sshd-msg");
+  msg.className = "msg";
+  msg.textContent = "Working… (may prompt for sudo in the launching terminal)";
+  try {
+    await api("POST", "/api/local-sshd", { disable_password: $("#sshd-nopass").checked });
+    msg.className = "msg ok";
+    msg.textContent = "Local ssh server ready.";
+    await refresh();
+  } catch (e) {
+    msg.className = "msg err";
+    msg.textContent = e.message;
+  }
+};
 
 let aliasDirty = false;
 $("#alias").addEventListener("input", () => { aliasDirty = true; });
