@@ -15,11 +15,12 @@ import (
 
 // BlockOpts describes the managed block to render.
 type BlockOpts struct {
-	Host    string
-	User    string
-	Port    int
-	RevPort int    // 0 → omit RemoteForward + ExitOnForwardFailure
-	Proxy   string // "" → omit ProxyCommand; else the value after "ProxyCommand "
+	Host       string
+	User       string
+	Port       int
+	RevPort    int    // 0 → omit RemoteForward + ExitOnForwardFailure
+	Proxy      string // "" → omit ProxyCommand; else the value after "ProxyCommand "
+	ClientName string // "" → omit SetEnv; else SetEnv LC_CLIENT_NAME=<name>
 }
 
 // Render returns the managed block (markers included, LF-terminated lines) for
@@ -34,6 +35,11 @@ func Render(o BlockOpts) string {
 	w("    Port " + strconv.Itoa(o.Port))
 	w("    IdentityFile ~/.ssh/" + paths.KeyName)
 	w("    IdentitiesOnly yes")
+	if o.ClientName != "" {
+		// Passes this machine's name to the server; the server's reverse Host
+		// block is named after it. LC_* is forwarded by ssh's default SendEnv.
+		w("    SetEnv LC_CLIENT_NAME=" + o.ClientName)
+	}
 	if o.Proxy != "" {
 		w("    ProxyCommand " + o.Proxy)
 	}

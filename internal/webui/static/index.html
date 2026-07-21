@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>remote-claude</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1>remote-claude</h1>
+      <p class="sub">Reverse-tunnel bridge &amp; setup. This window is the app &mdash; keep it running to keep tunnels up.</p>
+      <div class="alias">
+        <label>This machine's name
+          <input id="alias" type="text" placeholder="e.g. lisa-laptop" autocomplete="off">
+        </label>
+        <button id="alias-save">Save name</button>
+        <span class="hint">Sent to the server as <code>LC_CLIENT_NAME</code>; the server reaches you back as <code>ssh &lt;name&gt;</code>.</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section>
+      <div class="section-head">
+        <h2>Hosts</h2>
+        <button id="add-host">+ Add host</button>
+      </div>
+      <div id="hosts"></div>
+    </section>
+
+    <section>
+      <h2>Xray vless nodes <span id="node-count" class="pill"></span></h2>
+      <p class="hint">One <code>vless://</code> URL per line (<code>#</code> comments allowed). Used by the bridge and by <code>ssh remote-claude</code> when xray is enabled. Each connection picks a random node.</p>
+      <textarea id="nodes" rows="6" spellcheck="false" placeholder="vless://uuid@host:port?...#name"></textarea>
+      <div class="row">
+        <button id="nodes-save">Save nodes</button>
+        <span id="nodes-msg" class="msg"></span>
+      </div>
+    </section>
+  </main>
+
+  <footer class="wrap">
+    <span id="platform"></span>
+    <span id="local-ssh"></span>
+  </footer>
+
+  <!-- host card template -->
+  <template id="host-tpl">
+    <div class="card host">
+      <div class="host-main">
+        <div class="host-title">
+          <span class="badge"></span>
+          <strong class="name"></strong>
+          <span class="target dim"></span>
+        </div>
+        <div class="host-meta dim"></div>
+        <div class="host-err"></div>
+      </div>
+      <div class="host-actions">
+        <button class="start">Start tunnel</button>
+        <button class="stop secondary">Stop</button>
+        <button class="edit secondary">Edit</button>
+        <button class="del danger">Delete</button>
+      </div>
+    </div>
+  </template>
+
+  <!-- host form dialog -->
+  <dialog id="host-dialog">
+    <form id="host-form" method="dialog">
+      <h3 id="host-form-title">Add host</h3>
+      <input type="hidden" name="id">
+      <label>Name <input name="name" required placeholder="workbox"></label>
+      <label>Server host / IP <input name="hostname" required placeholder="server.example.com"></label>
+      <label>SSH user <input name="user" required placeholder="devuser"></label>
+      <label>SSH port <input name="port" type="number" value="22" min="1" max="65535"></label>
+      <label>Reverse port <input name="reverse_port" type="number" value="2222" min="1" max="65535">
+        <span class="hint">Server-side loopback port the tunnel binds (the server ssh's back into you on this).</span>
+      </label>
+      <label class="check"><input name="use_xray" type="checkbox"> Route through xray</label>
+      <label class="check"><input name="auto_start" type="checkbox"> Start tunnel when the app launches</label>
+      <div class="form-err" id="host-form-err"></div>
+      <div class="row end">
+        <button value="cancel" class="secondary" formnovalidate>Cancel</button>
+        <button id="host-form-save" value="save">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

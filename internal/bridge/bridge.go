@@ -1,0 +1,339 @@
+// Package bridge is the reverse-tunnel supervisor. It owns the `ssh -N -R`
+// connection that carries the reverse tunnel (server loopback -> this machine's
+// sshd), decoupled from interactive `ssh` sessions so those can be unlimited and
+// concurrent. Each configured host gets one supervised tunnel that reconnects
+// with exponential backoff and reports live status.
+//
+// The Runner seam keeps the supervise loop testable without spawning ssh.
+package bridge
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"os/exec"
+	"strings"
+	"sync"
+	"time"
+)
+
+// State is the coarse lifecycle of a tunnel.
+type State string
+
+const (
+	StateStopped    State = "stopped"
+	StateConnecting State = "connecting"
+	StateUp         State = "up"
+	StateRetrying   State = "retrying"
+)
+
+// Status is a snapshot of one tunnel, safe to serialize to the UI.
+type Status struct {
+	HostID    string    `json:"host_id"`
+	State     State     `json:"state"`
+	LastError string    `json:"last_error,omitempty"`
+	Restarts  int       `json:"restarts"`
+	Since     time.Time `json:"since"`
+}
+
+// Spec is everything the supervisor needs to build and identify a tunnel.
+type Spec struct {
+	HostID       string // store host id (map key)
+	Alias        string // ssh Host alias of the managed block (e.g. "remote-claude")
+	ReversePort  int    // server-side loopback port to bind
+	LocalSSHPort int    // local sshd port the reverse forward targets (default 22)
+}
+
+// Runner starts the tunnel process and blocks until it exits or ctx is done.
+type Runner interface {
+	Run(ctx context.Context, args []string) error
+}
+
+// SSHArgs builds the ssh argument list (excluding the ssh binary itself) for the
+// reverse tunnel. ExitOnForwardFailure=yes makes ssh fail loudly (and the loop
+// retry/report) when the reverse port is already taken, instead of silently
+// running without a forward.
+func SSHArgs(alias string, reversePort, localPort int) []string {
+	if localPort == 0 {
+		localPort = 22
+	}
+	return []string{
+		"-N",
+		"-o", "ExitOnForwardFailure=yes",
+		"-o", "ServerAliveInterval=30",
+		"-o", "ServerAliveCountMax=3",
+		"-R", fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", reversePort, localPort),
+		alias,
+	}
+}
+
+// backoffFor returns base*2^attempt, clamped to [base, max]. Loop-based so it
+// never overflows for large attempt counts.
+func backoffFor(attempt int, base, max time.Duration) time.Duration {
+	if attempt < 0 {
+		attempt = 0
+	}
+	d := base
+	for i := 0; i < attempt && d < max; i++ {
+		d *= 2
+	}
+	if d > max {
+		d = max
+	}
+	if d < base {
+		d = base
+	}
+	return d
+}
+
+// execRunner runs the real ssh binary.
+type execRunner struct{ bin string }
+
+func (e execRunner) Run(ctx context.Context, args []string) error {
+	cmd := exec.CommandContext(ctx, e.bin, args...)
+	var errb bytes.Buffer
+	cmd.Stderr = &errb
+	err := cmd.Run()
+	if err != nil {
+		if tail := lastLine(errb.String()); tail != "" {
+			return fmt.Errorf("%v: %s", err, tail)
+		}
+	}
+	return err
+}
+
+func lastLine(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if i := strings.LastIndexByte(s, '\n'); i >= 0 {
+		s = s[i+1:]
+	}
+	if len(s) > 300 {
+		s = s[len(s)-300:]
+	}
+	return strings.TrimSpace(s)
+}
+
+// tunnel is one supervised reverse connection.
+type tunnel struct {
+	spec   Spec
+	runner Runner
+
+	upThreshold time.Duration
+	baseBackoff time.Duration
+	maxBackoff  time.Duration
+
+	mu       sync.Mutex
+	state    State
+	lastErr  string
+	restarts int
+	since    time.Time
+	attempt  int
+
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+func (t *tunnel) set(state State) {
+	t.mu.Lock()
+	t.state = state
+	t.since = time.Now()
+	t.mu.Unlock()
+}
+
+func (t *tunnel) status() Status {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return Status{HostID: t.spec.HostID, State: t.state, LastError: t.lastErr, Restarts: t.restarts, Since: t.since}
+}
+
+// supervise runs the connect/retry loop until ctx is cancelled.
+func (t *tunnel) supervise(ctx context.Context) {
+	defer close(t.done)
+	for {
+		if ctx.Err() != nil {
+			t.set(StateStopped)
+			return
+		}
+		err := t.runOnce(ctx)
+		if ctx.Err() != nil {
+			t.set(StateStopped)
+			return
+		}
+		t.mu.Lock()
+		t.restarts++
+		if err != nil {
+			t.lastErr = err.Error()
+		} else {
+			t.lastErr = "ssh exited"
+		}
+		t.state = StateRetrying
+		t.since = time.Now()
+		d := backoffFor(t.attempt, t.baseBackoff, t.maxBackoff)
+		t.attempt++
+		t.mu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			t.set(StateStopped)
+			return
+		case <-time.After(d):
+		}
+	}
+}
+
+// runOnce starts one ssh process. It reports the tunnel "up" once the process
+// has survived upThreshold (there is no clean "connected" signal from ssh -N),
+// resetting the backoff. It returns when the process exits or ctx is cancelled.
+func (t *tunnel) runOnce(ctx context.Context) error {
+	t.set(StateConnecting)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- t.runner.Run(runCtx, SSHArgs(t.spec.Alias, t.spec.ReversePort, t.spec.LocalSSHPort))
+	}()
+
+	select {
+	case err := <-errCh:
+		return err // died before it could be considered up
+	case <-ctx.Done():
+		cancel()
+		<-errCh
+		return ctx.Err()
+	case <-time.After(t.upThreshold):
+		t.mu.Lock()
+		t.state = StateUp
+		t.since = time.Now()
+		t.attempt = 0 // survived → reset backoff
+		t.lastErr = ""
+		t.mu.Unlock()
+	}
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		cancel()
+		<-errCh
+		return ctx.Err()
+	}
+}
+
+// Manager owns every tunnel; the app process is the single in-process owner.
+type Manager struct {
+	mu      sync.Mutex
+	tunnels map[string]*tunnel
+
+	newRunner   func(Spec) Runner
+	upThreshold time.Duration
+	baseBackoff time.Duration
+	maxBackoff  time.Duration
+}
+
+// NewManager builds a Manager that runs the given ssh binary.
+func NewManager(sshBin string) *Manager {
+	return &Manager{
+		tunnels:     map[string]*tunnel{},
+		newRunner:   func(Spec) Runner { return execRunner{bin: sshBin} },
+		upThreshold: 5 * time.Second,
+		baseBackoff: 1 * time.Second,
+		maxBackoff:  60 * time.Second,
+	}
+}
+
+// Start (re)starts the tunnel for spec.HostID. Restarting stops the previous one.
+func (m *Manager) Start(spec Spec) error {
+	if spec.Alias == "" {
+		return fmt.Errorf("bridge: empty ssh alias")
+	}
+	if spec.ReversePort <= 0 || spec.ReversePort > 65535 {
+		return fmt.Errorf("bridge: invalid reverse port %d", spec.ReversePort)
+	}
+	m.mu.Lock()
+	if old, ok := m.tunnels[spec.HostID]; ok {
+		delete(m.tunnels, spec.HostID)
+		m.mu.Unlock()
+		old.cancel()
+		<-old.done
+		m.mu.Lock()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t := &tunnel{
+		spec:        spec,
+		runner:      m.newRunner(spec),
+		upThreshold: m.upThreshold,
+		baseBackoff: m.baseBackoff,
+		maxBackoff:  m.maxBackoff,
+		state:       StateConnecting,
+		since:       time.Now(),
+		cancel:      cancel,
+		done:        make(chan struct{}),
+	}
+	m.tunnels[spec.HostID] = t
+	m.mu.Unlock()
+	go t.supervise(ctx)
+	return nil
+}
+
+// Stop stops the tunnel for hostID (no-op if not running).
+func (m *Manager) Stop(hostID string) {
+	m.mu.Lock()
+	t, ok := m.tunnels[hostID]
+	if ok {
+		delete(m.tunnels, hostID)
+	}
+	m.mu.Unlock()
+	if ok {
+		t.cancel()
+		<-t.done
+	}
+}
+
+// Running reports whether a tunnel is currently supervised for hostID.
+func (m *Manager) Running(hostID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.tunnels[hostID]
+	return ok
+}
+
+// Status returns the tunnel status for hostID (Stopped if none).
+func (m *Manager) Status(hostID string) Status {
+	m.mu.Lock()
+	t, ok := m.tunnels[hostID]
+	m.mu.Unlock()
+	if !ok {
+		return Status{HostID: hostID, State: StateStopped}
+	}
+	return t.status()
+}
+
+// StatusAll returns statuses for every running tunnel, keyed by host id.
+func (m *Manager) StatusAll() map[string]Status {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]Status, len(m.tunnels))
+	for id, t := range m.tunnels {
+		out[id] = t.status()
+	}
+	return out
+}
+
+// StopAll stops every tunnel and waits for them to exit.
+func (m *Manager) StopAll() {
+	m.mu.Lock()
+	ts := make([]*tunnel, 0, len(m.tunnels))
+	for id, t := range m.tunnels {
+		ts = append(ts, t)
+		delete(m.tunnels, id)
+	}
+	m.mu.Unlock()
+	for _, t := range ts {
+		t.cancel()
+		<-t.done
+	}
+}
