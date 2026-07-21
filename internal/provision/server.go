@@ -18,6 +18,9 @@ import (
 //go:embed server_bootstrap.sh
 var serverScriptBody string
 
+//go:embed agent_claude_md.md
+var agentClaudeMD string
+
 const (
 	pubBegin = "<<<RC_PUBKEY_BEGIN>>>"
 	pubEnd   = "<<<RC_PUBKEY_END>>>"
@@ -64,7 +67,7 @@ func (c *Client) ServerBootstrap(h store.Host, clientAlias string) (ServerResult
 		ReversePort: h.ReversePort,
 		LocalUser:   lu,
 		LocalPubKey: strings.TrimSpace(res.Pub),
-	})
+	}, agentClaudeMD)
 
 	ssh := sshbin.SSH()
 	cmd := exec.Command(ssh, "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", paths.Alias, "bash -s")
@@ -89,12 +92,24 @@ func (c *Client) ServerBootstrap(h store.Host, clientAlias string) (ServerResult
 	return ServerResult{ServerPubKey: pub, Authorized: added, Alias: clientAlias}, nil
 }
 
-func renderServerScript(in serverInput) string {
+// renderServerScript builds the full script piped to the server: `set -eu`, the
+// shell-escaped inputs, a quoted heredoc carrying the CLAUDE.md body (so nothing
+// in it is expanded here — `$LC_CLIENT_NAME` stays literal for the agent), then
+// the static body.
+func renderServerScript(in serverInput, claudeMD string) string {
 	var b strings.Builder
+	b.WriteString("set -eu\n")
 	b.WriteString("ALIAS=" + shquote(in.Alias) + "\n")
 	b.WriteString("REVERSE_PORT=" + shquote(strconv.Itoa(in.ReversePort)) + "\n")
 	b.WriteString("LOCAL_USER=" + shquote(in.LocalUser) + "\n")
 	b.WriteString("LOCAL_PUBKEY=" + shquote(in.LocalPubKey) + "\n")
+	b.WriteString("mkdir -p \"$HOME/.claude\"\n")
+	b.WriteString("cat > \"$HOME/.claude/.rc-claude-md.new\" <<'RC_CLAUDE_MD_EOF'\n")
+	b.WriteString(claudeMD)
+	if !strings.HasSuffix(claudeMD, "\n") {
+		b.WriteString("\n")
+	}
+	b.WriteString("RC_CLAUDE_MD_EOF\n")
 	b.WriteString(serverScriptBody)
 	return b.String()
 }

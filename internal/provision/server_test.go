@@ -1,6 +1,9 @@
 package provision
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -14,18 +17,36 @@ func TestRenderServerScript(t *testing.T) {
 		ReversePort: 2222,
 		LocalUser:   "dev",
 		LocalPubKey: "ssh-ed25519 AAAAC3xyz dev@host",
-	})
+	}, "# CLAUDE MD BODY uses $LC_CLIENT_NAME\n")
 	for _, want := range []string{
+		"set -eu",
 		"ALIAS='lisa-laptop'",
 		"REVERSE_PORT='2222'",
 		"LOCAL_USER='dev'",
 		"LOCAL_PUBKEY='ssh-ed25519 AAAAC3xyz dev@host'",
+		"<<'RC_CLAUDE_MD_EOF'",
+		"# CLAUDE MD BODY uses $LC_CLIENT_NAME",
+		"$FACTS_DIR/$ALIAS.json",
 		"<<<RC_PUBKEY_BEGIN>>>", // from the embedded body
 		"Host %s",               // block writer from the embedded body
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("rendered script missing %q", want)
 		}
+	}
+}
+
+// The embedded CLAUDE.md must be device-aware (uses $LC_CLIENT_NAME, no
+// hardcoded my-device) so one global file serves multiple devices.
+func TestEmbeddedClaudeMDIsDeviceAware(t *testing.T) {
+	if !strings.Contains(agentClaudeMD, `ssh "$LC_CLIENT_NAME"`) {
+		t.Error("CLAUDE.md should drive ssh via $LC_CLIENT_NAME")
+	}
+	if strings.Contains(agentClaudeMD, "ssh my-device") {
+		t.Error("CLAUDE.md still hardcodes my-device")
+	}
+	if !strings.Contains(agentClaudeMD, "facts/$LC_CLIENT_NAME.json") {
+		t.Error("CLAUDE.md should point at per-device facts")
 	}
 }
 
@@ -44,6 +65,78 @@ func TestExtractMarked(t *testing.T) {
 	}
 	if extractMarked("no markers here", pubBegin, pubEnd) != "" {
 		t.Error("expected empty for missing markers")
+	}
+}
+
+// TestServerScriptExecutes runs the fully rendered bootstrap script through a
+// real bash against a temp HOME and checks every artifact it should produce.
+// This exercises the embedded server-side bash end-to-end without a server.
+func TestServerScriptExecutes(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("ssh-keygen"); err != nil {
+		t.Skip("ssh-keygen not available")
+	}
+	home := t.TempDir()
+	pub := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITESTBLOBxxxxxxxxxxxxxxxxxxxxxxxxx laptop@lisa"
+	script := renderServerScript(serverInput{
+		Alias: "lisa-laptop", ReversePort: 2222, LocalUser: "dev", LocalPubKey: pub,
+	}, agentClaudeMD)
+
+	cmd := exec.Command("bash")
+	cmd.Stdin = strings.NewReader(script)
+	cmd.Env = append(os.Environ(),
+		"HOME="+home,
+		"XDG_CONFIG_HOME="+filepath.Join(home, ".config"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("script failed: %v\n%s", err, out)
+	}
+
+	if got := extractMarked(string(out), pubBegin, pubEnd); got == "" {
+		t.Errorf("script emitted no connect-back pubkey:\n%s", out)
+	}
+	checks := []struct{ path, want string }{
+		{".ssh/config", "Host lisa-laptop"},
+		{".ssh/config", "Port 2222"},
+		{".ssh/config", "UserKnownHostsFile ~/.ssh/known_hosts.lisa-laptop"},
+		{".ssh/authorized_keys", "remote-claude-tunnel"},
+		{".claude/CLAUDE.md", `ssh "$LC_CLIENT_NAME"`},
+		{".claude/CLAUDE.md", "<!-- >>> remote-claude (managed) >>> -->"},
+		{".config/remote-claude/facts/lisa-laptop.json", `"machine"`},
+	}
+	for _, c := range checks {
+		b, err := os.ReadFile(filepath.Join(home, c.path))
+		if err != nil {
+			t.Errorf("missing artifact %s: %v", c.path, err)
+			continue
+		}
+		if !strings.Contains(string(b), c.want) {
+			t.Errorf("%s missing %q", c.path, c.want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".ssh/id_ed25519")); err != nil {
+		t.Errorf("connect-back key not generated: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude/.rc-claude-md.new")); !os.IsNotExist(err) {
+		t.Errorf("temp CLAUDE.md file not cleaned up")
+	}
+
+	// Idempotent: a second run must not duplicate the authorized_keys entry.
+	cmd2 := exec.Command("bash")
+	cmd2.Stdin = strings.NewReader(script)
+	cmd2.Env = cmd.Env
+	if out2, err := cmd2.CombinedOutput(); err != nil {
+		t.Fatalf("second run failed: %v\n%s", err, out2)
+	}
+	ak, _ := os.ReadFile(filepath.Join(home, ".ssh/authorized_keys"))
+	if n := strings.Count(string(ak), "remote-claude-tunnel"); n != 1 {
+		t.Errorf("authorized_keys not idempotent: %d entries", n)
+	}
+	cfg, _ := os.ReadFile(filepath.Join(home, ".ssh/config"))
+	if n := strings.Count(string(cfg), "Host lisa-laptop"); n != 1 {
+		t.Errorf("ssh config Host block not idempotent: %d blocks", n)
 	}
 }
 

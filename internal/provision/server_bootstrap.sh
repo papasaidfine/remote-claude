@@ -1,6 +1,7 @@
-set -eu
-# Driven non-interactively by the app over `ssh remote-claude 'bash -s'`.
-# The app prepends ALIAS / REVERSE_PORT / LOCAL_USER / LOCAL_PUBKEY assignments.
+# Body of the server-side bootstrap, run over `ssh remote-claude 'bash -s'`.
+# The app PREPENDS to this: `set -eu`, the ALIAS / REVERSE_PORT / LOCAL_USER /
+# LOCAL_PUBKEY assignments, and a heredoc writing the CLAUDE.md body to
+# $HOME/.claude/.rc-claude-md.new. This file is never run on its own.
 : "${ALIAS:?}"; : "${REVERSE_PORT:?}"; : "${LOCAL_USER:?}"; : "${LOCAL_PUBKEY:?}"
 
 SSH_DIR="$HOME/.ssh"
@@ -43,7 +44,40 @@ awk -v b="$BEGIN" -v e="$END" '$0==b{s=1;next} $0==e{s=0;next} !s{print}' "$CFG"
 } > "$CFG"
 rm -f "$tmp"
 
-# 4. Hand the connect-back public key back to the app to authorize locally.
+# 4. Agent instructions in ~/.claude/CLAUDE.md (single global file, device-aware
+#    via $LC_CLIENT_NAME). Managed marker block; user content around it is kept.
+CLAUDE_MD="$HOME/.claude/CLAUDE.md"
+NEW="$HOME/.claude/.rc-claude-md.new"
+mkdir -p "$HOME/.claude" "$HOME/tmp"
+if [ -f "$NEW" ]; then
+  touch "$CLAUDE_MD"
+  B="<!-- >>> remote-claude (managed) >>> -->"
+  E="<!-- <<< remote-claude <<< -->"
+  tmp2=$(mktemp)
+  awk -v b="$B" -v e="$E" '$0==b{s=1;next} $0==e{s=0;next} !s{print}' "$CLAUDE_MD" > "$tmp2"
+  {
+    cat "$tmp2"
+    printf '%s\n' "$B"
+    cat "$NEW"
+    printf '%s\n' "$E"
+  } > "$CLAUDE_MD"
+  rm -f "$tmp2" "$NEW"
+fi
+
+# 5. Per-device facts, keyed by the client alias (laptop and desktop stay
+#    separate). Seed only when missing — the agent maintains it after that.
+FACTS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/remote-claude/facts"
+FACTS="$FACTS_DIR/$ALIAS.json"
+mkdir -p "$FACTS_DIR"
+if [ ! -f "$FACTS" ]; then
+  printf '%s\n' \
+    '{' \
+    '  "machine": { "os": "unknown", "ssh_shell": "unknown" },' \
+    '  "projects": {}' \
+    '}' > "$FACTS"
+fi
+
+# 6. Hand the connect-back public key back to the app to authorize locally.
 printf '<<<RC_PUBKEY_BEGIN>>>\n'
 cat "$KEY.pub"
 printf '<<<RC_PUBKEY_END>>>\n'
