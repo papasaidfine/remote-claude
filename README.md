@@ -1,40 +1,40 @@
-# reverse-ssh-bootstrap
+# remote-claude
 
 English | [中文](README.zh-CN.md)
 
-Use Claude on a remote server to work on the code on **your own
-machine** (Windows / macOS / Linux). Your normal SSH connection to the server
-carries a reverse tunnel; the agent uses it to `ssh my-device` back into your
-machine and does all project work there.
+Run Claude on a remote server and have it work on the code on **your own
+machine** (Windows / macOS / Linux). A small app on your machine holds a reverse
+SSH tunnel open; the agent uses it to `ssh` back into your machine and does all
+project work there. Open as many normal SSH / VSCode Remote-SSH sessions to the
+server as you like — the tunnel is held separately, so nothing blocks.
 
 ```
-you    ── VSCode Remote-SSH / ssh remote-claude ──▶  server
-agent  ── ssh my-device ──▶  your machine    (reverse ssh)
+you    ── VSCode Remote-SSH / ssh remote-claude ──▶  server   (any number of sessions)
+agent  ── ssh "$LC_CLIENT_NAME" ──▶  your machine            (reverse tunnel, held by the app)
 ```
 
-## 1. Set up your local machine
+One server can serve several of your devices — each device gets a name, and the
+agent reaches whichever one you're connected from.
 
-**macOS / Linux:**
+## Install
+
+**macOS / Linux**
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.sh)
 ```
 
-**Windows:**
+**Windows**
 
 ```powershell
 irm https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.ps1 | iex
 ```
 
-This downloads the `remote-claude` binary and opens the setup menu (re-run to
-update). Only the **Incoming SSH** item needs an elevated session —
-Administrator PowerShell on Windows, `sudo` on macOS/Linux.
-
-**GitHub blocked or slow?** Route both the script and the binary through your
-own proxy with `RC_PROXY`:
+GitHub blocked or slow? Route the download through your own proxy with
+`RC_PROXY`:
 
 ```bash
-export RC_PROXY=http://127.0.0.1:7890   # your local proxy
+export RC_PROXY=http://127.0.0.1:7890
 bash <(curl -fsSL --proxy "$RC_PROXY" https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.sh)
 ```
 
@@ -43,42 +43,24 @@ $env:RC_PROXY = 'http://127.0.0.1:7890'
 (irm -Proxy $env:RC_PROXY https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.ps1) | iex
 ```
 
-Menu — three phases, work top to bottom (each item shows whether it's
-already configured):
+## Use
 
-**① Local ──▶ Claude** — reach the server running Claude Code
+Run `remote-claude`. It opens the app in your browser and keeps running in the
+background to hold the tunnel up. In the app:
 
-1. SSH config shortcut (`Host remote-claude`)
-2. Local SSH key — create & show the public key
-3. Test connection — checks the outbound hop; once the reverse tunnel is
-   configured it validates the whole loop too
+1. **Name this machine** (e.g. `lisa-laptop`) — the agent reaches you back by
+   this name.
+2. **Add your host** — the server's address, SSH user, and reverse port. Turn on
+   xray if your network needs it, and add your `vless://` nodes.
+3. **Install / ensure the local ssh server** — so the agent can reach back in
+   (may ask for `sudo` / Administrator).
+4. **Start tunnel** — brings the reverse tunnel up and keeps it reconnected.
+5. **Set up server** — configures the server side over the connection. The first
+   time, enter your password *on the server* so it can authorize your key; after
+   that it's automatic.
 
-**② Claude ──▶ Local** — let the agent ssh back into this machine
+Then connect to the server as usual (VSCode Remote-SSH or `ssh remote-claude`)
+and start Claude. On the server the agent works on your machine through
+`ssh "$LC_CLIENT_NAME"`.
 
-4. Incoming SSH (sshd)
-5. Authorize the server's connect-back key
-6. Reverse tunnel port
-
-**③ xray ═[ ssh ]═▶** — optional, for bad networks; asks for a download
-proxy first (Enter = direct)
-
-7. xray proxy client
-8. Route the tunnel through xray
-
-Linux has no xray, so its menu is phases ①–② (items 1–6).
-
-## 2. Set up the server
-
-On the remote server (no sudo needed):
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/server/setup-server.sh)
-```
-
-Menu:
-
-1. Connect-back key (create + show its public key)
-2. Authorize your local machine's key (the tunnel login)
-3. `my-device` ssh alias
-4. Agent instructions (`~/.claude/CLAUDE.md`)
-5. Agent facts file (`facts.json`)
+On a headless box, `remote-claude serve` runs the app without opening a browser.

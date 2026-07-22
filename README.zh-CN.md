@@ -1,38 +1,38 @@
-# reverse-ssh-bootstrap
+# remote-claude
 
 [English](README.md) | 中文
 
 让远程服务器上的 Claude 在**你自己电脑**（Windows / macOS / Linux）的代码上
-干活：你平时连服务器的那条 SSH 连接会顺带建立一条反向隧道，agent 通过它
-`ssh my-device` 回到你的电脑，所有项目操作都在本地执行。
+干活。你电脑上的一个小应用常驻着一条反向 SSH 隧道，agent 通过它 `ssh` 回到你
+的电脑，所有项目操作都在本地执行。你连服务器的普通 SSH / VSCode Remote-SSH
+会话想开几条开几条——隧道是单独维护的，互不阻塞。
 
 ```
-你      ── VSCode Remote-SSH / ssh remote-claude ──▶  服务器
-agent   ── ssh my-device ──▶  你的电脑    （反向 ssh）
+你      ── VSCode Remote-SSH / ssh remote-claude ──▶  服务器   （会话数量不限）
+agent   ── ssh "$LC_CLIENT_NAME" ──▶  你的电脑              （反向隧道，由应用维护）
 ```
 
-## 1. 配置本地电脑
+一台服务器可以同时服务你的多台设备——每台设备取一个名字，agent 会连到你当前
+所在的那一台。
 
-**macOS / Linux：**
+## 安装
+
+**macOS / Linux**
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.sh)
 ```
 
-**Windows：**
+**Windows**
 
 ```powershell
 irm https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.ps1 | iex
 ```
 
-会下载 `remote-claude` 二进制并打开配置菜单（重新运行即可更新）。只有
-**接收 SSH 连接**那一项需要提权——Windows 用管理员 PowerShell，macOS/Linux 用
-`sudo`。
-
-**GitHub 连不上或很慢？** 用 `RC_PROXY` 让脚本和二进制都走你自己的代理：
+GitHub 连不上或很慢？用 `RC_PROXY` 让下载走你自己的代理：
 
 ```bash
-export RC_PROXY=http://127.0.0.1:7890   # 你的本地代理
+export RC_PROXY=http://127.0.0.1:7890
 bash <(curl -fsSL --proxy "$RC_PROXY" https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.sh)
 ```
 
@@ -41,39 +41,20 @@ $env:RC_PROXY = 'http://127.0.0.1:7890'
 (irm -Proxy $env:RC_PROXY https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.ps1) | iex
 ```
 
-菜单分三个阶段（每项显示是否已配置，从上到下做即可）：
+## 使用
 
-**① 本机 ──▶ Claude**——先连上跑 Claude Code 的服务器
+运行 `remote-claude`，它会在浏览器里打开应用，并常驻后台维持隧道。在应用里：
 
-1. SSH config 快捷方式（`Host remote-claude`）
-2. 本地 SSH key——生成并显示公钥
-3. 测试连接——检查出向连接；反向隧道配置好后也会一并验证整条回路
+1. **给这台机器起名**（如 `lisa-laptop`）——agent 就靠这个名字连回你。
+2. **添加服务器**——地址、SSH 用户、反向端口。网络差就打开 xray 并填入你的
+   `vless://` 节点。
+3. **安装 / 确保本地 ssh 服务器**——让 agent 能连回来（可能需要 `sudo` /
+   管理员）。
+4. **启动隧道**——建立反向隧道并自动重连。
+5. **配置服务器**——经这条连接把远端配好。**首次**需要输入你在**服务器上**的
+   密码以授权你的 key，之后全自动。
 
-**② Claude ──▶ 本机**——让 agent 能 ssh 回你的电脑
+然后照常连服务器（VSCode Remote-SSH 或 `ssh remote-claude`）并启动 Claude。在
+服务器上，agent 通过 `ssh "$LC_CLIENT_NAME"` 在你的电脑上干活。
 
-4. 接收 SSH 连接（sshd）
-5. 授权服务器的反连公钥
-6. 反向隧道端口
-
-**③ xray ═[ ssh ]═▶**——可选，网络差时用；会先询问下载代理（回车 = 直连）
-
-7. xray 代理客户端
-8. 隧道走 xray
-
-Linux 没有 xray，菜单为阶段 ①–②（第 1–6 项）。
-
-## 2. 配置服务器
-
-在远程服务器上（不需要 sudo）：
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/server/setup-server.sh)
-```
-
-菜单：
-
-1. 反连 key（生成 + 显示公钥）
-2. 授权你本地电脑的公钥（隧道登录用）
-3. `my-device` ssh 别名
-4. Agent 指令（`~/.claude/CLAUDE.md`）
-5. Agent facts 文件（`facts.json`）
+无头机器上用 `remote-claude serve` 启动应用而不打开浏览器。

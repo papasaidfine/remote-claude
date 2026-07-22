@@ -230,8 +230,9 @@ func (m Menu) runKey() error {
 		ui.Warn("This key appears to be passphrase-protected; the tunnel will need an ssh-agent to work")
 	}
 	fmt.Println()
-	ui.Log("Local public key — paste it into server/setup-server.sh (item 2) on the")
-	ui.Log("server; that authorizes the tunnel login (ssh %s):", paths.Alias)
+	ui.Log("Local public key — add it to ~/.ssh/authorized_keys on the server to")
+	ui.Log("authorize the tunnel login (ssh %s). The app's 'Set up server' does", paths.Alias)
+	ui.Log("this for you:")
 	fmt.Println()
 	fmt.Print(res.Pub)
 	if len(res.Pub) == 0 || res.Pub[len(res.Pub)-1] != '\n' {
@@ -262,8 +263,8 @@ func (m Menu) runAuthorize() error {
 		return err
 	}
 	fmt.Println("Server-side public key: the .pub of the key that Claude / Codex on the")
-	fmt.Println("server will use to SSH back into this machine (setup-server.sh item 1")
-	fmt.Println("prints it, or: cat ~/.ssh/id_ed25519.pub on the server).")
+	fmt.Println("server will use to SSH back into this machine (run on the server:")
+	fmt.Println("cat ~/.ssh/id_ed25519.pub).")
 	pub := os.Getenv("SERVER_PUBKEY")
 	if pub == "" {
 		pub = ui.Ask("Server-side public key", "")

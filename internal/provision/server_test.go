@@ -140,10 +140,33 @@ func TestServerScriptExecutes(t *testing.T) {
 	}
 }
 
+func TestBootstrapSSHArgs(t *testing.T) {
+	noPw := strings.Join(bootstrapSSHArgs(""), " ")
+	if !strings.Contains(noPw, "BatchMode=yes") {
+		t.Errorf("no-password path should be BatchMode: %q", noPw)
+	}
+	withPw := strings.Join(bootstrapSSHArgs("secret"), " ")
+	if strings.Contains(withPw, "BatchMode") {
+		t.Errorf("password path must not set BatchMode: %q", withPw)
+	}
+	if !strings.HasSuffix(withPw, "bash -s") {
+		t.Errorf("script must be the remote command: %q", withPw)
+	}
+}
+
+func TestAskpassEnv(t *testing.T) {
+	env := strings.Join(askpassEnv("hunter2"), "\n")
+	for _, want := range []string{"SSH_ASKPASS=", "SSH_ASKPASS_REQUIRE=force", "RC_ASKPASS_MODE=1", "RC_ASKPASS_SECRET=hunter2"} {
+		if !strings.Contains(env, want) {
+			t.Errorf("askpass env missing %q", want)
+		}
+	}
+}
+
 func TestServerBootstrapRequiresAlias(t *testing.T) {
 	c := New(testPaths(t), platform.New())
 	h := store.Host{Name: "wb", HostName: "h", User: "u", Port: 22, ReversePort: 2222}
-	_, err := c.ServerBootstrap(h, "")
+	_, err := c.ServerBootstrap(h, "", "")
 	if err == nil {
 		t.Fatal("expected error when client alias is empty")
 	}

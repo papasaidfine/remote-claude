@@ -42,7 +42,8 @@ func Run(p paths.Paths) error {
 		ui.Cross("outbound: could not log in to the server")
 		printLastLines(out, 3)
 		ui.Warn("Most common cause: the server has not authorized your local key yet —")
-		ui.Warn("item 2 prints it; paste it into server/setup-server.sh (item 2) there.")
+		ui.Warn("add it to ~/.ssh/authorized_keys on the server, or use the app's")
+		ui.Warn("'Set up server' which does this over the connection.")
 		ok = false
 	}
 

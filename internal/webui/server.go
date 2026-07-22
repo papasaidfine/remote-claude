@@ -30,7 +30,7 @@ var staticFS embed.FS
 // local sshd. Injected so the server stays testable; may be nil.
 type Provisioner interface {
 	EnsureClient(h store.Host, clientAlias string) error
-	ServerBootstrap(h store.Host, clientAlias string) (provision.ServerResult, error)
+	ServerBootstrap(h store.Host, clientAlias, password string) (provision.ServerResult, error)
 	EnsureLocalSSHD(disablePassword bool) error
 }
 
@@ -258,6 +258,11 @@ func (s *Server) handleSetupServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
+	var body struct {
+		Password string `json:"password"`
+	}
+	// Body is optional (no password → key/agent auth).
+	json.NewDecoder(r.Body).Decode(&body)
 	s.mu.Lock()
 	h := s.cfg.Find(id)
 	var host store.Host
@@ -270,7 +275,7 @@ func (s *Server) handleSetupServer(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusNotFound, "no such host")
 		return
 	}
-	res, err := s.prov.ServerBootstrap(host, alias)
+	res, err := s.prov.ServerBootstrap(host, alias, body.Password)
 	if err != nil {
 		httpErr(w, http.StatusBadGateway, err.Error())
 		return

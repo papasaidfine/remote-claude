@@ -52,10 +52,17 @@ function renderHosts(state) {
 
     $(".start", node).onclick = () => act(() => api("POST", `/api/hosts/${h.id}/start`));
     $(".stop", node).onclick = () => act(() => api("POST", `/api/hosts/${h.id}/stop`));
-    $(".setupserver", node).onclick = () => act(async () => {
-      const res = await api("POST", `/api/hosts/${h.id}/setup-server`);
-      alert(`Server configured as “${res.alias}”. Its connect-back key was ${res.authorized ? "authorized" : "already present"} on this machine.`);
-    });
+    $(".setupserver", node).onclick = () => {
+      const pw = prompt(
+        "Configure the server over the connection.\n\n" +
+        "First time only: enter this machine's password ON THE SERVER so it can\n" +
+        "authorize your key. Leave empty if key/agent login already works.");
+      if (pw === null) return; // cancelled
+      act(async () => {
+        const res = await api("POST", `/api/hosts/${h.id}/setup-server`, { password: pw });
+        alert(`Server configured as “${res.alias}”. Its connect-back key was ${res.authorized ? "authorized" : "already present"} on this machine.`);
+      });
+    };
     $(".edit", node).onclick = () => openHostDialog(h);
     $(".del", node).onclick = () => {
       if (confirm(`Delete host “${h.name}”? This stops its tunnel.`)) {

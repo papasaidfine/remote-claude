@@ -56,7 +56,7 @@ func (f *fakeProv) EnsureClient(h store.Host, alias string) error {
 	return f.err
 }
 
-func (f *fakeProv) ServerBootstrap(h store.Host, alias string) (provision.ServerResult, error) {
+func (f *fakeProv) ServerBootstrap(h store.Host, alias, password string) (provision.ServerResult, error) {
 	if f.err != nil {
 		return provision.ServerResult{}, f.err
 	}
