@@ -8,10 +8,11 @@ permissions:
   contents: write
 
 jobs:
-  # CGO-free CLI, cross-compiled for every target.
+  # CGO-free CLI, cross-compiled for every target → artifacts.
   cli:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
           - { goos: linux,   goarch: amd64 }
@@ -34,12 +35,12 @@ jobs:
           out="remote-claude_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}"
           go build -trimpath -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o "$out" ./cmd/remote-claude
           sha256sum "$out" > "$out.sha256"
-      - uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v4
         with:
-          files: |
-            remote-claude_*
+          name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: remote-claude_*
 
-  # Native Fyne GUI — needs CGO, so build on each OS's own runner.
+  # Native Fyne GUI — needs CGO, so build on each OS's own runner → artifacts.
   gui:
     strategy:
       fail-fast: false
@@ -60,12 +61,26 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgl1-mesa-dev xorg-dev libxxf86vm-dev libwayland-dev libxkbcommon-dev
       - name: Build GUI
+        shell: bash
         env:
           CGO_ENABLED: '1'
         run: |
           out="remote-claude-gui_${{ matrix.suffix }}${{ matrix.ext }}"
           go build -tags gui -trimpath -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o "$out" ./cmd/remote-claude-gui
+          sha256sum "$out" > "$out.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gui-${{ matrix.suffix }}
+          path: remote-claude-gui_*
+
+  # One publisher → no concurrent-create race on the release.
+  publish:
+    needs: [cli, gui]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
       - uses: softprops/action-gh-release@v2
         with:
-          files: |
-            remote-claude-gui_*
+          files: dist/**/*
