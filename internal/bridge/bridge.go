@@ -29,19 +29,18 @@ const (
 
 // Status is a snapshot of one tunnel, safe to serialize to the UI.
 type Status struct {
-	HostID    string    `json:"host_id"`
+	Alias     string    `json:"alias"`
 	State     State     `json:"state"`
 	LastError string    `json:"last_error,omitempty"`
 	Restarts  int       `json:"restarts"`
 	Since     time.Time `json:"since"`
 }
 
-// Spec is everything the supervisor needs to build and identify a tunnel.
+// Spec identifies a tunnel: the ssh Host alias to connect. The reverse forward
+// comes from that host's ~/.ssh/config (its RemoteForward), so the supervisor
+// just runs `ssh -N <alias>`.
 type Spec struct {
-	HostID       string // store host id (map key)
-	Alias        string // ssh Host alias of the managed block (e.g. "remote-claude")
-	ReversePort  int    // server-side loopback port to bind
-	LocalSSHPort int    // local sshd port the reverse forward targets (default 22)
+	Alias string
 }
 
 // Runner starts the tunnel process and blocks until it exits or ctx is done.
@@ -49,20 +48,17 @@ type Runner interface {
 	Run(ctx context.Context, args []string) error
 }
 
-// SSHArgs builds the ssh argument list (excluding the ssh binary itself) for the
-// reverse tunnel. ExitOnForwardFailure=yes makes ssh fail loudly (and the loop
-// retry/report) when the reverse port is already taken, instead of silently
-// running without a forward.
-func SSHArgs(alias string, reversePort, localPort int) []string {
-	if localPort == 0 {
-		localPort = 22
-	}
+// SSHArgs builds the ssh argument list (excluding the ssh binary itself). It
+// runs `ssh -N <alias>`, relying on the host's config for the reverse forward
+// and proxy. ExitOnForwardFailure=yes (on the bridge's own connection only)
+// makes ssh fail loudly — and the loop retry/report — when the reverse port is
+// already taken, instead of silently running without a forward.
+func SSHArgs(alias string) []string {
 	return []string{
 		"-N",
 		"-o", "ExitOnForwardFailure=yes",
 		"-o", "ServerAliveInterval=30",
 		"-o", "ServerAliveCountMax=3",
-		"-R", fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", reversePort, localPort),
 		alias,
 	}
 }
@@ -146,7 +142,7 @@ func (t *tunnel) set(state State) {
 func (t *tunnel) status() Status {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return Status{HostID: t.spec.HostID, State: t.state, LastError: t.lastErr, Restarts: t.restarts, Since: t.since}
+	return Status{Alias: t.spec.Alias, State: t.state, LastError: t.lastErr, Restarts: t.restarts, Since: t.since}
 }
 
 // supervise runs the connect/retry loop until ctx is cancelled.
@@ -194,7 +190,7 @@ func (t *tunnel) runOnce(ctx context.Context) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- t.runner.Run(runCtx, SSHArgs(t.spec.Alias, t.spec.ReversePort, t.spec.LocalSSHPort))
+		errCh <- t.runner.Run(runCtx, SSHArgs(t.spec.Alias))
 	}()
 
 	select {
@@ -245,17 +241,14 @@ func NewManager(sshBin string) *Manager {
 	}
 }
 
-// Start (re)starts the tunnel for spec.HostID. Restarting stops the previous one.
+// Start (re)starts the tunnel for spec.Alias. Restarting stops the previous one.
 func (m *Manager) Start(spec Spec) error {
 	if spec.Alias == "" {
 		return fmt.Errorf("bridge: empty ssh alias")
 	}
-	if spec.ReversePort <= 0 || spec.ReversePort > 65535 {
-		return fmt.Errorf("bridge: invalid reverse port %d", spec.ReversePort)
-	}
 	m.mu.Lock()
-	if old, ok := m.tunnels[spec.HostID]; ok {
-		delete(m.tunnels, spec.HostID)
+	if old, ok := m.tunnels[spec.Alias]; ok {
+		delete(m.tunnels, spec.Alias)
 		m.mu.Unlock()
 		old.cancel()
 		<-old.done
@@ -273,18 +266,18 @@ func (m *Manager) Start(spec Spec) error {
 		cancel:      cancel,
 		done:        make(chan struct{}),
 	}
-	m.tunnels[spec.HostID] = t
+	m.tunnels[spec.Alias] = t
 	m.mu.Unlock()
 	go t.supervise(ctx)
 	return nil
 }
 
-// Stop stops the tunnel for hostID (no-op if not running).
-func (m *Manager) Stop(hostID string) {
+// Stop stops the tunnel for alias (no-op if not running).
+func (m *Manager) Stop(alias string) {
 	m.mu.Lock()
-	t, ok := m.tunnels[hostID]
+	t, ok := m.tunnels[alias]
 	if ok {
-		delete(m.tunnels, hostID)
+		delete(m.tunnels, alias)
 	}
 	m.mu.Unlock()
 	if ok {
@@ -293,26 +286,26 @@ func (m *Manager) Stop(hostID string) {
 	}
 }
 
-// Running reports whether a tunnel is currently supervised for hostID.
-func (m *Manager) Running(hostID string) bool {
+// Running reports whether a tunnel is currently supervised for alias.
+func (m *Manager) Running(alias string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_, ok := m.tunnels[hostID]
+	_, ok := m.tunnels[alias]
 	return ok
 }
 
-// Status returns the tunnel status for hostID (Stopped if none).
-func (m *Manager) Status(hostID string) Status {
+// Status returns the tunnel status for alias (Stopped if none).
+func (m *Manager) Status(alias string) Status {
 	m.mu.Lock()
-	t, ok := m.tunnels[hostID]
+	t, ok := m.tunnels[alias]
 	m.mu.Unlock()
 	if !ok {
-		return Status{HostID: hostID, State: StateStopped}
+		return Status{Alias: alias, State: StateStopped}
 	}
 	return t.status()
 }
 
-// StatusAll returns statuses for every running tunnel, keyed by host id.
+// StatusAll returns statuses for every running tunnel, keyed by alias.
 func (m *Manager) StatusAll() map[string]Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()

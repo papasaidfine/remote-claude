@@ -46,7 +46,7 @@ func main() {
 	mgr := bridge.NewManager(sshbin.SSH())
 	prov := provision.New(p, plat)
 	appCore := core.New(cfg, store.Path(p), p, mgr, prov, plat)
-	appCore.AutoStart(func(store.Host, error) {})
+	appCore.AutoStart(func(string, error) {})
 
 	a := app.New()
 	a.SetIcon(theme.ComputerIcon())
@@ -54,7 +54,7 @@ func main() {
 	a.Lifecycle().SetOnStopped(func() { mgr.StopAll() })
 
 	w := a.NewWindow("remote-claude " + version)
-	w.Resize(fyne.NewSize(680, 600))
+	w.Resize(fyne.NewSize(720, 620))
 
 	g := &gui{core: appCore, win: w}
 	w.SetContent(g.build())
@@ -129,79 +129,136 @@ func (g *gui) refresh() {
 	if g.alias.Text == "" && st.ClientAlias != "" {
 		g.alias.SetText(st.ClientAlias)
 	}
-	g.status.SetText(fmt.Sprintf("%s  ·  local ssh server: %s  ·  %d xray node(s)",
+	g.status.SetText(fmt.Sprintf("%s  ·  local ssh server: %s  ·  %d xray node(s)  ·  hosts from ~/.ssh/config",
 		st.Platform, yn(st.LocalSSHOK), st.NodeCount))
 
 	g.hostsBox.Objects = nil
 	if len(st.Hosts) == 0 {
-		g.hostsBox.Add(widget.NewLabel("No hosts yet — click “+ Add host”."))
+		g.hostsBox.Add(widget.NewLabel("No hosts in ~/.ssh/config yet — click “+ Add host”."))
 	}
 	for _, h := range st.Hosts {
-		g.hostsBox.Add(g.hostCard(h, st.Statuses[h.ID]))
+		g.hostsBox.Add(g.hostCard(h))
 	}
 	g.hostsBox.Refresh()
 }
 
-func (g *gui) hostCard(h store.Host, stx bridge.Status) fyne.CanvasObject {
-	title := widget.NewLabelWithStyle(
-		fmt.Sprintf("%s   (%s@%s:%d)", h.Name, h.User, h.HostName, h.Port),
+func (g *gui) hostCard(h core.HostView) fyne.CanvasObject {
+	alias := h.Alias
+	title := widget.NewLabelWithStyle(alias+"   ("+target(h)+")",
 		fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	meta := widget.NewLabel(fmt.Sprintf("reverse :%d  ·  %s  ·  tunnel: %s",
-		h.ReversePort, xrayLabel(h.UseXray), stateLabel(stx)))
+	rev := "no reverse tunnel"
+	if h.HasReverse {
+		rev = "reverse :" + h.ReversePort
+	}
+	meta := widget.NewLabel(fmt.Sprintf("%s  ·  %s  ·  tunnel: %s", rev, xrayLabel(h.HasProxy), stateLabel(h.Status)))
 
-	id := h.ID
+	// inline config toggles (checkboxes set OnChanged AFTER SetChecked so the
+	// initial state doesn't fire an API call)
+	revCheck := widget.NewCheck("reverse tunnel", nil)
+	revCheck.SetChecked(h.HasReverse)
+	revCheck.OnChanged = func(on bool) {
+		port := 0
+		if on {
+			port = atoi(h.ReversePort, 2222)
+		}
+		g.do(func() error { return g.core.SetReverseTunnel(alias, port) })
+	}
+	xrayCheck := widget.NewCheck("xray", nil)
+	xrayCheck.SetChecked(h.HasProxy)
+	xrayCheck.OnChanged = func(on bool) { g.do(func() error { return g.core.SetProxy(alias, on) }) }
+	autoCheck := widget.NewCheck("auto-start", nil)
+	autoCheck.SetChecked(h.AutoStart)
+	autoCheck.OnChanged = func(on bool) { g.do(func() error { return g.core.SetAutoStart(alias, on) }) }
+	controls := container.NewHBox(revCheck, xrayCheck, autoCheck)
+
 	start := widget.NewButton("Start", func() {
-		g.do(func() error { _, err := g.core.StartTunnel(id); return err })
+		g.do(func() error { _, err := g.core.StartTunnel(alias); return err })
 	})
-	stop := widget.NewButton("Stop", func() { g.core.StopTunnel(id); g.refresh() })
-	setup := widget.NewButton("Set up server", func() { g.showSetupServer(id) })
+	stop := widget.NewButton("Stop", func() { g.core.StopTunnel(alias); g.refresh() })
+	setup := widget.NewButton("Set up server", func() { g.showSetupServer(alias) })
+	edit := widget.NewButton("Edit", func() { g.showEdit(h) })
 	del := widget.NewButton("Delete", func() {
-		dialog.ShowConfirm("Delete host", "Delete “"+h.Name+"”? This stops its tunnel.",
+		dialog.ShowConfirm("Delete host", "Delete “"+alias+"” from ~/.ssh/config? This stops its tunnel.",
 			func(ok bool) {
 				if ok {
-					g.do(func() error { return g.core.DeleteHost(id) })
+					g.do(func() error { return g.core.RemoveHost(alias) })
 				}
 			}, g.win)
 	})
+	actions := container.NewHBox(start, stop, setup, edit, del)
 
-	return container.NewVBox(title, meta,
-		container.NewHBox(start, stop, setup, del), widget.NewSeparator())
+	return container.NewVBox(title, meta, controls, actions, widget.NewSeparator())
+}
+
+func target(h core.HostView) string {
+	s := h.HostName
+	if h.User != "" {
+		s = h.User + "@" + s
+	}
+	if h.Port != "" {
+		s += ":" + h.Port
+	}
+	return s
 }
 
 func (g *gui) showAddHost() {
-	name := widget.NewEntry()
+	alias := widget.NewEntry()
 	host := widget.NewEntry()
 	user := widget.NewEntry()
 	port := widget.NewEntry()
 	port.SetText("22")
-	rport := widget.NewEntry()
-	rport.SetText("2222")
-	xray := widget.NewCheck("", nil)
-
 	items := []*widget.FormItem{
-		widget.NewFormItem("Name", name),
+		widget.NewFormItem("Alias (ssh name)", alias),
 		widget.NewFormItem("Host / IP", host),
 		widget.NewFormItem("SSH user", user),
 		widget.NewFormItem("SSH port", port),
-		widget.NewFormItem("Reverse port", rport),
-		widget.NewFormItem("Route through xray", xray),
 	}
 	dialog.ShowForm("Add host", "Add", "Cancel", items, func(ok bool) {
 		if !ok {
 			return
 		}
 		g.do(func() error {
-			_, err := g.core.AddHost(store.Host{
-				Name: name.Text, HostName: host.Text, User: user.Text,
-				Port: atoi(port.Text, 22), ReversePort: atoi(rport.Text, 2222),
-				UseXray: xray.Checked,
-			})
-			return err
+			return g.core.AddHost(alias.Text, host.Text, user.Text, atoi(port.Text, 22))
 		})
 	}, g.win)
 }
 
-func (g *gui) showSetupServer(id string) {
+func (g *gui) showEdit(h core.HostView) {
+	host := widget.NewEntry()
+	host.SetText(h.HostName)
+	user := widget.NewEntry()
+	user.SetText(h.User)
+	port := widget.NewEntry()
+	port.SetText(h.Port)
+	rport := widget.NewEntry()
+	rport.SetText(h.ReversePort)
+	items := []*widget.FormItem{
+		widget.NewFormItem("Host / IP", host),
+		widget.NewFormItem("SSH user", user),
+		widget.NewFormItem("SSH port", port),
+		widget.NewFormItem("Reverse port (blank = off)", rport),
+	}
+	alias := h.Alias
+	dialog.ShowForm("Edit "+alias, "Save", "Cancel", items, func(ok bool) {
+		if !ok {
+			return
+		}
+		g.do(func() error {
+			if err := g.core.SetParam(alias, "HostName", strings.TrimSpace(host.Text)); err != nil {
+				return err
+			}
+			if err := g.core.SetParam(alias, "User", strings.TrimSpace(user.Text)); err != nil {
+				return err
+			}
+			if err := g.core.SetParam(alias, "Port", strings.TrimSpace(port.Text)); err != nil {
+				return err
+			}
+			return g.core.SetReverseTunnel(alias, atoi(rport.Text, 0))
+		})
+	}, g.win)
+}
+
+func (g *gui) showSetupServer(alias string) {
 	pw := widget.NewPasswordEntry()
 	pw.SetPlaceHolder("server password — first time only; empty if key/agent works")
 	items := []*widget.FormItem{widget.NewFormItem("Password", pw)}
@@ -209,7 +266,7 @@ func (g *gui) showSetupServer(id string) {
 		if !ok {
 			return
 		}
-		res, err := g.core.SetupServer(id, pw.Text)
+		res, err := g.core.SetupServer(alias, pw.Text)
 		if err != nil {
 			dialog.ShowError(err, g.win)
 			return

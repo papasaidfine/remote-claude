@@ -3,7 +3,6 @@ package webui
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"net/http/httptest"
 	"path/filepath"
 	"sync"
@@ -16,26 +15,34 @@ import (
 	"github.com/papasaidfine/remote-claude/internal/store"
 )
 
-type fakeManager struct {
+type fakeMgr struct {
 	mu      sync.Mutex
-	started []bridge.Spec
+	started []string
 	stopped []string
 }
 
-func (f *fakeManager) Start(s bridge.Spec) error {
+func (f *fakeMgr) Start(s bridge.Spec) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.started = append(f.started, s)
+	f.started = append(f.started, s.Alias)
 	return nil
 }
-func (f *fakeManager) Stop(id string) {
+func (f *fakeMgr) Stop(a string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.stopped = append(f.stopped, id)
+	f.stopped = append(f.stopped, a)
 }
-func (f *fakeManager) Status(id string) bridge.Status {
-	return bridge.Status{HostID: id, State: bridge.StateStopped}
+func (f *fakeMgr) Status(a string) bridge.Status {
+	return bridge.Status{Alias: a, State: bridge.StateStopped}
 }
+
+type fakeProv struct{}
+
+func (fakeProv) EnsureKey() error { return nil }
+func (fakeProv) ServerBootstrap(alias, clientAlias string, port int, pw string) (provision.ServerResult, error) {
+	return provision.ServerResult{Alias: clientAlias, Authorized: true, ServerPubKey: "k"}, nil
+}
+func (fakeProv) EnsureLocalSSHD(bool) error { return nil }
 
 type fakePlat struct{}
 
@@ -43,35 +50,18 @@ func (fakePlat) Name() string            { return "TestOS" }
 func (fakePlat) SupportsXray() bool      { return true }
 func (fakePlat) StatusIncomingSSH() bool { return false }
 
-type fakeProv struct {
-	err       error
-	calls     int
-	lastAlias string
-	lastHost  store.Host
-}
-
-func (f *fakeProv) EnsureClient(h store.Host, alias string) error {
-	f.calls++
-	f.lastHost = h
-	f.lastAlias = alias
-	return f.err
-}
-
-func (f *fakeProv) ServerBootstrap(h store.Host, alias, password string) (provision.ServerResult, error) {
-	if f.err != nil {
-		return provision.ServerResult{}, f.err
-	}
-	return provision.ServerResult{ServerPubKey: "ssh-ed25519 AAAAkey server", Authorized: true, Alias: alias}, nil
-}
-
-func (f *fakeProv) EnsureLocalSSHD(disablePassword bool) error { return f.err }
-
-func newTestServer(t *testing.T, prov core.Provisioner) (*Server, *fakeManager) {
+func newTestServer(t *testing.T) (*Server, *fakeMgr) {
 	t.Helper()
 	dir := t.TempDir()
-	p := paths.Paths{RCConfigDir: dir, VlessNodes: filepath.Join(dir, "vless-nodes.txt")}
-	fm := &fakeManager{}
-	app := core.New(&store.Config{}, filepath.Join(dir, "config.json"), p, fm, prov, fakePlat{})
+	ssh := filepath.Join(dir, ".ssh")
+	p := paths.Paths{
+		SSHDir:      ssh,
+		SSHConfig:   filepath.Join(ssh, "config"),
+		RCConfigDir: filepath.Join(dir, "rc"),
+		VlessNodes:  filepath.Join(dir, "rc", "vless-nodes.txt"),
+	}
+	fm := &fakeMgr{}
+	app := core.New(&store.Config{}, filepath.Join(dir, "config.json"), p, fm, fakeProv{}, fakePlat{})
 	return New(app), fm
 }
 
@@ -92,166 +82,134 @@ func do(t *testing.T, s *Server, method, path string, body any) (int, map[string
 	return rec.Code, m
 }
 
-func addHost(t *testing.T, s *Server) string {
+// state returns the hosts array from /api/state.
+func hosts(t *testing.T, s *Server) []any {
+	t.Helper()
+	_, resp := do(t, s, "GET", "/api/state", nil)
+	hs, _ := resp["hosts"].([]any)
+	return hs
+}
+
+func addHost(t *testing.T, s *Server, alias string) {
 	t.Helper()
 	code, resp := do(t, s, "POST", "/api/hosts", map[string]any{
-		"name": "workbox", "hostname": "srv.example.com", "user": "dev", "port": 22, "reverse_port": 2222,
+		"alias": alias, "hostname": "srv.example.com", "user": "dev", "port": 22,
 	})
 	if code != 200 {
 		t.Fatalf("add host: code %d resp %v", code, resp)
 	}
-	id, _ := resp["id"].(string)
-	if id == "" {
-		t.Fatalf("add host returned no id: %v", resp)
-	}
-	return id
 }
 
 func TestStateEmpty(t *testing.T) {
-	s, _ := newTestServer(t, nil)
+	s, _ := newTestServer(t)
 	code, resp := do(t, s, "GET", "/api/state", nil)
-	if code != 200 {
-		t.Fatalf("state code %d", code)
+	if code != 200 || resp["platform"] != "TestOS" {
+		t.Fatalf("state code %d resp %v", code, resp)
 	}
-	if resp["platform"] != "TestOS" {
-		t.Errorf("platform = %v", resp["platform"])
-	}
-	if hs, _ := resp["hosts"].([]any); len(hs) != 0 {
-		t.Errorf("expected no hosts, got %v", resp["hosts"])
+	if len(hosts(t, s)) != 0 {
+		t.Errorf("expected no hosts")
 	}
 }
 
-func TestAddAndListHost(t *testing.T) {
-	s, _ := newTestServer(t, nil)
-	addHost(t, s)
-	_, resp := do(t, s, "GET", "/api/state", nil)
-	hs, _ := resp["hosts"].([]any)
-	if len(hs) != 1 {
-		t.Fatalf("expected 1 host, got %d", len(hs))
+func TestAddRemoveHost(t *testing.T) {
+	s, fm := newTestServer(t)
+	addHost(t, s, "workbox")
+	if len(hosts(t, s)) != 1 {
+		t.Fatalf("host not listed")
 	}
-}
-
-func TestAddHostValidation(t *testing.T) {
-	s, _ := newTestServer(t, nil)
-	code, resp := do(t, s, "POST", "/api/hosts", map[string]any{"name": "x"})
-	if code != 400 {
-		t.Fatalf("expected 400 for invalid host, got %d (%v)", code, resp)
-	}
-}
-
-func TestDeleteHostStopsTunnel(t *testing.T) {
-	s, fm := newTestServer(t, nil)
-	id := addHost(t, s)
-	code, _ := do(t, s, "DELETE", "/api/hosts/"+id, nil)
+	code, _ := do(t, s, "DELETE", "/api/hosts/workbox", nil)
 	if code != 200 {
 		t.Fatalf("delete code %d", code)
 	}
-	if len(fm.stopped) != 1 || fm.stopped[0] != id {
-		t.Errorf("expected Stop(%q), got %v", id, fm.stopped)
+	if len(fm.stopped) != 1 || fm.stopped[0] != "workbox" {
+		t.Errorf("tunnel not stopped on delete: %v", fm.stopped)
 	}
-	_, resp := do(t, s, "GET", "/api/state", nil)
-	if hs, _ := resp["hosts"].([]any); len(hs) != 0 {
+	if len(hosts(t, s)) != 0 {
 		t.Errorf("host not removed")
 	}
 }
 
+func TestAddHostValidation(t *testing.T) {
+	s, _ := newTestServer(t)
+	code, _ := do(t, s, "POST", "/api/hosts", map[string]any{"alias": "", "hostname": "h"})
+	if code != 400 {
+		t.Fatalf("expected 400, got %d", code)
+	}
+}
+
+func TestReverseAndProxyAreConfig(t *testing.T) {
+	s, _ := newTestServer(t)
+	addHost(t, s, "wb")
+	if code, _ := do(t, s, "POST", "/api/hosts/wb/reverse", map[string]int{"port": 2222}); code != 200 {
+		t.Fatalf("set reverse code %d", code)
+	}
+	if code, _ := do(t, s, "POST", "/api/hosts/wb/proxy", map[string]bool{"on": true}); code != 200 {
+		t.Fatalf("set proxy code %d", code)
+	}
+	h := hosts(t, s)[0].(map[string]any)
+	if h["has_reverse"] != true || h["reverse_port"] != "2222" || h["has_proxy"] != true {
+		t.Errorf("reverse/proxy not reflected: %v", h)
+	}
+}
+
+func TestSetParamAndList(t *testing.T) {
+	s, _ := newTestServer(t)
+	addHost(t, s, "wb")
+	if code, _ := do(t, s, "POST", "/api/hosts/wb/param", map[string]string{"key": "ForwardAgent", "value": "no"}); code != 200 {
+		t.Fatalf("set param code %d", code)
+	}
+	code, _ := do(t, s, "GET", "/api/hosts/wb/params", nil)
+	if code != 200 {
+		t.Fatalf("params code %d", code)
+	}
+}
+
 func TestStartUnknownHost(t *testing.T) {
-	s, _ := newTestServer(t, nil)
+	s, _ := newTestServer(t)
 	code, _ := do(t, s, "POST", "/api/hosts/nope/start", nil)
 	if code != 404 {
 		t.Fatalf("expected 404, got %d", code)
 	}
 }
 
-func TestStartProvisionErrorDoesNotStart(t *testing.T) {
-	prov := &fakeProv{err: fmt.Errorf("no key")}
-	s, fm := newTestServer(t, prov)
-	id := addHost(t, s)
-	code, resp := do(t, s, "POST", "/api/hosts/"+id+"/start", nil)
-	if code != 500 {
-		t.Fatalf("expected 500, got %d (%v)", code, resp)
-	}
-	if len(fm.started) != 0 {
-		t.Errorf("tunnel started despite provision failure: %v", fm.started)
-	}
-}
-
 func TestStartSuccess(t *testing.T) {
-	prov := &fakeProv{}
-	s, fm := newTestServer(t, prov)
-	// set an alias so we can assert it flows to the provisioner
-	do(t, s, "POST", "/api/alias", map[string]string{"alias": "lisa-laptop"})
-	id := addHost(t, s)
-	code, _ := do(t, s, "POST", "/api/hosts/"+id+"/start", nil)
+	s, fm := newTestServer(t)
+	do(t, s, "POST", "/api/alias", map[string]string{"alias": "lisa"})
+	addHost(t, s, "wb")
+	code, _ := do(t, s, "POST", "/api/hosts/wb/start", nil)
 	if code != 200 {
 		t.Fatalf("start code %d", code)
 	}
-	if prov.calls != 1 || prov.lastAlias != "lisa-laptop" {
-		t.Errorf("EnsureClient not called with alias: calls=%d alias=%q", prov.calls, prov.lastAlias)
-	}
-	if len(fm.started) != 1 {
-		t.Fatalf("expected 1 start, got %d", len(fm.started))
-	}
-	got := fm.started[0]
-	if got.Alias != paths.Alias || got.ReversePort != 2222 || got.HostID != id {
-		t.Errorf("bad spec: %+v", got)
+	if len(fm.started) != 1 || fm.started[0] != "wb" {
+		t.Errorf("bridge not started for alias: %v", fm.started)
 	}
 }
 
-func TestAliasPersistedAndSanitized(t *testing.T) {
-	s, _ := newTestServer(t, nil)
-	code, resp := do(t, s, "POST", "/api/alias", map[string]string{"alias": "Lisa Laptop!!"})
-	if code != 200 {
-		t.Fatalf("alias code %d (%v)", code, resp)
-	}
-	if resp["alias"] != "lisalaptop" {
-		t.Errorf("alias not sanitized: %v", resp["alias"])
-	}
-	_, st := do(t, s, "GET", "/api/state", nil)
-	if st["client_alias"] != "lisalaptop" {
-		t.Errorf("alias not persisted in state: %v", st["client_alias"])
-	}
-}
-
-func TestSetupServerSuccess(t *testing.T) {
-	s, _ := newTestServer(t, &fakeProv{})
+func TestSetupServer(t *testing.T) {
+	s, _ := newTestServer(t)
 	do(t, s, "POST", "/api/alias", map[string]string{"alias": "lisa"})
-	id := addHost(t, s)
-	code, resp := do(t, s, "POST", "/api/hosts/"+id+"/setup-server", nil)
-	if code != 200 {
-		t.Fatalf("setup-server code %d (%v)", code, resp)
-	}
-	if resp["server_pubkey"] == "" || resp["authorized"] != true {
-		t.Errorf("unexpected result: %v", resp)
+	addHost(t, s, "wb")
+	do(t, s, "POST", "/api/hosts/wb/reverse", map[string]int{"port": 2223})
+	code, resp := do(t, s, "POST", "/api/hosts/wb/setup-server", map[string]string{"password": ""})
+	if code != 200 || resp["authorized"] != true {
+		t.Fatalf("setup-server code %d resp %v", code, resp)
 	}
 }
 
-func TestSetupServerUnknownHost(t *testing.T) {
-	s, _ := newTestServer(t, &fakeProv{})
-	code, _ := do(t, s, "POST", "/api/hosts/nope/setup-server", nil)
-	if code != 404 {
-		t.Fatalf("expected 404, got %d", code)
-	}
-}
-
-func TestLocalSSHD(t *testing.T) {
-	s, _ := newTestServer(t, &fakeProv{})
-	code, _ := do(t, s, "POST", "/api/local-sshd", map[string]bool{"disable_password": true})
-	if code != 200 {
-		t.Fatalf("local-sshd code %d", code)
+func TestAliasSanitized(t *testing.T) {
+	s, _ := newTestServer(t)
+	code, resp := do(t, s, "POST", "/api/alias", map[string]string{"alias": "Lisa Laptop!!"})
+	if code != 200 || resp["alias"] != "lisalaptop" {
+		t.Fatalf("alias not sanitized: code %d resp %v", code, resp)
 	}
 }
 
 func TestNodesValidation(t *testing.T) {
-	s, _ := newTestServer(t, nil)
-	// invalid vless line rejected
-	code, _ := do(t, s, "POST", "/api/nodes", map[string]string{"raw": "not-a-vless-url"})
-	if code != 400 {
-		t.Fatalf("expected 400 for bad node, got %d", code)
+	s, _ := newTestServer(t)
+	if code, _ := do(t, s, "POST", "/api/nodes", map[string]string{"raw": "garbage"}); code != 400 {
+		t.Fatalf("expected 400 for bad node")
 	}
-	// comments + blanks accepted
-	code, _ = do(t, s, "POST", "/api/nodes", map[string]string{"raw": "# just a comment\n\n"})
-	if code != 200 {
-		t.Fatalf("expected 200 for comments-only, got %d", code)
+	if code, _ := do(t, s, "POST", "/api/nodes", map[string]string{"raw": "# ok\n"}); code != 200 {
+		t.Fatalf("expected 200 for comment")
 	}
 }

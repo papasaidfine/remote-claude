@@ -10,23 +10,16 @@ import (
 )
 
 func TestSSHArgs(t *testing.T) {
-	args := SSHArgs("remote-claude", 2222, 22)
+	args := SSHArgs("remote-claude")
 	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "-R 127.0.0.1:2222:127.0.0.1:22") {
-		t.Errorf("bad -R spec: %q", joined)
+	if strings.Contains(joined, "-R") {
+		t.Errorf("bridge must not add -R (config owns RemoteForward): %q", joined)
 	}
-	if !strings.Contains(joined, "ExitOnForwardFailure=yes") {
-		t.Errorf("missing ExitOnForwardFailure: %q", joined)
+	if !strings.Contains(joined, "-N") || !strings.Contains(joined, "ExitOnForwardFailure=yes") {
+		t.Errorf("missing -N/ExitOnForwardFailure: %q", joined)
 	}
 	if args[len(args)-1] != "remote-claude" {
 		t.Errorf("alias must be the last arg: %q", joined)
-	}
-}
-
-func TestSSHArgsDefaultLocalPort(t *testing.T) {
-	args := SSHArgs("h", 9000, 0)
-	if !strings.Contains(strings.Join(args, " "), "127.0.0.1:9000:127.0.0.1:22") {
-		t.Errorf("local port should default to 22: %v", args)
 	}
 }
 
@@ -103,17 +96,16 @@ func waitState(t *testing.T, m *Manager, id string, want State, timeout time.Dur
 func TestSupervisorReachesUpThenStops(t *testing.T) {
 	r := &fakeRunner{}
 	m := fastManager(r)
-	spec := Spec{HostID: "h1", Alias: "remote-claude", ReversePort: 2222}
-	if err := m.Start(spec); err != nil {
+	if err := m.Start(Spec{Alias: "remote-claude"}); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	waitState(t, m, "h1", StateUp, time.Second)
+	waitState(t, m, "remote-claude", StateUp, time.Second)
 
-	m.Stop("h1")
-	if s := m.Status("h1").State; s != StateStopped {
+	m.Stop("remote-claude")
+	if s := m.Status("remote-claude").State; s != StateStopped {
 		t.Fatalf("after Stop state = %q, want stopped", s)
 	}
-	if m.Running("h1") {
+	if m.Running("remote-claude") {
 		t.Fatal("tunnel still running after Stop")
 	}
 }
@@ -121,38 +113,35 @@ func TestSupervisorReachesUpThenStops(t *testing.T) {
 func TestSupervisorRetriesThenRecovers(t *testing.T) {
 	r := &fakeRunner{failFirst: 3}
 	m := fastManager(r)
-	if err := m.Start(Spec{HostID: "h1", Alias: "a", ReversePort: 2222}); err != nil {
+	if err := m.Start(Spec{Alias: "a"}); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	waitState(t, m, "h1", StateUp, 2*time.Second)
-	if got := m.Status("h1").Restarts; got < 3 {
+	waitState(t, m, "a", StateUp, 2*time.Second)
+	if got := m.Status("a").Restarts; got < 3 {
 		t.Fatalf("expected >=3 restarts after early exits, got %d", got)
 	}
 	if r.count() < 4 {
 		t.Fatalf("runner should have been called >=4 times, got %d", r.count())
 	}
-	m.Stop("h1")
+	m.Stop("a")
 }
 
 func TestStartInvalidSpec(t *testing.T) {
 	m := fastManager(&fakeRunner{})
-	if err := m.Start(Spec{HostID: "x", Alias: "", ReversePort: 2222}); err == nil {
+	if err := m.Start(Spec{Alias: ""}); err == nil {
 		t.Error("expected error for empty alias")
-	}
-	if err := m.Start(Spec{HostID: "x", Alias: "a", ReversePort: 0}); err == nil {
-		t.Error("expected error for invalid reverse port")
 	}
 }
 
 func TestRestartReplacesTunnel(t *testing.T) {
 	m := fastManager(&fakeRunner{})
-	m.Start(Spec{HostID: "h1", Alias: "a", ReversePort: 2222})
-	waitState(t, m, "h1", StateUp, time.Second)
-	// Restart with a different port; should not error or deadlock.
-	if err := m.Start(Spec{HostID: "h1", Alias: "a", ReversePort: 2223}); err != nil {
+	m.Start(Spec{Alias: "a"})
+	waitState(t, m, "a", StateUp, time.Second)
+	// Restarting the same alias should not error or deadlock.
+	if err := m.Start(Spec{Alias: "a"}); err != nil {
 		t.Fatalf("restart: %v", err)
 	}
-	waitState(t, m, "h1", StateUp, time.Second)
+	waitState(t, m, "a", StateUp, time.Second)
 	m.StopAll()
 	if len(m.StatusAll()) != 0 {
 		t.Fatal("StopAll left tunnels behind")

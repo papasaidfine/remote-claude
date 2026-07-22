@@ -10,13 +10,13 @@
   <header>
     <div class="wrap">
       <h1>remote-claude</h1>
-      <p class="sub">Reverse-tunnel bridge &amp; setup. This window is the app &mdash; keep it running to keep tunnels up.</p>
+      <p class="sub">Your <code>~/.ssh/config</code> hosts and their reverse tunnels. Editing a host writes its ssh config; “Start” just launches the tunnel per that config. Keep this window open to keep tunnels up.</p>
       <div class="alias">
         <label>This machine's name
           <input id="alias" type="text" placeholder="e.g. lisa-laptop" autocomplete="off">
         </label>
         <button id="alias-save">Save name</button>
-        <span class="hint">Sent to the server as <code>LC_CLIENT_NAME</code>; the server reaches you back as <code>ssh &lt;name&gt;</code>.</span>
+        <span class="hint">Written as <code>SetEnv LC_CLIENT_NAME</code> on hosts you add; the server reaches you back as <code>ssh &lt;name&gt;</code>.</span>
       </div>
     </div>
   </header>
@@ -24,7 +24,7 @@
   <main class="wrap">
     <section>
       <div class="section-head">
-        <h2>Hosts</h2>
+        <h2>Hosts <span class="hint">(scanned from ~/.ssh/config)</span></h2>
         <button id="add-host">+ Add host</button>
       </div>
       <div id="hosts"></div>
@@ -32,18 +32,18 @@
 
     <section>
       <h2>Local ssh server <span id="sshd-state" class="pill"></span></h2>
-      <p class="hint">The server reaches you back through the tunnel into this machine's sshd, so it must be running. Installing/hardening it may prompt for <code>sudo</code> in the terminal where you launched the app.</p>
+      <p class="hint">The server reaches you back through the tunnel into this machine's sshd. Installing/hardening it may prompt for <code>sudo</code> in the launching terminal.</p>
       <div class="row">
         <button id="sshd-ensure" class="secondary">Install / ensure running</button>
-        <label class="check inline"><input id="sshd-nopass" type="checkbox" checked> also disable password login (recommended)</label>
+        <label class="check inline"><input id="sshd-nopass" type="checkbox" checked> also disable password login</label>
         <span id="sshd-msg" class="msg"></span>
       </div>
     </section>
 
     <section>
       <h2>Xray vless nodes <span id="node-count" class="pill"></span></h2>
-      <p class="hint">One <code>vless://</code> URL per line (<code>#</code> comments allowed). Used by the bridge and by <code>ssh remote-claude</code> when xray is enabled. Each connection picks a random node.</p>
-      <textarea id="nodes" rows="6" spellcheck="false" placeholder="vless://uuid@host:port?...#name"></textarea>
+      <p class="hint">One <code>vless://</code> URL per line. Used by hosts with xray on. Each connection picks a random node.</p>
+      <textarea id="nodes" rows="5" spellcheck="false" placeholder="vless://uuid@host:port?...#name"></textarea>
       <div class="row">
         <button id="nodes-save">Save nodes</button>
         <span id="nodes-msg" class="msg"></span>
@@ -51,12 +51,8 @@
     </section>
   </main>
 
-  <footer class="wrap">
-    <span id="platform"></span>
-    <span id="local-ssh"></span>
-  </footer>
+  <footer class="wrap"><span id="platform"></span></footer>
 
-  <!-- host card template -->
   <template id="host-tpl">
     <div class="card host">
       <div class="host-main">
@@ -67,35 +63,51 @@
         </div>
         <div class="host-meta dim"></div>
         <div class="host-err"></div>
+        <div class="controls">
+          <label class="check inline"><input type="checkbox" class="rev-on"> reverse tunnel</label>
+          <input type="number" class="rev-port" min="1" max="65535" title="server-side reverse port">
+          <label class="check inline"><input type="checkbox" class="xray-on"> xray</label>
+          <label class="check inline"><input type="checkbox" class="auto-on"> auto-start</label>
+        </div>
       </div>
       <div class="host-actions">
         <button class="start">Start tunnel</button>
         <button class="stop secondary">Stop</button>
-        <button class="setupserver secondary" title="Configure the server side over the connection (needs the tunnel login to work already)">Set up server</button>
+        <button class="setupserver secondary">Set up server</button>
         <button class="edit secondary">Edit</button>
         <button class="del danger">Delete</button>
       </div>
     </div>
   </template>
 
-  <!-- host form dialog -->
-  <dialog id="host-dialog">
-    <form id="host-form" method="dialog">
-      <h3 id="host-form-title">Add host</h3>
-      <input type="hidden" name="id">
-      <label>Name <input name="name" required placeholder="workbox"></label>
+  <dialog id="add-dialog">
+    <form id="add-form" method="dialog">
+      <h3>Add host</h3>
+      <label>Alias (the ssh name) <input name="alias" required placeholder="workbox"></label>
       <label>Server host / IP <input name="hostname" required placeholder="server.example.com"></label>
-      <label>SSH user <input name="user" required placeholder="devuser"></label>
+      <label>SSH user <input name="user" placeholder="devuser"></label>
       <label>SSH port <input name="port" type="number" value="22" min="1" max="65535"></label>
-      <label>Reverse port <input name="reverse_port" type="number" value="2222" min="1" max="65535">
-        <span class="hint">Server-side loopback port the tunnel binds (the server ssh's back into you on this).</span>
-      </label>
-      <label class="check"><input name="use_xray" type="checkbox"> Route through xray</label>
-      <label class="check"><input name="auto_start" type="checkbox"> Start tunnel when the app launches</label>
-      <div class="form-err" id="host-form-err"></div>
+      <div class="form-err" id="add-err"></div>
       <div class="row end">
         <button value="cancel" class="secondary" formnovalidate>Cancel</button>
-        <button id="host-form-save" value="save">Save</button>
+        <button value="save">Add</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="edit-dialog">
+    <form id="edit-form" method="dialog">
+      <h3>Edit <span id="edit-title"></span></h3>
+      <input type="hidden" name="alias">
+      <label>Server host / IP <input name="hostname"></label>
+      <label>SSH user <input name="user"></label>
+      <label>SSH port <input name="port" type="number" min="1" max="65535"></label>
+      <p class="hint">All config lines for this host:</p>
+      <pre id="edit-params" class="params"></pre>
+      <div class="form-err" id="edit-err"></div>
+      <div class="row end">
+        <button value="cancel" class="secondary" formnovalidate>Cancel</button>
+        <button value="save">Save</button>
       </div>
     </form>
   </dialog>

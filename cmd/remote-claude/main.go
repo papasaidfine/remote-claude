@@ -83,8 +83,8 @@ func runApp(addr string, openBrowser bool) {
 	app := core.New(cfg, cfgPath, p, mgr, prov, plat) // Normalizes cfg
 	srv := webui.New(app)
 
-	app.AutoStart(func(h store.Host, err error) {
-		ui.Warn("auto-start %s: %v", h.Name, err)
+	app.AutoStart(func(alias string, err error) {
+		ui.Warn("auto-start %s: %v", alias, err)
 	})
 
 	ln, err := net.Listen("tcp", addr)

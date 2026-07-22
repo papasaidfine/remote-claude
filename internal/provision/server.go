@@ -13,7 +13,6 @@ import (
 	"github.com/papasaidfine/remote-claude/internal/keys"
 	"github.com/papasaidfine/remote-claude/internal/paths"
 	"github.com/papasaidfine/remote-claude/internal/sshbin"
-	"github.com/papasaidfine/remote-claude/internal/store"
 )
 
 //go:embed server_bootstrap.sh
@@ -52,12 +51,15 @@ type serverInput struct {
 // on the server yet: it is fed to ssh headlessly via SSH_ASKPASS. Empty password
 // means key/agent auth only (BatchMode). Once this runs, the local key is
 // authorized, so later connections need no password.
-func (c *Client) ServerBootstrap(h store.Host, clientAlias, password string) (ServerResult, error) {
-	if err := h.Validate(); err != nil {
-		return ServerResult{}, err
+func (c *Client) ServerBootstrap(alias, clientAlias string, reversePort int, password string) (ServerResult, error) {
+	if alias == "" {
+		return ServerResult{}, fmt.Errorf("no ssh host selected")
 	}
 	if clientAlias == "" {
 		return ServerResult{}, fmt.Errorf("set this machine's name first — it names the server-side Host block")
+	}
+	if reversePort <= 0 {
+		return ServerResult{}, fmt.Errorf("configure a reverse tunnel port on host %q first", alias)
 	}
 	res, err := keys.Ensure(c.P, c.Plat.SetStrictPerms)
 	if err != nil {
@@ -69,12 +71,12 @@ func (c *Client) ServerBootstrap(h store.Host, clientAlias, password string) (Se
 	}
 	script := renderServerScript(serverInput{
 		Alias:       clientAlias,
-		ReversePort: h.ReversePort,
+		ReversePort: reversePort,
 		LocalUser:   lu,
 		LocalPubKey: strings.TrimSpace(res.Pub),
 	}, agentClaudeMD)
 
-	cmd := exec.Command(sshbin.SSH(), bootstrapSSHArgs(password)...)
+	cmd := exec.Command(sshbin.SSH(), bootstrapSSHArgs(alias, password)...)
 	cmd.Stdin = strings.NewReader(script)
 	if password != "" {
 		cmd.Env = append(os.Environ(), askpassEnv(password)...)
@@ -86,7 +88,7 @@ func (c *Client) ServerBootstrap(h store.Host, clientAlias, password string) (Se
 			hint = "check the server password, and that the server allows password login"
 		}
 		return ServerResult{}, fmt.Errorf("server setup over 'ssh %s' failed (%s): %v\n%s",
-			paths.Alias, hint, err, tailStr(string(out), 600))
+			alias, hint, err, tailStr(string(out), 600))
 	}
 
 	pub := extractMarked(string(out), pubBegin, pubEnd)
@@ -110,14 +112,14 @@ func (c *Client) ServerBootstrap(h store.Host, clientAlias, password string) (Se
 // bootstrapSSHArgs builds the ssh args to pipe the bootstrap script. With a
 // password it drops BatchMode and lets ssh use the SSH_ASKPASS helper; without,
 // it stays key/agent-only (BatchMode).
-func bootstrapSSHArgs(password string) []string {
+func bootstrapSSHArgs(alias, password string) []string {
 	args := []string{"-o", "ConnectTimeout=15", "-o", "StrictHostKeyChecking=accept-new"}
 	if password == "" {
 		args = append(args, "-o", "BatchMode=yes")
 	} else {
 		args = append(args, "-o", "NumberOfPasswordPrompts=1")
 	}
-	return append(args, paths.Alias, "bash -s")
+	return append(args, alias, "bash -s")
 }
 
 // askpassEnv makes ssh fetch the password non-interactively by re-executing this

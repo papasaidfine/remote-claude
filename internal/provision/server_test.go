@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/papasaidfine/remote-claude/internal/platform"
-	"github.com/papasaidfine/remote-claude/internal/store"
 )
 
 func TestRenderServerScript(t *testing.T) {
@@ -141,16 +140,16 @@ func TestServerScriptExecutes(t *testing.T) {
 }
 
 func TestBootstrapSSHArgs(t *testing.T) {
-	noPw := strings.Join(bootstrapSSHArgs(""), " ")
+	noPw := strings.Join(bootstrapSSHArgs("workbox", ""), " ")
 	if !strings.Contains(noPw, "BatchMode=yes") {
 		t.Errorf("no-password path should be BatchMode: %q", noPw)
 	}
-	withPw := strings.Join(bootstrapSSHArgs("secret"), " ")
+	withPw := strings.Join(bootstrapSSHArgs("workbox", "secret"), " ")
 	if strings.Contains(withPw, "BatchMode") {
 		t.Errorf("password path must not set BatchMode: %q", withPw)
 	}
-	if !strings.HasSuffix(withPw, "bash -s") {
-		t.Errorf("script must be the remote command: %q", withPw)
+	if !strings.Contains(withPw, "workbox") || !strings.HasSuffix(withPw, "bash -s") {
+		t.Errorf("must ssh to the alias then run the script: %q", withPw)
 	}
 }
 
@@ -165,9 +164,10 @@ func TestAskpassEnv(t *testing.T) {
 
 func TestServerBootstrapRequiresAlias(t *testing.T) {
 	c := New(testPaths(t), platform.New())
-	h := store.Host{Name: "wb", HostName: "h", User: "u", Port: 22, ReversePort: 2222}
-	_, err := c.ServerBootstrap(h, "", "")
-	if err == nil {
+	if _, err := c.ServerBootstrap("wb", "", 2222, ""); err == nil {
 		t.Fatal("expected error when client alias is empty")
+	}
+	if _, err := c.ServerBootstrap("wb", "me", 0, ""); err == nil {
+		t.Fatal("expected error when reverse port is missing")
 	}
 }

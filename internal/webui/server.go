@@ -2,7 +2,7 @@
 // simple settings page on 127.0.0.1 and exposes a small JSON API. It is a thin
 // HTTP adapter over the front-end-agnostic core.App — handlers only decode
 // JSON, call the façade, and map error kinds to status codes. A native shell
-// can replace it by calling the same core methods.
+// (cmd/remote-claude-gui) calls the same core methods.
 package webui
 
 import (
@@ -12,7 +12,6 @@ import (
 	"net/http"
 
 	"github.com/papasaidfine/remote-claude/internal/core"
-	"github.com/papasaidfine/remote-claude/internal/store"
 )
 
 //go:embed static
@@ -33,11 +32,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/state", s.handleState)
 	mux.HandleFunc("POST /api/alias", s.handleSetAlias)
 	mux.HandleFunc("POST /api/hosts", s.handleAddHost)
-	mux.HandleFunc("PUT /api/hosts/{id}", s.handleUpdateHost)
-	mux.HandleFunc("DELETE /api/hosts/{id}", s.handleDeleteHost)
-	mux.HandleFunc("POST /api/hosts/{id}/start", s.handleStart)
-	mux.HandleFunc("POST /api/hosts/{id}/stop", s.handleStop)
-	mux.HandleFunc("POST /api/hosts/{id}/setup-server", s.handleSetupServer)
+	mux.HandleFunc("DELETE /api/hosts/{alias}", s.handleRemoveHost)
+	mux.HandleFunc("GET /api/hosts/{alias}/params", s.handleParams)
+	mux.HandleFunc("POST /api/hosts/{alias}/param", s.handleSetParam)
+	mux.HandleFunc("POST /api/hosts/{alias}/reverse", s.handleReverse)
+	mux.HandleFunc("POST /api/hosts/{alias}/proxy", s.handleProxy)
+	mux.HandleFunc("POST /api/hosts/{alias}/autostart", s.handleAutoStart)
+	mux.HandleFunc("POST /api/hosts/{alias}/start", s.handleStart)
+	mux.HandleFunc("POST /api/hosts/{alias}/stop", s.handleStop)
+	mux.HandleFunc("POST /api/hosts/{alias}/setup-server", s.handleSetupServer)
 	mux.HandleFunc("GET /api/nodes", s.handleGetNodes)
 	mux.HandleFunc("POST /api/nodes", s.handleSetNodes)
 	mux.HandleFunc("POST /api/local-sshd", s.handleLocalSSHD)
@@ -77,34 +80,90 @@ func (s *Server) handleSetAlias(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAddHost(w http.ResponseWriter, r *http.Request) {
-	var h store.Host
-	if !readJSON(w, r, &h) {
+	var body struct {
+		Alias    string `json:"alias"`
+		HostName string `json:"hostname"`
+		User     string `json:"user"`
+		Port     int    `json:"port"`
+	}
+	if !readJSON(w, r, &body) {
 		return
 	}
-	stored, err := s.app.AddHost(h)
+	if err := s.app.AddHost(body.Alias, body.HostName, body.User, body.Port); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleRemoveHost(w http.ResponseWriter, r *http.Request) {
+	if err := s.app.RemoveHost(r.PathValue("alias")); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleParams(w http.ResponseWriter, r *http.Request) {
+	params, err := s.app.HostParams(r.PathValue("alias"))
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, stored)
+	writeJSON(w, http.StatusOK, params)
 }
 
-func (s *Server) handleUpdateHost(w http.ResponseWriter, r *http.Request) {
-	var h store.Host
-	if !readJSON(w, r, &h) {
+func (s *Server) handleSetParam(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	}
+	if !readJSON(w, r, &body) {
 		return
 	}
-	h.ID = r.PathValue("id")
-	updated, err := s.app.UpdateHost(h)
-	if err != nil {
+	if err := s.app.SetParam(r.PathValue("alias"), body.Key, body.Value); err != nil {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, updated)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-func (s *Server) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
-	if err := s.app.DeleteHost(r.PathValue("id")); err != nil {
+func (s *Server) handleReverse(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Port int `json:"port"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if err := s.app.SetReverseTunnel(r.PathValue("alias"), body.Port); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		On bool `json:"on"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if err := s.app.SetProxy(r.PathValue("alias"), body.On); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleAutoStart(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		On bool `json:"on"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if err := s.app.SetAutoStart(r.PathValue("alias"), body.On); err != nil {
 		fail(w, err)
 		return
 	}
@@ -112,7 +171,7 @@ func (s *Server) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
-	st, err := s.app.StartTunnel(r.PathValue("id"))
+	st, err := s.app.StartTunnel(r.PathValue("alias"))
 	if err != nil {
 		fail(w, err)
 		return
@@ -121,16 +180,15 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.app.StopTunnel(r.PathValue("id")))
+	writeJSON(w, http.StatusOK, s.app.StopTunnel(r.PathValue("alias")))
 }
 
 func (s *Server) handleSetupServer(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Password string `json:"password"`
 	}
-	// Body is optional (no password → key/agent auth).
-	json.NewDecoder(r.Body).Decode(&body)
-	res, err := s.app.SetupServer(r.PathValue("id"), body.Password)
+	json.NewDecoder(r.Body).Decode(&body) // body optional
+	res, err := s.app.SetupServer(r.PathValue("alias"), body.Password)
 	if err != nil {
 		fail(w, err)
 		return
@@ -175,7 +233,6 @@ func (s *Server) handleSetNodes(w http.ResponseWriter, r *http.Request) {
 
 // ---- helpers ----
 
-// fail translates a core error kind into an HTTP status.
 func fail(w http.ResponseWriter, err error) {
 	code := http.StatusInternalServerError
 	switch core.KindOf(err) {
