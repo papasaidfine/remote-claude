@@ -80,16 +80,25 @@ function renderHosts(state) {
   }
 }
 
-function setupServer(alias) {
-  const pw = prompt(
-    "Configure the server over the connection.\n\n" +
-    "First time only: enter this machine's password ON THE SERVER so it can\n" +
-    "authorize your key. Leave empty if key/agent login already works.");
-  if (pw === null) return;
-  act(async () => {
-    const res = await api("POST", `/api/hosts/${alias}/setup-server`, { password: pw });
-    alert(`Server configured as “${res.alias}”. Its connect-back key was ${res.authorized ? "authorized" : "already present"} on this machine.`);
-  });
+function setupOk(res) {
+  alert(`Server configured as “${res.alias}”. Its connect-back key was ${res.authorized ? "authorized" : "already present"} on this machine.`);
+}
+
+// Try key/agent auth first; only ask for a password if that fails (first-time
+// authorization).
+async function setupServer(alias) {
+  try {
+    setupOk(await api("POST", `/api/hosts/${alias}/setup-server`, { password: "" }));
+    await refresh();
+    return;
+  } catch (e) {
+    const pw = prompt("Key login didn't work yet. For first-time setup, enter your password\nON THE SERVER to authorize your key (Cancel to abort):");
+    if (pw === null) return;
+    try {
+      setupOk(await api("POST", `/api/hosts/${alias}/setup-server`, { password: pw }));
+      await refresh();
+    } catch (e2) { alert(e2.message); }
+  }
 }
 
 function renderFooter(state) {

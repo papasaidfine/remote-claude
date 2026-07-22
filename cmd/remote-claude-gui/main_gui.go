@@ -278,24 +278,49 @@ func (g *gui) showEdit(h core.HostView) {
 	}, g.win)
 }
 
+// showSetupServer tries key/agent auth first (no prompt) and only asks for a
+// password if that fails — the first-time authorization case. The ssh work runs
+// off the UI thread so the window stays responsive.
 func (g *gui) showSetupServer(alias string) {
+	go func() {
+		res, err := g.core.SetupServer(alias, "")
+		fyne.Do(func() {
+			if err == nil {
+				g.setupDone(res)
+				return
+			}
+			g.promptSetupPassword(alias)
+		})
+	}()
+}
+
+func (g *gui) promptSetupPassword(alias string) {
 	pw := widget.NewPasswordEntry()
-	pw.SetPlaceHolder("server password — first time only; empty if key/agent works")
-	items := []*widget.FormItem{widget.NewFormItem("Password", pw)}
-	dialog.ShowForm("Set up server", "Run", "Cancel", items, func(ok bool) {
-		if !ok {
-			return
-		}
-		res, err := g.core.SetupServer(alias, pw.Text)
-		if err != nil {
-			dialog.ShowError(err, g.win)
-			return
-		}
-		dialog.ShowInformation("Server configured",
-			fmt.Sprintf("Configured as %q. Its connect-back key was %s on this machine.",
-				res.Alias, authLabel(res.Authorized)), g.win)
-		g.refresh()
-	}, g.win)
+	info := widget.NewLabel("Key login didn't work yet. For first-time setup, enter your\n" +
+		"password ON THE SERVER to authorize your key (then it's automatic).")
+	dialog.ShowCustomConfirm("Set up server", "Authorize with password", "Cancel",
+		container.NewVBox(info, pw), func(ok bool) {
+			if !ok {
+				return
+			}
+			go func() {
+				res, err := g.core.SetupServer(alias, pw.Text)
+				fyne.Do(func() {
+					if err != nil {
+						dialog.ShowError(err, g.win)
+						return
+					}
+					g.setupDone(res)
+				})
+			}()
+		}, g.win)
+}
+
+func (g *gui) setupDone(res provision.ServerResult) {
+	dialog.ShowInformation("Server configured",
+		fmt.Sprintf("Configured as %q. Its connect-back key was %s on this machine.",
+			res.Alias, authLabel(res.Authorized)), g.win)
+	g.refresh()
 }
 
 // do runs a mutating action, shows any error, and refreshes on success.
