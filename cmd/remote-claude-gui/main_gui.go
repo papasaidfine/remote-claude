@@ -26,6 +26,7 @@ import (
 	"github.com/papasaidfine/remote-claude/internal/paths"
 	"github.com/papasaidfine/remote-claude/internal/platform"
 	"github.com/papasaidfine/remote-claude/internal/provision"
+	"github.com/papasaidfine/remote-claude/internal/relay"
 	"github.com/papasaidfine/remote-claude/internal/sshbin"
 	"github.com/papasaidfine/remote-claude/internal/store"
 )
@@ -34,6 +35,18 @@ import (
 var version = "dev"
 
 func main() {
+	// ssh invokes this same binary headlessly for the xray ProxyCommand relay and
+	// the SSH_ASKPASS helper (a host's ProxyCommand points at whichever binary
+	// wrote it — possibly this GUI). Handle those and exit BEFORE opening a window,
+	// or starting a tunnel would spawn a second app window.
+	if os.Getenv("RC_ASKPASS_MODE") == "1" {
+		fmt.Println(os.Getenv("RC_ASKPASS_SECRET"))
+		return
+	}
+	if len(os.Args) >= 2 && os.Args[1] == "relay" {
+		os.Exit(relay.Main(os.Args[2:]))
+	}
+
 	p, err := paths.Resolve()
 	if err != nil {
 		die(err)
@@ -146,36 +159,11 @@ func (g *gui) hostCard(h core.HostView) fyne.CanvasObject {
 	alias := h.Alias
 	title := widget.NewLabelWithStyle(alias+"   ("+target(h)+")",
 		fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	rev := "no reverse tunnel"
-	if h.HasReverse {
-		rev = "reverse :" + h.ReversePort
-	}
-	meta := widget.NewLabel(fmt.Sprintf("%s  ·  %s  ·  tunnel: %s", rev, xrayLabel(h.HasProxy), stateLabel(h.Status)))
 
-	// inline config toggles (checkboxes set OnChanged AFTER SetChecked so the
-	// initial state doesn't fire an API call)
-	revCheck := widget.NewCheck("reverse tunnel", nil)
-	revCheck.SetChecked(h.HasReverse)
-	revCheck.OnChanged = func(on bool) {
-		port := 0
-		if on {
-			port = atoi(h.ReversePort, 2222)
-		}
-		g.do(func() error { return g.core.SetReverseTunnel(alias, port) })
-	}
-	xrayCheck := widget.NewCheck("xray", nil)
+	xrayCheck := widget.NewCheck("route through xray", nil)
 	xrayCheck.SetChecked(h.HasProxy)
 	xrayCheck.OnChanged = func(on bool) { g.do(func() error { return g.core.SetProxy(alias, on) }) }
-	autoCheck := widget.NewCheck("auto-start", nil)
-	autoCheck.SetChecked(h.AutoStart)
-	autoCheck.OnChanged = func(on bool) { g.do(func() error { return g.core.SetAutoStart(alias, on) }) }
-	controls := container.NewHBox(revCheck, xrayCheck, autoCheck)
 
-	start := widget.NewButton("Start", func() {
-		g.do(func() error { _, err := g.core.StartTunnel(alias); return err })
-	})
-	stop := widget.NewButton("Stop", func() { g.core.StopTunnel(alias); g.refresh() })
-	setup := widget.NewButton("Set up server", func() { g.showSetupServer(alias) })
 	edit := widget.NewButton("Edit", func() { g.showEdit(h) })
 	del := widget.NewButton("Delete", func() {
 		dialog.ShowConfirm("Delete host", "Delete “"+alias+"” from ~/.ssh/config? This stops its tunnel.",
@@ -185,9 +173,41 @@ func (g *gui) hostCard(h core.HostView) fyne.CanvasObject {
 				}
 			}, g.win)
 	})
-	actions := container.NewHBox(start, stop, setup, edit, del)
 
-	return container.NewVBox(title, meta, controls, actions, widget.NewSeparator())
+	rows := []fyne.CanvasObject{title}
+	if h.HasReverse {
+		// A tunnel host: full tunnel controls.
+		rows = append(rows, widget.NewLabel(fmt.Sprintf("reverse tunnel :%s  ·  tunnel: %s",
+			h.ReversePort, stateLabel(h.Status))))
+		start := widget.NewButton("Start", func() {
+			g.do(func() error { _, err := g.core.StartTunnel(alias); return err })
+		})
+		stop := widget.NewButton("Stop", func() { g.core.StopTunnel(alias); g.refresh() })
+		if h.Status.State == bridge.StateStopped {
+			stop.Disable()
+		} else {
+			start.SetText("Restart")
+		}
+		setup := widget.NewButton("Set up server", func() { g.showSetupServer(alias) })
+		auto := widget.NewCheck("auto-start", nil)
+		auto.SetChecked(h.AutoStart)
+		auto.OnChanged = func(on bool) { g.do(func() error { return g.core.SetAutoStart(alias, on) }) }
+		rows = append(rows,
+			container.NewHBox(start, stop, setup),
+			container.NewHBox(xrayCheck, auto, edit, del))
+	} else {
+		// A plain ssh host: just show it and offer to make it a tunnel host.
+		rows = append(rows,
+			widget.NewLabelWithStyle("plain ssh host — no reverse tunnel",
+				fyne.TextAlignLeading, fyne.TextStyle{Italic: true}),
+			container.NewHBox(
+				widget.NewButton("Enable reverse tunnel", func() {
+					g.do(func() error { return g.core.SetReverseTunnel(alias, 2222) })
+				}),
+				xrayCheck, edit, del))
+	}
+	rows = append(rows, widget.NewSeparator())
+	return container.NewVBox(rows...)
 }
 
 func target(h core.HostView) string {
@@ -341,13 +361,6 @@ func yn(b bool) string {
 		return "running"
 	}
 	return "not detected"
-}
-
-func xrayLabel(b bool) string {
-	if b {
-		return "xray on"
-	}
-	return "direct"
 }
 
 func authLabel(b bool) string {
