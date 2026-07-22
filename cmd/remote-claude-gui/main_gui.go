@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -26,6 +27,9 @@ import (
 	"github.com/papasaidfine/remote-claude/internal/sshbin"
 	"github.com/papasaidfine/remote-claude/internal/store"
 )
+
+// version is stamped at release time via -ldflags "-X main.version=...".
+var version = "dev"
 
 func main() {
 	p, err := paths.Resolve()
@@ -43,13 +47,24 @@ func main() {
 	appCore.AutoStart(func(store.Host, error) {})
 
 	a := app.New()
-	w := a.NewWindow("remote-claude")
+	w := a.NewWindow("remote-claude " + version)
 	w.Resize(fyne.NewSize(680, 600))
 
 	g := &gui{core: appCore, win: w}
 	w.SetContent(g.build())
 	g.refresh()
+	go g.autoRefresh()
 	w.ShowAndRun()
+}
+
+// autoRefresh re-renders live tunnel status on a timer. UI mutations must run on
+// the main goroutine, so it hops through fyne.Do.
+func (g *gui) autoRefresh() {
+	t := time.NewTicker(2 * time.Second)
+	defer t.Stop()
+	for range t.C {
+		fyne.Do(g.refresh)
+	}
 }
 
 func die(err error) {
@@ -79,6 +94,8 @@ func (g *gui) build() fyne.CanvasObject {
 
 	toolbar := container.NewHBox(
 		widget.NewButton("+ Add host", g.showAddHost),
+		widget.NewButton("Xray nodes", g.showNodes),
+		widget.NewButton("Local ssh server", g.showLocalSSHD),
 		widget.NewButton("Refresh", g.refresh),
 	)
 	g.status = widget.NewLabel("")
@@ -194,6 +211,48 @@ func (g *gui) do(fn func() error) {
 		return
 	}
 	g.refresh()
+}
+
+func (g *gui) showNodes() {
+	raw, _ := g.core.Nodes()
+	entry := widget.NewMultiLineEntry()
+	entry.SetText(raw)
+	entry.SetPlaceHolder("one vless:// URL per line; # comments allowed")
+	entry.Wrapping = fyne.TextWrapOff
+	d := dialog.NewCustomConfirm("Xray vless nodes", "Save", "Cancel",
+		container.NewVScroll(entry), func(ok bool) {
+			if !ok {
+				return
+			}
+			if _, err := g.core.SetNodes(entry.Text); err != nil {
+				dialog.ShowError(err, g.win)
+				return
+			}
+			g.refresh()
+		}, g.win)
+	d.Resize(fyne.NewSize(540, 380))
+	d.Show()
+}
+
+func (g *gui) showLocalSSHD() {
+	disable := widget.NewCheck("also disable password login (recommended)", nil)
+	disable.SetChecked(true)
+	info := widget.NewLabel("Install/ensure the local ssh server so the agent can reach\n" +
+		"back in. May prompt for sudo / Administrator in the terminal\n" +
+		"where you launched the app.")
+	dialog.ShowCustomConfirm("Local ssh server", "Install / ensure", "Cancel",
+		container.NewVBox(info, disable), func(ok bool) {
+			if !ok {
+				return
+			}
+			running, err := g.core.EnsureLocalSSHD(disable.Checked)
+			if err != nil {
+				dialog.ShowError(err, g.win)
+				return
+			}
+			dialog.ShowInformation("Local ssh server", "Done — running: "+yn(running), g.win)
+			g.refresh()
+		}, g.win)
 }
 
 func stateLabel(s bridge.Status) string {

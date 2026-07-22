@@ -8,7 +8,8 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  # CGO-free CLI, cross-compiled for every target.
+  cli:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -31,9 +32,40 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           out="remote-claude_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}"
-          go build -trimpath -ldflags "-s -w" -o "$out" ./cmd/remote-claude
+          go build -trimpath -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o "$out" ./cmd/remote-claude
           sha256sum "$out" > "$out.sha256"
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             remote-claude_*
+
+  # Native Fyne GUI — needs CGO, so build on each OS's own runner.
+  gui:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  suffix: linux_amd64,   ext: '' }
+          - { os: macos-latest,   suffix: darwin_arm64,  ext: '' }
+          - { os: windows-latest, suffix: windows_amd64, ext: .exe }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Install Linux GUI deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev xorg-dev libxxf86vm-dev libwayland-dev libxkbcommon-dev
+      - name: Build GUI
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          out="remote-claude-gui_${{ matrix.suffix }}${{ matrix.ext }}"
+          go build -tags gui -trimpath -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o "$out" ./cmd/remote-claude-gui
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            remote-claude-gui_*

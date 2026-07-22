@@ -34,6 +34,9 @@ import (
 // makes a second launch focus the existing app instead of starting a rival.
 const defaultAddr = "127.0.0.1:8765"
 
+// version is stamped at release time via -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
 	// SSH_ASKPASS hook: when the bridge/provision runs ssh with a UI-supplied
 	// password, ssh execs this same binary to fetch it. Gated by an env flag so
@@ -46,6 +49,9 @@ func main() {
 		switch os.Args[1] {
 		case "relay":
 			os.Exit(relay.Main(os.Args[2:]))
+		case "version", "--version", "-v":
+			fmt.Println(version)
+			return
 		case "serve":
 			addr := defaultAddr
 			if len(os.Args) >= 3 {
