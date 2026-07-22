@@ -83,12 +83,8 @@ func (c *Client) ServerBootstrap(alias, clientAlias string, reversePort int, pas
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		hint := "enter this machine's server password above for first-time setup"
-		if password != "" {
-			hint = "check the server password, and that the server allows password login"
-		}
-		return ServerResult{}, fmt.Errorf("server setup over 'ssh %s' failed (%s): %v\n%s",
-			alias, hint, err, tailStr(string(out), 600))
+		return ServerResult{}, fmt.Errorf("server setup over 'ssh %s' failed: %v\n%s",
+			alias, err, tailStr(string(out), 600))
 	}
 
 	pub := extractMarked(string(out), pubBegin, pubEnd)
@@ -113,7 +109,14 @@ func (c *Client) ServerBootstrap(alias, clientAlias string, reversePort int, pas
 // password it drops BatchMode and lets ssh use the SSH_ASKPASS helper; without,
 // it stays key/agent-only (BatchMode).
 func bootstrapSSHArgs(alias, password string) []string {
-	args := []string{"-o", "ConnectTimeout=15", "-o", "StrictHostKeyChecking=accept-new"}
+	args := []string{
+		"-o", "ConnectTimeout=15",
+		"-o", "StrictHostKeyChecking=accept-new",
+		// Use the user's agent/default keys too, not only the app's key — the
+		// host block forces IdentitiesOnly, but for this one-time bootstrap we
+		// want to get in however the user already can.
+		"-o", "IdentitiesOnly=no",
+	}
 	if password == "" {
 		args = append(args, "-o", "BatchMode=yes")
 	} else {

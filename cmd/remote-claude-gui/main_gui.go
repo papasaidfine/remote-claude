@@ -285,19 +285,30 @@ func (g *gui) showSetupServer(alias string) {
 	go func() {
 		res, err := g.core.SetupServer(alias, "")
 		fyne.Do(func() {
-			if err == nil {
+			switch {
+			case err == nil:
 				g.setupDone(res)
-				return
+			case isAuthError(err):
+				g.promptSetupPassword(alias) // key genuinely not authorized yet
+			default:
+				dialog.ShowError(err, g.win) // some other failure — show the real error
 			}
-			g.promptSetupPassword(alias)
 		})
 	}()
 }
 
+// isAuthError reports whether an ssh failure is a public-key rejection (vs. a
+// connection error, a server-side script failure, etc.).
+func isAuthError(err error) bool {
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "permission denied") || strings.Contains(s, "publickey")
+}
+
 func (g *gui) promptSetupPassword(alias string) {
 	pw := widget.NewPasswordEntry()
-	info := widget.NewLabel("Key login didn't work yet. For first-time setup, enter your\n" +
-		"password ON THE SERVER to authorize your key (then it's automatic).")
+	info := widget.NewLabel("The server rejected your key — it isn't authorized there yet.\n" +
+		"If the server accepts a password, enter it to authorize your key.\n" +
+		"(Key-only server? Cancel and add ~/.ssh/id_ed25519.pub to its\nauthorized_keys yourself.)")
 	dialog.ShowCustomConfirm("Set up server", "Authorize with password", "Cancel",
 		container.NewVBox(info, pw), func(ok bool) {
 			if !ok {

@@ -84,15 +84,19 @@ function setupOk(res) {
   alert(`Server configured as “${res.alias}”. Its connect-back key was ${res.authorized ? "authorized" : "already present"} on this machine.`);
 }
 
-// Try key/agent auth first; only ask for a password if that fails (first-time
-// authorization).
+// Try key/agent auth first. Only ask for a password if the server actually
+// rejected the key; any other failure shows the real error (no password demand).
 async function setupServer(alias) {
   try {
     setupOk(await api("POST", `/api/hosts/${alias}/setup-server`, { password: "" }));
     await refresh();
     return;
   } catch (e) {
-    const pw = prompt("Key login didn't work yet. For first-time setup, enter your password\nON THE SERVER to authorize your key (Cancel to abort):");
+    if (!/permission denied|publickey/i.test(e.message)) {
+      alert(e.message); // not an auth problem — show the real error
+      return;
+    }
+    const pw = prompt("The server rejected your key — it isn't authorized there yet. If the\nserver accepts a password, enter it to authorize your key (Cancel to abort).\nKey-only server? Cancel and add ~/.ssh/id_ed25519.pub to its authorized_keys.");
     if (pw === null) return;
     try {
       setupOk(await api("POST", `/api/hosts/${alias}/setup-server`, { password: pw }));
