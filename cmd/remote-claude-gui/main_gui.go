@@ -17,6 +17,8 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/papasaidfine/remote-claude/internal/bridge"
@@ -47,6 +49,10 @@ func main() {
 	appCore.AutoStart(func(store.Host, error) {})
 
 	a := app.New()
+	a.SetIcon(theme.ComputerIcon())
+	// Quitting stops the tunnels (their ssh children would otherwise be orphaned).
+	a.Lifecycle().SetOnStopped(func() { mgr.StopAll() })
+
 	w := a.NewWindow("remote-claude " + version)
 	w.Resize(fyne.NewSize(680, 600))
 
@@ -54,6 +60,17 @@ func main() {
 	w.SetContent(g.build())
 	g.refresh()
 	go g.autoRefresh()
+
+	// System tray: closing the window hides to the tray so the app keeps holding
+	// the tunnels up; Fyne adds a native Quit item. Only where a tray exists.
+	if desk, ok := a.(desktop.App); ok {
+		desk.SetSystemTrayIcon(theme.ComputerIcon())
+		desk.SetSystemTrayMenu(fyne.NewMenu("remote-claude",
+			fyne.NewMenuItem("Open", func() { w.Show() }),
+		))
+		w.SetCloseIntercept(func() { w.Hide() })
+	}
+
 	w.ShowAndRun()
 }
 
