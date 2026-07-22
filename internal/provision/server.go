@@ -153,7 +153,9 @@ func renderServerScript(in serverInput, claudeMD string) string {
 	}
 	b.WriteString("RC_CLAUDE_MD_EOF\n")
 	b.WriteString(serverScriptBody)
-	return b.String()
+	// Strip any CR: a Windows CI checkout can embed the .sh/.md with CRLF, which
+	// makes the server's bash choke ("$'\r': command not found").
+	return strings.ReplaceAll(b.String(), "\r", "")
 }
 
 // shquote single-quotes s for safe interpolation into a POSIX shell.

@@ -1,0 +1,5 @@
+# Shell scripts and the embedded agent instructions must stay LF: they are
+# go:embed-ed and piped to a POSIX shell, so CRLF (from a Windows checkout)
+# would break them. Force LF on checkout regardless of core.autocrlf.
+*.sh text eol=lf
+internal/provision/agent_claude_md.md text eol=lf

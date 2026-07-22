@@ -49,6 +49,16 @@ func TestEmbeddedClaudeMDIsDeviceAware(t *testing.T) {
 	}
 }
 
+// The script piped to the server's bash must be LF-only — a CRLF from a Windows
+// checkout would make bash fail with "$'\r': command not found".
+func TestRenderServerScriptHasNoCR(t *testing.T) {
+	s := renderServerScript(serverInput{Alias: "a", ReversePort: 2222, LocalUser: "u", LocalPubKey: "k"},
+		"line one\r\nline two\r\n") // even CRLF input must be normalized away
+	if strings.Contains(s, "\r") {
+		t.Error("rendered script contains CR; the server's bash will choke on it")
+	}
+}
+
 func TestShquoteEscapesQuotes(t *testing.T) {
 	got := shquote("a'b")
 	if got != `'a'\''b'` {
