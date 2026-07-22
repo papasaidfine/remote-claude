@@ -3,8 +3,7 @@
 // that keeps the reverse tunnels up. Subcommands:
 //
 //	relay <host> <port>   ssh ProxyCommand relay for the xray path (unchanged)
-//	serve [addr]          run the web UI without opening a browser (headless)
-//	menu                  the legacy interactive numbered menu (fallback)
+//	serve [addr]          run the app without opening a browser (headless)
 package main
 
 import (
@@ -19,7 +18,6 @@ import (
 	"syscall"
 
 	"github.com/papasaidfine/remote-claude/internal/bridge"
-	"github.com/papasaidfine/remote-claude/internal/menu"
 	"github.com/papasaidfine/remote-claude/internal/paths"
 	"github.com/papasaidfine/remote-claude/internal/platform"
 	"github.com/papasaidfine/remote-claude/internal/provision"
@@ -47,9 +45,6 @@ func main() {
 		switch os.Args[1] {
 		case "relay":
 			os.Exit(relay.Main(os.Args[2:]))
-		case "menu":
-			runMenu()
-			return
 		case "serve":
 			addr := defaultAddr
 			if len(os.Args) >= 3 {
@@ -60,15 +55,6 @@ func main() {
 		}
 	}
 	runApp(defaultAddr, true)
-}
-
-func runMenu() {
-	p, err := paths.Resolve()
-	if err != nil {
-		ui.Errf("remote-claude: %v", err)
-		os.Exit(1)
-	}
-	menu.Run(menu.Menu{P: p, Plat: platform.New()})
 }
 
 func runApp(addr string, openBrowser bool) {
