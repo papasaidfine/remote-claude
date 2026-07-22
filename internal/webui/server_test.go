@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/papasaidfine/remote-claude/internal/bridge"
+	"github.com/papasaidfine/remote-claude/internal/core"
 	"github.com/papasaidfine/remote-claude/internal/paths"
 	"github.com/papasaidfine/remote-claude/internal/provision"
 	"github.com/papasaidfine/remote-claude/internal/store"
@@ -65,13 +66,13 @@ func (f *fakeProv) ServerBootstrap(h store.Host, alias, password string) (provis
 
 func (f *fakeProv) EnsureLocalSSHD(disablePassword bool) error { return f.err }
 
-func newTestServer(t *testing.T, prov Provisioner) (*Server, *fakeManager) {
+func newTestServer(t *testing.T, prov core.Provisioner) (*Server, *fakeManager) {
 	t.Helper()
 	dir := t.TempDir()
 	p := paths.Paths{RCConfigDir: dir, VlessNodes: filepath.Join(dir, "vless-nodes.txt")}
 	fm := &fakeManager{}
-	s := New(&store.Config{}, filepath.Join(dir, "config.json"), p, fm, prov, fakePlat{})
-	return s, fm
+	app := core.New(&store.Config{}, filepath.Join(dir, "config.json"), p, fm, prov, fakePlat{})
+	return New(app), fm
 }
 
 func do(t *testing.T, s *Server, method, path string, body any) (int, map[string]any) {

@@ -18,6 +18,7 @@ import (
 	"syscall"
 
 	"github.com/papasaidfine/remote-claude/internal/bridge"
+	"github.com/papasaidfine/remote-claude/internal/core"
 	"github.com/papasaidfine/remote-claude/internal/paths"
 	"github.com/papasaidfine/remote-claude/internal/platform"
 	"github.com/papasaidfine/remote-claude/internal/provision"
@@ -73,9 +74,12 @@ func runApp(addr string, openBrowser bool) {
 	plat := platform.New()
 	mgr := bridge.NewManager(sshbin.SSH())
 	prov := provision.New(p, plat)
-	srv := webui.New(cfg, cfgPath, p, mgr, prov, plat) // Normalizes cfg
+	app := core.New(cfg, cfgPath, p, mgr, prov, plat) // Normalizes cfg
+	srv := webui.New(app)
 
-	autoStart(cfg, prov, mgr)
+	app.AutoStart(func(h store.Host, err error) {
+		ui.Warn("auto-start %s: %v", h.Name, err)
+	})
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -110,22 +114,6 @@ func runApp(addr string, openBrowser bool) {
 
 	if err := httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
 		ui.Errf("remote-claude: server error: %v", err)
-	}
-}
-
-// autoStart brings up tunnels for hosts flagged AutoStart, best-effort.
-func autoStart(cfg *store.Config, prov *provision.Client, mgr *bridge.Manager) {
-	for _, h := range cfg.Hosts {
-		if !h.AutoStart {
-			continue
-		}
-		if err := prov.EnsureClient(h, cfg.ClientAlias); err != nil {
-			ui.Warn("auto-start %s: client setup failed: %v", h.Name, err)
-			continue
-		}
-		if err := mgr.Start(bridge.Spec{HostID: h.ID, Alias: paths.Alias, ReversePort: h.ReversePort}); err != nil {
-			ui.Warn("auto-start %s: %v", h.Name, err)
-		}
 	}
 }
 
