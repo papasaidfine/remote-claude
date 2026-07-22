@@ -1,0 +1,47 @@
+name: gui
+
+# Builds the native (Fyne) GUI on each OS's own runner — Fyne needs CGO, so this
+# can't be a GOOS cross-compile. Doubles as the compile check for the GUI.
+on:
+  push:
+    branches: [bridge-app]
+    paths:
+      - 'cmd/remote-claude-gui/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/gui.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  suffix: linux_amd64,   ext: '' }
+          - { os: macos-latest,   suffix: darwin_arm64,  ext: '' }
+          - { os: windows-latest, suffix: windows_amd64, ext: '.exe' }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Install Linux GUI deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev xorg-dev libxxf86vm-dev libwayland-dev libxkbcommon-dev
+      - name: Build GUI
+        env:
+          CGO_ENABLED: '1'
+        run: go build -tags gui -trimpath -ldflags "-s -w" -o "remote-claude-gui_${{ matrix.suffix }}${{ matrix.ext }}" ./cmd/remote-claude-gui
+      - uses: actions/upload-artifact@v4
+        with:
+          name: remote-claude-gui_${{ matrix.suffix }}
+          path: remote-claude-gui_${{ matrix.suffix }}${{ matrix.ext }}
+          if-no-files-found: error
