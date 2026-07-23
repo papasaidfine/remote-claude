@@ -9,6 +9,7 @@ import (
 
 	"github.com/papasaidfine/remote-claude/internal/paths"
 	"github.com/papasaidfine/remote-claude/internal/sshbin"
+	"github.com/papasaidfine/remote-claude/internal/sysproc"
 )
 
 // SetPerms tightens permissions on a file or directory (chmod / icacls).
@@ -53,7 +54,9 @@ func Ensure(p paths.Paths, setPerms SetPerms) (Result, error) {
 
 	if _, err := os.Stat(p.KeyPath); err == nil {
 		// Key exists: probe with an empty passphrase; success means unprotected.
-		out, probeErr := exec.Command(keygen, "-y", "-P", "", "-f", p.KeyPath).Output()
+		probe := exec.Command(keygen, "-y", "-P", "", "-f", p.KeyPath)
+		sysproc.Hide(probe)
+		out, probeErr := probe.Output()
 		pubPath := p.KeyPath + ".pub"
 		if _, statErr := os.Stat(pubPath); os.IsNotExist(statErr) {
 			if probeErr != nil {
@@ -96,12 +99,15 @@ func ValidatePub() func(pub string) error {
 			return err
 		}
 		tmp.Close()
-		return exec.Command(sshbin.Keygen(), "-lf", tmp.Name()).Run()
+		cmd := exec.Command(sshbin.Keygen(), "-lf", tmp.Name())
+		sysproc.Hide(cmd)
+		return cmd.Run()
 	}
 }
 
 func runKeygen(bin string, args ...string) error {
 	cmd := exec.Command(bin, args...)
+	sysproc.Hide(cmd)
 	cmd.Stdout = nil
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

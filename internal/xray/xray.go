@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/papasaidfine/remote-claude/internal/paths"
+	"github.com/papasaidfine/remote-claude/internal/sysproc"
 	"github.com/papasaidfine/remote-claude/internal/ui"
 )
 
@@ -146,7 +147,9 @@ func extractMember(zipPath, member, dest string) error {
 
 // LocalVersion returns the version string of bin (e.g. 25.0.0), or "".
 func LocalVersion(bin string) string {
-	out, err := exec.Command(bin, "version").Output()
+	cmd := exec.Command(bin, "version")
+	sysproc.Hide(cmd)
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}

@@ -21,6 +21,7 @@ import (
 	"github.com/papasaidfine/remote-claude/internal/sshbin"
 	"github.com/papasaidfine/remote-claude/internal/sshcfg"
 	"github.com/papasaidfine/remote-claude/internal/store"
+	"github.com/papasaidfine/remote-claude/internal/sysproc"
 	"github.com/papasaidfine/remote-claude/internal/usage"
 	"github.com/papasaidfine/remote-claude/internal/vless"
 	"github.com/papasaidfine/remote-claude/internal/xray"
@@ -383,6 +384,7 @@ func (a *App) HostUsage(alias string) (usage.Report, error) {
 	cmd := exec.Command(sshbin.SSH(),
 		"-o", "BatchMode=yes", "-o", "ConnectTimeout=20", "-o", "IdentitiesOnly=no",
 		alias, remote)
+	sysproc.Hide(cmd)
 	out, err := cmd.Output()
 	if len(out) > 0 {
 		// grep may exit non-zero on a final no-match batch even with data — parse it.

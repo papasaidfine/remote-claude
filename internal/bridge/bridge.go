@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/papasaidfine/remote-claude/internal/sysproc"
 )
 
 // State is the coarse lifecycle of a tunnel.
@@ -98,6 +100,7 @@ type execRunner struct{ bin string }
 
 func (e execRunner) Run(ctx context.Context, args []string) error {
 	cmd := exec.CommandContext(ctx, e.bin, args...)
+	sysproc.Hide(cmd)
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
 	err := cmd.Run()

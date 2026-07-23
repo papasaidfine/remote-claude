@@ -13,6 +13,7 @@ import (
 	"github.com/papasaidfine/remote-claude/internal/keys"
 	"github.com/papasaidfine/remote-claude/internal/paths"
 	"github.com/papasaidfine/remote-claude/internal/sshbin"
+	"github.com/papasaidfine/remote-claude/internal/sysproc"
 )
 
 //go:embed server_bootstrap.sh
@@ -77,6 +78,7 @@ func (c *Client) ServerBootstrap(alias, clientAlias string, reversePort int, pas
 	}, agentClaudeMD)
 
 	cmd := exec.Command(sshbin.SSH(), bootstrapSSHArgs(alias, password)...)
+	sysproc.Hide(cmd)
 	cmd.Stdin = strings.NewReader(script)
 	if password != "" {
 		cmd.Env = append(os.Environ(), askpassEnv(password)...)
