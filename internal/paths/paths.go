@@ -14,14 +14,6 @@ const Alias = "remote-claude"
 // KeyName is the default local key filename (local → server hop).
 const KeyName = "id_ed25519"
 
-// Managed-block markers. These MUST stay byte-identical to the strings the
-// original bootstrap scripts wrote, so existing ~/.ssh/config blocks keep
-// being recognized.
-const (
-	BeginMark = "# >>> " + Alias + " (managed by reverse-ssh-bootstrap) >>>"
-	EndMark   = "# <<< " + Alias + " <<<"
-)
-
 // Paths holds the resolved absolute locations for the current user/OS.
 type Paths struct {
 	SSHDir      string // ~/.ssh

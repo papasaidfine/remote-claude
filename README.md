@@ -3,64 +3,72 @@
 English | [中文](README.zh-CN.md)
 
 Run Claude on a remote server and have it work on the code on **your own
-machine** (Windows / macOS / Linux). A small app on your machine holds a reverse
-SSH tunnel open; the agent uses it to `ssh` back into your machine and does all
-project work there. Open as many normal SSH / VSCode Remote-SSH sessions to the
-server as you like — the tunnel is held separately, so nothing blocks.
+machine** (Windows / macOS / Linux). A small tray app on your machine holds a
+reverse SSH tunnel open; the agent uses it to `ssh` back into your machine and
+does all project work there. Open as many normal SSH / VSCode Remote-SSH
+sessions to the server as you like — the tunnel is held separately, so nothing
+blocks.
 
 ```
-you    ── VSCode Remote-SSH / ssh remote-claude ──▶  server   (any number of sessions)
-agent  ── ssh "$LC_CLIENT_NAME" ──▶  your machine            (reverse tunnel, held by the app)
+you    ── VSCode Remote-SSH / ssh <host> ──▶  server   (any number of sessions)
+agent  ── ssh "$LC_CLIENT_NAME" ──▶  your machine       (reverse tunnel, held by the app)
 ```
 
-One server can serve several of your devices — each device gets a name, and the
-agent reaches whichever one you're connected from.
+The app is a friendly view over your `~/.ssh/config`: it lists your hosts, and
+per host you can turn on a reverse tunnel, route through xray, set up the server
+side over the connection, and see Claude token usage & cost. One server can
+serve several of your devices — each device gets a name, and the agent reaches
+whichever one you're connected from.
 
-## Install
+## Get it
 
-**macOS / Linux**
+Download the desktop app for your OS from the
+[latest release](https://github.com/papasaidfine/remote-claude/releases):
+
+- Windows — `remote-claude-gui_windows_amd64.exe`
+- macOS — `remote-claude-gui_darwin_arm64`
+- Linux — `remote-claude-gui_linux_amd64`
+
+(The binaries are unsigned; on Windows, click through the SmartScreen prompt on
+first run.)
+
+Prefer a terminal / headless box? The CLI serves the same UI as a local web
+page:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.sh)   # macOS / Linux
 ```
-
-**Windows**
-
 ```powershell
-irm https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.ps1 | iex           # Windows
 ```
 
-GitHub blocked or slow? Route the download through your own proxy with
-`RC_PROXY`:
-
-```bash
-export RC_PROXY=http://127.0.0.1:7890
-bash <(curl -fsSL --proxy "$RC_PROXY" https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.sh)
-```
-
-```powershell
-$env:RC_PROXY = 'http://127.0.0.1:7890'
-(irm -Proxy $env:RC_PROXY https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.ps1) | iex
-```
+Then `remote-claude serve` opens the UI in your browser. GitHub blocked or slow?
+Prefix the download with your own proxy via `RC_PROXY`
+(e.g. `export RC_PROXY=http://127.0.0.1:7890`).
 
 ## Use
 
-Run `remote-claude`. It opens the app in your browser and keeps running in the
-background to hold the tunnel up. In the app:
+Open the app, then:
 
-1. **Name this machine** (e.g. `lisa-laptop`) — the agent reaches you back by
-   this name.
-2. **Add your host** — the server's address, SSH user, and reverse port. Turn on
-   xray if your network needs it, and add your `vless://` nodes.
-3. **Install / ensure the local ssh server** — so the agent can reach back in
+1. **Name this machine** (e.g. `lc-pc`) — the agent reaches you back by this
+   name. It's locked; click **Edit** to change it.
+2. **Install / ensure the local ssh server** — so the agent can reach back in
    (may ask for `sudo` / Administrator).
-4. **Start tunnel** — brings the reverse tunnel up and keeps it reconnected.
+3. **Add your host** (or use one already in `~/.ssh/config`) — its address, SSH
+   user, and port.
+4. **Enable the reverse tunnel** and set its port, then **Start** — it comes up
+   and stays reconnected.
 5. **Set up server** — configures the server side over the connection. The first
-   time, enter your password *on the server* so it can authorize your key; after
-   that it's automatic.
+   time it may ask for your server password to authorize your key; after that
+   it's automatic.
+6. **Xray** (optional, for censored/slow networks) — download the binary and add
+   your `vless://` nodes, then turn on xray per host.
+7. **Usage** — Claude token usage & Anthropic-priced cost per host, by model,
+   over the past 1 / 7 / 30 days.
 
-Then connect to the server as usual (VSCode Remote-SSH or `ssh remote-claude`)
-and start Claude. On the server the agent works on your machine through
+Turn on **Start this app when I log in** to keep tunnels up automatically.
+Closing the window hides to the tray; quit from the tray menu.
+
+Then connect to the server as usual (VSCode Remote-SSH or `ssh <host>`) and start
+Claude. On the server the agent works on your machine through
 `ssh "$LC_CLIENT_NAME"`.
-
-On a headless box, `remote-claude serve` runs the app without opening a browser.
