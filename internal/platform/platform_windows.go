@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/user"
-	"regexp"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -73,11 +72,8 @@ func (windowsPlatform) SetStrictPerms(path string, isDir bool) error {
 }
 
 func (windowsPlatform) StatusIncomingSSH() bool {
-	running, err := serviceRunning("sshd")
-	if err != nil || !running {
-		return false
-	}
-	return grepFileWin(winSshdConfig(), `(?m)^[ \t]*PubkeyAuthentication[ \t]+yes`)
+	running, _ := serviceRunning("sshd")
+	return running
 }
 
 func (windowsPlatform) EnsureIncomingSSH(disablePassword bool) error {
@@ -153,22 +149,29 @@ if ($cap.State -ne 'Installed') { Add-WindowsCapability -Online -Name $cap.Name 
 	return nil
 }
 
+// serviceRunning queries a service's state with only SC_MANAGER_CONNECT +
+// SERVICE_QUERY_STATUS, which any (non-admin) user can do — unlike mgr.Connect,
+// which asks for SC_MANAGER_ALL_ACCESS and fails without elevation.
 func serviceRunning(name string) (bool, error) {
-	m, err := mgr.Connect()
+	scm, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
 	if err != nil {
 		return false, err
 	}
-	defer m.Disconnect()
-	s, err := m.OpenService(name)
+	defer windows.CloseServiceHandle(scm)
+	np, err := windows.UTF16PtrFromString(name)
 	if err != nil {
 		return false, err
 	}
-	defer s.Close()
-	q, err := s.Query()
+	h, err := windows.OpenService(scm, np, windows.SERVICE_QUERY_STATUS)
 	if err != nil {
 		return false, err
 	}
-	return q.State == svc.Running, nil
+	defer windows.CloseServiceHandle(h)
+	var status windows.SERVICE_STATUS
+	if err := windows.QueryServiceStatus(h, &status); err != nil {
+		return false, err
+	}
+	return status.CurrentState == windows.SERVICE_RUNNING, nil
 }
 
 func enableAndStart(name string) error {
@@ -225,13 +228,4 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return os.WriteFile(dst, b, 0o644)
-}
-
-func grepFileWin(path, pattern string) bool {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	ok, _ := regexp.Match(pattern, b)
-	return ok
 }

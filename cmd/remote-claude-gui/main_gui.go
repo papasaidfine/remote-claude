@@ -24,6 +24,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/papasaidfine/remote-claude/internal/autostart"
 	"github.com/papasaidfine/remote-claude/internal/bridge"
 	"github.com/papasaidfine/remote-claude/internal/core"
 	"github.com/papasaidfine/remote-claude/internal/paths"
@@ -137,21 +138,29 @@ type gui struct {
 	core     *core.App
 	win      fyne.Window
 	alias    *widget.Entry
+	aliasBtn *widget.Button
 	status   *widget.Label
 	hostsBox *fyne.Container
 }
 
 func (g *gui) build() fyne.CanvasObject {
+	// This machine's name: locked (read-only) until you click Edit.
 	g.alias = widget.NewEntry()
-	g.alias.SetPlaceHolder("this machine's name, e.g. lisa-laptop")
-	saveAlias := widget.NewButton("Save name", func() {
-		if _, err := g.core.SetAlias(g.alias.Text); err != nil {
+	g.alias.SetPlaceHolder("this machine's name, e.g. lc-pc")
+	g.alias.Disable()
+	g.aliasBtn = widget.NewButton("Edit", g.toggleAliasEdit)
+	aliasRow := container.NewBorder(nil, nil, widget.NewLabel("This machine's name"), g.aliasBtn, g.alias)
+
+	// Start-on-login (OnChanged set after SetChecked so the initial state doesn't
+	// fire a write).
+	autoLaunch := widget.NewCheck("Start this app when I log in", nil)
+	autoLaunch.SetChecked(autostart.Enabled())
+	autoLaunch.OnChanged = func(on bool) {
+		if err := autostart.SetEnabled(on); err != nil {
 			dialog.ShowError(err, g.win)
-			return
+			autoLaunch.SetChecked(autostart.Enabled())
 		}
-		g.refresh()
-	})
-	aliasRow := container.NewBorder(nil, nil, widget.NewLabel("Name"), saveAlias, g.alias)
+	}
 
 	toolbar := container.NewHBox(
 		widget.NewButton("+ Add host", g.showAddHost),
@@ -164,13 +173,30 @@ func (g *gui) build() fyne.CanvasObject {
 	g.hostsBox = container.NewVBox()
 	scroll := container.NewVScroll(g.hostsBox)
 
-	top := container.NewVBox(aliasRow, widget.NewSeparator(), toolbar, g.status, widget.NewSeparator())
+	top := container.NewVBox(aliasRow, autoLaunch, widget.NewSeparator(), toolbar, g.status, widget.NewSeparator())
 	return container.NewBorder(top, nil, nil, nil, scroll)
+}
+
+// toggleAliasEdit flips the name field between read-only and editing; saving on
+// the second click.
+func (g *gui) toggleAliasEdit() {
+	if g.alias.Disabled() {
+		g.alias.Enable()
+		g.aliasBtn.SetText("Save")
+		return
+	}
+	if _, err := g.core.SetAlias(g.alias.Text); err != nil {
+		dialog.ShowError(err, g.win)
+		return
+	}
+	g.alias.Disable()
+	g.aliasBtn.SetText("Edit")
+	g.refresh()
 }
 
 func (g *gui) refresh() {
 	st := g.core.State()
-	if g.alias.Text == "" && st.ClientAlias != "" {
+	if g.alias.Disabled() { // keep the locked field in sync; don't clobber an edit
 		g.alias.SetText(st.ClientAlias)
 	}
 	g.status.SetText(fmt.Sprintf("%s  ·  local ssh server: %s  ·  %d xray node(s)  ·  hosts from ~/.ssh/config",
@@ -220,7 +246,7 @@ func (g *gui) hostCard(h core.HostView) fyne.CanvasObject {
 			start.SetText("Restart")
 		}
 		setup := widget.NewButton("Set up server", func() { g.showSetupServer(alias) })
-		auto := widget.NewCheck("auto-start", nil)
+		auto := widget.NewCheck("start tunnel when app opens", nil)
 		auto.SetChecked(h.AutoStart)
 		auto.OnChanged = func(on bool) { g.do(func() error { return g.core.SetAutoStart(alias, on) }) }
 		rows = append(rows,
