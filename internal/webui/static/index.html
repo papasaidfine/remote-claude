@@ -9,14 +9,22 @@
 <body>
   <header>
     <div class="wrap">
-      <h1>remote-claude</h1>
-      <p class="sub">Your <code>~/.ssh/config</code> hosts and their reverse tunnels. Editing a host writes its ssh config; “Start” just launches the tunnel per that config. Keep this window open to keep tunnels up.</p>
+      <div class="section-head">
+        <h1>remote-claude</h1>
+        <label class="lang-pick"><span data-i18n="language">Language</span>
+          <select id="lang">
+            <option value="en">English</option>
+            <option value="zh">中文</option>
+          </select>
+        </label>
+      </div>
+      <p class="sub" data-i18n-html="sub">Your <code>~/.ssh/config</code> hosts and their reverse tunnels. Editing a host writes its ssh config; “Start” just launches the tunnel per that config. Keep this window open to keep tunnels up.</p>
       <div class="alias">
-        <label>This machine's name
+        <label><span data-i18n="machine_name">This machine's name</span>
           <input id="alias" type="text" placeholder="e.g. lisa-laptop" autocomplete="off">
         </label>
-        <button id="alias-save">Save name</button>
-        <span class="hint">Written as <code>SetEnv LC_CLIENT_NAME</code> on hosts you add; the server reaches you back as <code>ssh &lt;name&gt;</code>.</span>
+        <button id="alias-save" data-i18n="save_name">Save name</button>
+        <span class="hint" data-i18n-html="alias_hint">Written as <code>SetEnv LC_CLIENT_NAME</code> on hosts you add; the server reaches you back as <code>ssh &lt;name&gt;</code>.</span>
       </div>
     </div>
   </header>
@@ -24,34 +32,34 @@
   <main class="wrap">
     <section>
       <div class="section-head">
-        <h2>Hosts <span class="hint">(scanned from ~/.ssh/config)</span></h2>
-        <button id="add-host">+ Add host</button>
+        <h2><span data-i18n="hosts">Hosts</span> <span class="hint" data-i18n="hosts_sub">(scanned from ~/.ssh/config)</span></h2>
+        <button id="add-host" data-i18n="add_host">+ Add host</button>
       </div>
       <div id="hosts"></div>
     </section>
 
     <section>
-      <h2>Local ssh server <span id="sshd-state" class="pill"></span></h2>
-      <p class="hint">The server reaches you back through the tunnel into this machine's sshd. Installing/hardening it may prompt for <code>sudo</code> in the launching terminal.</p>
+      <h2><span data-i18n="local_ssh">Local ssh server</span> <span id="sshd-state" class="pill"></span></h2>
+      <p class="hint" data-i18n-html="local_ssh_hint">The server reaches you back through the tunnel into this machine's sshd. Installing/hardening it may prompt for <code>sudo</code> in the launching terminal.</p>
       <div class="row">
-        <button id="sshd-ensure" class="secondary">Install / ensure running</button>
-        <label class="check inline"><input id="sshd-nopass" type="checkbox" checked> also disable password login</label>
+        <button id="sshd-ensure" class="secondary" data-i18n="install_ensure">Install / ensure running</button>
+        <label class="check inline"><input id="sshd-nopass" type="checkbox" checked> <span data-i18n="disable_pw">also disable password login</span></label>
         <span id="sshd-msg" class="msg"></span>
       </div>
     </section>
 
     <section>
       <h2>Xray <span id="xray-state" class="pill"></span></h2>
-      <p class="hint">Optional, for censored/slow networks. Download the xray binary, then add <code>vless://</code> nodes; turn on “xray” per host to route it through them.</p>
+      <p class="hint" data-i18n-html="xray_hint">Optional, for censored/slow networks. Download the xray binary, then add <code>vless://</code> nodes; turn on “xray” per host to route it through them.</p>
       <div class="row">
-        <button id="xray-download" class="secondary">Download / update xray</button>
-        <input id="xray-proxy" type="text" placeholder="download via proxy, e.g. http://127.0.0.1:7890 (optional, one-time)">
+        <button id="xray-download" class="secondary" data-i18n="xray_download">Download / update xray</button>
+        <input id="xray-proxy" type="text" placeholder="download via proxy, e.g. http://127.0.0.1:7890 (optional, one-time)" data-i18n-ph="xray_proxy_ph">
         <span id="xray-msg" class="msg"></span>
       </div>
-      <p class="hint">Nodes <span id="node-count" class="pill"></span> — one <code>vless://</code> URL per line; each connection picks a random node.</p>
+      <p class="hint"><span data-i18n="nodes">Nodes</span> <span id="node-count" class="pill"></span> — <span data-i18n="nodes_hint">one <code>vless://</code> URL per line; each connection picks a random node.</span></p>
       <textarea id="nodes" rows="5" spellcheck="false" placeholder="vless://uuid@host:port?...#name"></textarea>
       <div class="row">
-        <button id="nodes-save">Save nodes</button>
+        <button id="nodes-save" data-i18n="save_nodes">Save nodes</button>
         <span id="nodes-msg" class="msg"></span>
       </div>
     </section>
@@ -70,51 +78,51 @@
         <div class="host-meta dim"></div>
         <div class="host-err"></div>
         <div class="controls">
-          <label class="check inline"><input type="checkbox" class="rev-on"> reverse tunnel</label>
+          <label class="check inline"><input type="checkbox" class="rev-on"> <span data-i18n="reverse_tunnel">reverse tunnel</span></label>
           <input type="number" class="rev-port" min="1" max="65535" title="server-side reverse port">
           <label class="check inline"><input type="checkbox" class="xray-on"> xray</label>
-          <label class="check inline"><input type="checkbox" class="auto-on"> auto-start</label>
+          <label class="check inline"><input type="checkbox" class="auto-on"> <span data-i18n="auto_start">auto-start</span></label>
         </div>
       </div>
       <div class="host-actions">
         <button class="start">Start tunnel</button>
-        <button class="stop secondary">Stop</button>
-        <button class="setupserver secondary">Set up server</button>
-        <button class="usage secondary">Usage</button>
-        <button class="edit secondary">Edit</button>
-        <button class="del danger">Delete</button>
+        <button class="stop secondary" data-i18n="stop">Stop</button>
+        <button class="setupserver secondary" data-i18n="setup_server">Set up server</button>
+        <button class="usage secondary" data-i18n="usage">Usage</button>
+        <button class="edit secondary" data-i18n="edit">Edit</button>
+        <button class="del danger" data-i18n="delete">Delete</button>
       </div>
     </div>
   </template>
 
   <dialog id="add-dialog">
     <form id="add-form" method="dialog">
-      <h3>Add host</h3>
-      <label>Alias (the ssh name) <input name="alias" required placeholder="workbox"></label>
-      <label>Server host / IP <input name="hostname" required placeholder="server.example.com"></label>
-      <label>SSH user <input name="user" placeholder="devuser"></label>
-      <label>SSH port <input name="port" type="number" value="22" min="1" max="65535"></label>
+      <h3 data-i18n="add_host_title">Add host</h3>
+      <label><span data-i18n="alias_ssh">Alias (the ssh name)</span> <input name="alias" required placeholder="workbox"></label>
+      <label><span data-i18n="host_ip">Server host / IP</span> <input name="hostname" required placeholder="server.example.com"></label>
+      <label><span data-i18n="ssh_user">SSH user</span> <input name="user" placeholder="devuser"></label>
+      <label><span data-i18n="ssh_port">SSH port</span> <input name="port" type="number" value="22" min="1" max="65535"></label>
       <div class="form-err" id="add-err"></div>
       <div class="row end">
-        <button value="cancel" class="secondary" formnovalidate>Cancel</button>
-        <button value="save">Add</button>
+        <button value="cancel" class="secondary" formnovalidate data-i18n="cancel">Cancel</button>
+        <button value="save" data-i18n="add">Add</button>
       </div>
     </form>
   </dialog>
 
   <dialog id="edit-dialog">
     <form id="edit-form" method="dialog">
-      <h3>Edit <span id="edit-title"></span></h3>
+      <h3><span data-i18n="edit">Edit</span> <span id="edit-title"></span></h3>
       <input type="hidden" name="alias">
-      <label>Server host / IP <input name="hostname"></label>
-      <label>SSH user <input name="user"></label>
-      <label>SSH port <input name="port" type="number" min="1" max="65535"></label>
-      <p class="hint">All config lines for this host:</p>
+      <label><span data-i18n="host_ip">Server host / IP</span> <input name="hostname"></label>
+      <label><span data-i18n="ssh_user">SSH user</span> <input name="user"></label>
+      <label><span data-i18n="ssh_port">SSH port</span> <input name="port" type="number" min="1" max="65535"></label>
+      <p class="hint" data-i18n="all_config_lines">All config lines for this host:</p>
       <pre id="edit-params" class="params"></pre>
       <div class="form-err" id="edit-err"></div>
       <div class="row end">
-        <button value="cancel" class="secondary" formnovalidate>Cancel</button>
-        <button value="save">Save</button>
+        <button value="cancel" class="secondary" formnovalidate data-i18n="cancel">Cancel</button>
+        <button value="save" data-i18n="save">Save</button>
       </div>
     </form>
   </dialog>
@@ -122,12 +130,12 @@
   <dialog id="usage-dialog">
     <h3 id="usage-title">Claude usage</h3>
     <div class="tabs">
-      <button type="button" class="tab active" data-w="day">Past 1 day</button>
-      <button type="button" class="tab" data-w="week">Past 7 days</button>
-      <button type="button" class="tab" data-w="month">Past 30 days</button>
+      <button type="button" class="tab active" data-w="day" data-i18n="past_1d">Past 1 day</button>
+      <button type="button" class="tab" data-w="week" data-i18n="past_7d">Past 7 days</button>
+      <button type="button" class="tab" data-w="month" data-i18n="past_30d">Past 30 days</button>
     </div>
-    <div id="usage-body"><p class="hint">Loading…</p></div>
-    <div class="row end"><button id="usage-close" class="secondary">Close</button></div>
+    <div id="usage-body"><p class="hint" data-i18n="loading">Loading…</p></div>
+    <div class="row end"><button id="usage-close" class="secondary" data-i18n="close">Close</button></div>
   </dialog>
 
   <script src="/static/app.js"></script>

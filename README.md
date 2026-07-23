@@ -67,7 +67,10 @@ Open the app, then:
    over the past 1 / 7 / 30 days.
 
 Turn on **Start this app when I log in** to keep tunnels up automatically.
-Closing the window hides to the tray; quit from the tray menu.
+Closing the window hides to the tray; quit from the tray menu. Pick the UI
+language (English / 中文) from the selector at the top. **Check for updates**
+installs the latest release in place — if the direct download stalls it retries
+through xray automatically.
 
 Then connect to the server as usual (VSCode Remote-SSH or `ssh <host>`) and start
 Claude. On the server the agent works on your machine through

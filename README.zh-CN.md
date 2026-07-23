@@ -56,7 +56,8 @@ irm https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.ps
    30 天。
 
 打开 **Start this app when I log in** 可让隧道开机自动常驻。关窗会缩到托盘，从托盘
-菜单退出。
+菜单退出。顶部的语言选择器可切换界面语言（English / 中文）。**Check for updates**
+会就地安装最新版本——直连下载卡住时会自动改走 xray 重试。
 
 然后照常连服务器（VSCode Remote-SSH 或 `ssh <host>`）并启动 Claude。在服务器上，
 agent 通过 `ssh "$LC_CLIENT_NAME"` 在你的电脑上干活。

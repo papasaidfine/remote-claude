@@ -27,10 +27,12 @@ import (
 	"github.com/papasaidfine/remote-claude/internal/autostart"
 	"github.com/papasaidfine/remote-claude/internal/bridge"
 	"github.com/papasaidfine/remote-claude/internal/core"
+	"github.com/papasaidfine/remote-claude/internal/i18n"
 	"github.com/papasaidfine/remote-claude/internal/paths"
 	"github.com/papasaidfine/remote-claude/internal/platform"
 	"github.com/papasaidfine/remote-claude/internal/provision"
 	"github.com/papasaidfine/remote-claude/internal/relay"
+	"github.com/papasaidfine/remote-claude/internal/selfupdate"
 	"github.com/papasaidfine/remote-claude/internal/sshbin"
 	"github.com/papasaidfine/remote-claude/internal/store"
 	"github.com/papasaidfine/remote-claude/internal/usage"
@@ -60,6 +62,7 @@ func main() {
 			os.Exit(1)
 		}
 	}()
+	selfupdate.CleanupOldBinary() // sweep a "<exe>.old" left by a prior self-update
 	run()
 }
 
@@ -99,9 +102,10 @@ func run() {
 	a.Lifecycle().SetOnStopped(func() { mgr.StopAll() })
 
 	w := a.NewWindow("remote-claude " + version)
-	w.Resize(fyne.NewSize(720, 620))
+	w.Resize(fyne.NewSize(720, 640))
 
-	g := &gui{core: appCore, win: w}
+	lang := i18n.Parse(appCore.Lang())
+	g := &gui{core: appCore, app: a, win: w, lang: lang, pr: i18n.P(lang)}
 	w.SetContent(g.build())
 	g.refresh()
 	go g.autoRefresh()
@@ -137,24 +141,42 @@ func die(err error) {
 
 type gui struct {
 	core     *core.App
+	app      fyne.App
 	win      fyne.Window
+	lang     i18n.Lang
+	pr       i18n.Printer
 	alias    *widget.Entry
 	aliasBtn *widget.Button
 	status   *widget.Label
 	hostsBox *fyne.Container
 }
 
+// t translates key into the active UI language.
+func (g *gui) t(key string) string { return g.pr.T(key) }
+
+// applyLang switches the UI language, persists it, and rebuilds the window.
+func (g *gui) applyLang(l i18n.Lang) {
+	if l == g.lang {
+		return
+	}
+	g.lang = l
+	g.pr = i18n.P(l)
+	_ = g.core.SetLang(string(l))
+	g.win.SetContent(g.build())
+	g.refresh()
+}
+
 func (g *gui) build() fyne.CanvasObject {
 	// This machine's name: locked (read-only) until you click Edit.
 	g.alias = widget.NewEntry()
-	g.alias.SetPlaceHolder("this machine's name, e.g. lc-pc")
+	g.alias.SetPlaceHolder(g.t("machine_name_ph"))
 	g.alias.Disable()
-	g.aliasBtn = widget.NewButton("Edit", g.toggleAliasEdit)
-	aliasRow := container.NewBorder(nil, nil, widget.NewLabel("This machine's name"), g.aliasBtn, g.alias)
+	g.aliasBtn = widget.NewButton(g.t("edit"), g.toggleAliasEdit)
+	aliasRow := container.NewBorder(nil, nil, widget.NewLabel(g.t("machine_name_label")), g.aliasBtn, g.alias)
 
 	// Start-on-login (OnChanged set after SetChecked so the initial state doesn't
 	// fire a write).
-	autoLaunch := widget.NewCheck("Start this app when I log in", nil)
+	autoLaunch := widget.NewCheck(g.t("start_on_login"), nil)
 	autoLaunch.SetChecked(autostart.Enabled())
 	autoLaunch.OnChanged = func(on bool) {
 		if err := autostart.SetEnabled(on); err != nil {
@@ -163,18 +185,36 @@ func (g *gui) build() fyne.CanvasObject {
 		}
 	}
 
+	// Language picker (OnChanged assigned after SetSelected so it doesn't fire).
+	var opts []string
+	for _, l := range i18n.Available {
+		opts = append(opts, l.Name())
+	}
+	langSel := widget.NewSelect(opts, nil)
+	langSel.SetSelected(g.lang.Name())
+	langSel.OnChanged = func(name string) {
+		for _, l := range i18n.Available {
+			if l.Name() == name {
+				g.applyLang(l)
+				return
+			}
+		}
+	}
+	langRow := container.NewHBox(widget.NewLabel(g.t("language")), langSel)
+
 	toolbar := container.NewHBox(
-		widget.NewButton("+ Add host", g.showAddHost),
+		widget.NewButton(g.t("add_host"), g.showAddHost),
 		widget.NewButton("Xray", g.showXray),
-		widget.NewButton("Local ssh server", g.showLocalSSHD),
-		widget.NewButton("Refresh", g.refresh),
+		widget.NewButton(g.t("local_ssh_server"), g.showLocalSSHD),
+		widget.NewButton(g.t("refresh"), g.refresh),
+		widget.NewButton(g.t("check_update"), g.checkUpdate),
 	)
 	g.status = widget.NewLabel("")
 
 	g.hostsBox = container.NewVBox()
 	scroll := container.NewVScroll(g.hostsBox)
 
-	top := container.NewVBox(aliasRow, autoLaunch, widget.NewSeparator(), toolbar, g.status, widget.NewSeparator())
+	top := container.NewVBox(aliasRow, autoLaunch, langRow, widget.NewSeparator(), toolbar, g.status, widget.NewSeparator())
 	return container.NewBorder(top, nil, nil, nil, scroll)
 }
 
@@ -183,7 +223,7 @@ func (g *gui) build() fyne.CanvasObject {
 func (g *gui) toggleAliasEdit() {
 	if g.alias.Disabled() {
 		g.alias.Enable()
-		g.aliasBtn.SetText("Save")
+		g.aliasBtn.SetText(g.t("save"))
 		return
 	}
 	if _, err := g.core.SetAlias(g.alias.Text); err != nil {
@@ -191,7 +231,7 @@ func (g *gui) toggleAliasEdit() {
 		return
 	}
 	g.alias.Disable()
-	g.aliasBtn.SetText("Edit")
+	g.aliasBtn.SetText(g.t("edit"))
 	g.refresh()
 }
 
@@ -200,12 +240,12 @@ func (g *gui) refresh() {
 	if g.alias.Disabled() { // keep the locked field in sync; don't clobber an edit
 		g.alias.SetText(st.ClientAlias)
 	}
-	g.status.SetText(fmt.Sprintf("%s  ·  local ssh server: %s  ·  %d xray node(s)  ·  hosts from ~/.ssh/config",
-		st.Platform, yn(st.LocalSSHOK), st.NodeCount))
+	g.status.SetText(fmt.Sprintf(g.t("status_fmt"),
+		st.Platform, g.yn(st.LocalSSHOK), st.NodeCount))
 
 	g.hostsBox.Objects = nil
 	if len(st.Hosts) == 0 {
-		g.hostsBox.Add(widget.NewLabel("No hosts in ~/.ssh/config yet — click “+ Add host”."))
+		g.hostsBox.Add(widget.NewLabel(g.t("no_hosts")))
 	}
 	for _, h := range st.Hosts {
 		g.hostsBox.Add(g.hostCard(h))
@@ -218,14 +258,14 @@ func (g *gui) hostCard(h core.HostView) fyne.CanvasObject {
 	title := widget.NewLabelWithStyle(alias+"   ("+target(h)+")",
 		fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
-	xrayCheck := widget.NewCheck("route through xray", nil)
+	xrayCheck := widget.NewCheck(g.t("route_xray"), nil)
 	xrayCheck.SetChecked(h.HasProxy)
 	xrayCheck.OnChanged = func(on bool) { g.do(func() error { return g.core.SetProxy(alias, on) }) }
 
-	edit := widget.NewButton("Edit", func() { g.showEdit(h) })
-	usageBtn := widget.NewButton("Usage", func() { g.showUsage(alias) })
-	del := widget.NewButton("Delete", func() {
-		dialog.ShowConfirm("Delete host", "Delete “"+alias+"” from ~/.ssh/config? This stops its tunnel.",
+	edit := widget.NewButton(g.t("edit"), func() { g.showEdit(h) })
+	usageBtn := widget.NewButton(g.t("usage"), func() { g.showUsage(alias) })
+	del := widget.NewButton(g.t("delete"), func() {
+		dialog.ShowConfirm(g.t("delete_host_title"), fmt.Sprintf(g.t("delete_host_conf_fmt"), alias),
 			func(ok bool) {
 				if ok {
 					g.do(func() error { return g.core.RemoveHost(alias) })
@@ -236,19 +276,19 @@ func (g *gui) hostCard(h core.HostView) fyne.CanvasObject {
 	rows := []fyne.CanvasObject{title}
 	if h.HasReverse {
 		// A tunnel host: full tunnel controls.
-		rows = append(rows, widget.NewLabel(fmt.Sprintf("reverse tunnel :%d  ·  tunnel: %s",
-			h.ReversePort, stateLabel(h.Status))))
-		start := widget.NewButton("Start", func() {
+		rows = append(rows, widget.NewLabel(fmt.Sprintf(g.t("reverse_status_fmt"),
+			h.ReversePort, g.stateLabel(h.Status))))
+		start := widget.NewButton(g.t("start"), func() {
 			g.do(func() error { _, err := g.core.StartTunnel(alias); return err })
 		})
-		stop := widget.NewButton("Stop", func() { g.core.StopTunnel(alias); g.refresh() })
+		stop := widget.NewButton(g.t("stop"), func() { g.core.StopTunnel(alias); g.refresh() })
 		if h.Status.State == bridge.StateStopped {
 			stop.Disable()
 		} else {
-			start.SetText("Restart")
+			start.SetText(g.t("restart"))
 		}
-		setup := widget.NewButton("Set up server", func() { g.showSetupServer(alias) })
-		auto := widget.NewCheck("start tunnel when app opens", nil)
+		setup := widget.NewButton(g.t("setup_server"), func() { g.showSetupServer(alias) })
+		auto := widget.NewCheck(g.t("auto_start_tunnel"), nil)
 		auto.SetChecked(h.AutoStart)
 		auto.OnChanged = func(on bool) { g.do(func() error { return g.core.SetAutoStart(alias, on) }) }
 		rows = append(rows,
@@ -257,10 +297,10 @@ func (g *gui) hostCard(h core.HostView) fyne.CanvasObject {
 	} else {
 		// A plain ssh host: just show it and offer to make it a tunnel host.
 		rows = append(rows,
-			widget.NewLabelWithStyle("plain ssh host — no reverse tunnel",
+			widget.NewLabelWithStyle(g.t("plain_host"),
 				fyne.TextAlignLeading, fyne.TextStyle{Italic: true}),
 			container.NewHBox(
-				widget.NewButton("Enable reverse tunnel", func() {
+				widget.NewButton(g.t("enable_reverse"), func() {
 					g.do(func() error { return g.core.SetReverseTunnel(alias, 2222) })
 				}),
 				usageBtn, xrayCheck, edit, del))
@@ -287,12 +327,12 @@ func (g *gui) showAddHost() {
 	port := widget.NewEntry()
 	port.SetText("22")
 	items := []*widget.FormItem{
-		widget.NewFormItem("Alias (ssh name)", alias),
-		widget.NewFormItem("Host / IP", host),
-		widget.NewFormItem("SSH user", user),
-		widget.NewFormItem("SSH port", port),
+		widget.NewFormItem(g.t("alias_ssh_name"), alias),
+		widget.NewFormItem(g.t("host_ip"), host),
+		widget.NewFormItem(g.t("ssh_user"), user),
+		widget.NewFormItem(g.t("ssh_port"), port),
 	}
-	d := dialog.NewForm("Add host", "Add", "Cancel", items, func(ok bool) {
+	d := dialog.NewForm(g.t("add_host_title"), g.t("add"), g.t("cancel"), items, func(ok bool) {
 		if !ok {
 			return
 		}
@@ -316,13 +356,13 @@ func (g *gui) showEdit(h core.HostView) {
 		rport.SetText(strconv.Itoa(h.ReversePort))
 	}
 	items := []*widget.FormItem{
-		widget.NewFormItem("Host / IP", host),
-		widget.NewFormItem("SSH user", user),
-		widget.NewFormItem("SSH port", port),
-		widget.NewFormItem("Reverse port (blank = off)", rport),
+		widget.NewFormItem(g.t("host_ip"), host),
+		widget.NewFormItem(g.t("ssh_user"), user),
+		widget.NewFormItem(g.t("ssh_port"), port),
+		widget.NewFormItem(g.t("reverse_port"), rport),
 	}
 	alias := h.Alias
-	d := dialog.NewForm("Edit "+alias, "Save", "Cancel", items, func(ok bool) {
+	d := dialog.NewForm(fmt.Sprintf(g.t("edit_title_fmt"), alias), g.t("save"), g.t("cancel"), items, func(ok bool) {
 		if !ok {
 			return
 		}
@@ -372,10 +412,8 @@ func isAuthError(err error) bool {
 
 func (g *gui) promptSetupPassword(alias string) {
 	pw := widget.NewPasswordEntry()
-	info := widget.NewLabel("The server rejected your key — it isn't authorized there yet.\n" +
-		"If the server accepts a password, enter it to authorize your key.\n" +
-		"(Key-only server? Cancel and add ~/.ssh/id_ed25519.pub to its\nauthorized_keys yourself.)")
-	dialog.ShowCustomConfirm("Set up server", "Authorize with password", "Cancel",
+	info := widget.NewLabel(g.t("setup_pw_info"))
+	dialog.ShowCustomConfirm(g.t("setup_server"), g.t("setup_pw_authorize"), g.t("cancel"),
 		container.NewVBox(info, pw), func(ok bool) {
 			if !ok {
 				return
@@ -394,9 +432,8 @@ func (g *gui) promptSetupPassword(alias string) {
 }
 
 func (g *gui) setupDone(res provision.ServerResult) {
-	dialog.ShowInformation("Server configured",
-		fmt.Sprintf("Configured as %q. Its connect-back key was %s on this machine.",
-			res.Alias, authLabel(res.Authorized)), g.win)
+	dialog.ShowInformation(g.t("server_configured"),
+		fmt.Sprintf(g.t("server_conf_fmt"), res.Alias, g.authLabel(res.Authorized)), g.win)
 	g.refresh()
 }
 
@@ -404,43 +441,44 @@ func (g *gui) setupDone(res provision.ServerResult) {
 // shows a 1D/7D/30D tabbed, priced breakdown.
 func (g *gui) showUsage(alias string) {
 	body := container.NewStack(container.NewPadded(
-		widget.NewLabel("Reading Claude usage from " + alias + " …")))
-	d := dialog.NewCustom("Claude usage — "+alias, "Close", body, g.win)
+		widget.NewLabel(fmt.Sprintf(g.t("reading_usage_fmt"), alias))))
+	d := dialog.NewCustom(fmt.Sprintf(g.t("usage_title_fmt"), alias), g.t("close"), body, g.win)
 	d.Resize(fyne.NewSize(640, 480))
 	d.Show()
 	go func() {
 		rep, err := g.core.HostUsage(alias)
 		fyne.Do(func() {
 			if err != nil {
-				body.Objects = []fyne.CanvasObject{container.NewPadded(widget.NewLabel("Failed: " + err.Error()))}
+				body.Objects = []fyne.CanvasObject{container.NewPadded(widget.NewLabel(fmt.Sprintf(g.t("failed_fmt"), err.Error())))}
 			} else {
-				body.Objects = []fyne.CanvasObject{usageTabs(rep)}
+				body.Objects = []fyne.CanvasObject{g.usageTabs(rep)}
 			}
 			body.Refresh()
 		})
 	}()
 }
 
-func usageTabs(rep usage.Report) fyne.CanvasObject {
+func (g *gui) usageTabs(rep usage.Report) fyne.CanvasObject {
 	return container.NewAppTabs(
-		container.NewTabItem("Past 1 day", usageWindow(rep.Day)),
-		container.NewTabItem("Past 7 days", usageWindow(rep.Week)),
-		container.NewTabItem("Past 30 days", usageWindow(rep.Month)),
+		container.NewTabItem(g.t("past_1d"), g.usageWindow(rep.Day)),
+		container.NewTabItem(g.t("past_7d"), g.usageWindow(rep.Week)),
+		container.NewTabItem(g.t("past_30d"), g.usageWindow(rep.Month)),
 	)
 }
 
-func usageWindow(w usage.Window) fyne.CanvasObject {
+func (g *gui) usageWindow(w usage.Window) fyne.CanvasObject {
 	if len(w.Models) == 0 {
-		return container.NewPadded(widget.NewLabel("No usage in this window."))
+		return container.NewPadded(widget.NewLabel(g.t("no_usage_window")))
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%-22s %9s %9s %9s %9s %10s\n", "Model", "Input", "Output", "CacheW", "CacheR", "Cost")
+	fmt.Fprintf(&b, "%-22s %9s %9s %9s %9s %10s\n",
+		g.t("col_model"), g.t("col_input"), g.t("col_output"), g.t("col_cache_w"), g.t("col_cache_r"), g.t("col_cost"))
 	for _, m := range w.Models {
 		fmt.Fprintf(&b, "%-22s %9s %9s %9s %9s %10s\n",
 			shortModel(m.Model), tok(m.Tokens.Input), tok(m.Tokens.Output),
 			tok(m.Tokens.CacheWrite), tok(m.Tokens.CacheRead), "$"+money(m.Cost))
 	}
-	fmt.Fprintf(&b, "%-22s %9s %9s %9s %9s %10s\n", "TOTAL",
+	fmt.Fprintf(&b, "%-22s %9s %9s %9s %9s %10s\n", g.t("col_total"),
 		tok(w.Total.Input), tok(w.Total.Output), tok(w.Total.CacheWrite), tok(w.Total.CacheRead), "$"+money(w.Cost))
 	return container.NewVScroll(widget.NewTextGridFromString(b.String()))
 }
@@ -480,22 +518,22 @@ func (g *gui) do(fn func() error) {
 
 func (g *gui) showXray() {
 	proxy := widget.NewEntry()
-	proxy.SetPlaceHolder("download via proxy, e.g. http://127.0.0.1:7890 (optional, one-time)")
+	proxy.SetPlaceHolder(g.t("xray_proxy_ph"))
 	status := widget.NewLabel("")
 	var download *widget.Button
-	download = widget.NewButton("Download / update xray", func() {
+	download = widget.NewButton(g.t("xray_download"), func() {
 		download.Disable()
-		status.SetText("Downloading… (this can take a moment)")
+		status.SetText(g.t("downloading"))
 		p := strings.TrimSpace(proxy.Text)
 		go func() {
 			err := g.core.InstallXray(p)
 			fyne.Do(func() {
 				download.Enable()
 				if err != nil {
-					status.SetText("Failed: " + err.Error())
+					status.SetText(fmt.Sprintf(g.t("failed_fmt"), err.Error()))
 					return
 				}
-				status.SetText("xray ready.")
+				status.SetText(g.t("xray_ready"))
 				proxy.SetText("")
 				g.refresh()
 			})
@@ -505,17 +543,17 @@ func (g *gui) showXray() {
 	nodesEntry := widget.NewMultiLineEntry()
 	raw, _ := g.core.Nodes()
 	nodesEntry.SetText(raw)
-	nodesEntry.SetPlaceHolder("one vless:// URL per line; # comments allowed")
+	nodesEntry.SetPlaceHolder(g.t("nodes_ph"))
 	nodesEntry.Wrapping = fyne.TextWrapOff
 
 	top := container.NewVBox(
 		container.NewBorder(nil, nil, nil, download, proxy),
 		status,
-		widget.NewLabel("Nodes (one vless:// per line):"),
+		widget.NewLabel(g.t("nodes_label")),
 	)
 	content := container.NewBorder(top, nil, nil, nil, container.NewVScroll(nodesEntry))
 
-	d := dialog.NewCustomConfirm("Xray", "Save nodes", "Close", content, func(ok bool) {
+	d := dialog.NewCustomConfirm("Xray", g.t("save_nodes"), g.t("close"), content, func(ok bool) {
 		if !ok {
 			return
 		}
@@ -530,12 +568,10 @@ func (g *gui) showXray() {
 }
 
 func (g *gui) showLocalSSHD() {
-	disable := widget.NewCheck("also disable password login (recommended)", nil)
+	disable := widget.NewCheck(g.t("sshd_disable_pw"), nil)
 	disable.SetChecked(true)
-	info := widget.NewLabel("Install/ensure the local ssh server so the agent can reach\n" +
-		"back in. May prompt for sudo / Administrator in the terminal\n" +
-		"where you launched the app.")
-	dialog.ShowCustomConfirm("Local ssh server", "Install / ensure", "Cancel",
+	info := widget.NewLabel(g.t("sshd_info"))
+	dialog.ShowCustomConfirm(g.t("local_ssh_server"), g.t("sshd_install"), g.t("cancel"),
 		container.NewVBox(info, disable), func(ok bool) {
 			if !ok {
 				return
@@ -545,30 +581,103 @@ func (g *gui) showLocalSSHD() {
 				dialog.ShowError(err, g.win)
 				return
 			}
-			dialog.ShowInformation("Local ssh server", "Done — running: "+yn(running), g.win)
+			dialog.ShowInformation(g.t("local_ssh_server"), fmt.Sprintf(g.t("sshd_done_fmt"), g.yn(running)), g.win)
 			g.refresh()
 		}, g.win)
 }
 
-func stateLabel(s bridge.Status) string {
+// checkUpdate queries GitHub for a newer release and, if one exists, offers to
+// download and install it. Network work runs off the UI thread.
+func (g *gui) checkUpdate() {
+	prog := dialog.NewCustom(g.t("update_title"), g.t("close"),
+		widget.NewLabel(g.t("update_checking")), g.win)
+	prog.Show()
+	go func() {
+		rel, err := selfupdate.Check(version)
+		fyne.Do(func() {
+			prog.Hide()
+			switch {
+			case err != nil:
+				dialog.ShowError(fmt.Errorf(g.t("update_failed_fmt"), err), g.win)
+			case version == "dev":
+				dialog.ShowInformation(g.t("update_title"), g.t("update_dev"), g.win)
+			case !rel.HasUpdate:
+				dialog.ShowInformation(g.t("update_title"), fmt.Sprintf(g.t("update_latest_fmt"), version), g.win)
+			default:
+				dialog.ShowCustomConfirm(g.t("update_title"), g.t("update_download_yes"), g.t("cancel"),
+					widget.NewLabel(fmt.Sprintf(g.t("update_avail_fmt"), version, rel.Version)),
+					func(ok bool) {
+						if ok {
+							g.applyUpdate()
+						}
+					}, g.win)
+			}
+		})
+	}()
+}
+
+// applyUpdate downloads and installs the latest release, then offers a restart.
+func (g *gui) applyUpdate() {
+	prog := dialog.NewCustom(g.t("update_title"), g.t("close"),
+		widget.NewLabel(g.t("update_downloading")), g.win)
+	prog.Show()
+	go func() {
+		err := selfupdate.Apply("")
+		fyne.Do(func() {
+			prog.Hide()
+			if err != nil {
+				dialog.ShowError(fmt.Errorf(g.t("update_failed_fmt"), err), g.win)
+				return
+			}
+			dialog.ShowCustomConfirm(g.t("update_title"), g.t("restart_now"), g.t("later"),
+				widget.NewLabel(g.t("update_done")), func(ok bool) {
+					if !ok {
+						return
+					}
+					if err := selfupdate.Restart(); err != nil {
+						dialog.ShowError(err, g.win)
+						return
+					}
+					g.app.Quit() // triggers OnStopped → tunnels stop; the new process takes over
+				}, g.win)
+		})
+	}()
+}
+
+func (g *gui) stateLabel(s bridge.Status) string {
+	name := g.stateName(s.State)
 	if s.State == bridge.StateRetrying && s.LastError != "" {
-		return string(s.State) + " (" + s.LastError + ")"
+		return name + " (" + s.LastError + ")"
 	}
-	return string(s.State)
+	return name
 }
 
-func yn(b bool) string {
-	if b {
-		return "running"
+func (g *gui) stateName(st bridge.State) string {
+	switch st {
+	case bridge.StateStopped:
+		return g.t("state_stopped")
+	case bridge.StateConnecting:
+		return g.t("state_connecting")
+	case bridge.StateUp:
+		return g.t("state_up")
+	case bridge.StateRetrying:
+		return g.t("state_retrying")
 	}
-	return "not detected"
+	return string(st)
 }
 
-func authLabel(b bool) string {
+func (g *gui) yn(b bool) string {
 	if b {
-		return "authorized"
+		return g.t("running")
 	}
-	return "already present"
+	return g.t("not_detected")
+}
+
+func (g *gui) authLabel(b bool) string {
+	if b {
+		return g.t("authorized")
+	}
+	return g.t("already_present")
 }
 
 func atoi(s string, def int) int {

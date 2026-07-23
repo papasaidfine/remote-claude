@@ -22,6 +22,7 @@ type HostMeta struct {
 // Config is the persisted metadata document.
 type Config struct {
 	ClientAlias string              `json:"client_alias"`
+	Lang        string              `json:"lang,omitempty"` // UI language code ("" = auto-detect)
 	Hosts       map[string]HostMeta `json:"hosts,omitempty"`
 }
 

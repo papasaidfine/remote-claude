@@ -24,6 +24,11 @@ code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-si
 
 header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 22px 0 18px; }
 h1 { margin: 0; font-size: 22px; letter-spacing: 0.2px; }
+.lang-pick { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--dim); }
+.lang-pick select {
+  background: var(--bg); color: var(--text); border: 1px solid var(--line);
+  border-radius: 7px; padding: 5px 8px; font: inherit;
+}
 .sub { margin: 4px 0 16px; color: var(--dim); }
 .alias { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
 .alias label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--dim); }
