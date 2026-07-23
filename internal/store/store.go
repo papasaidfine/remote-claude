@@ -6,7 +6,6 @@ package store
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -31,18 +30,20 @@ func Path(p paths.Paths) string {
 	return filepath.Join(p.RCConfigDir, "config.json")
 }
 
-// Load reads the metadata file. A missing file yields an empty (non-nil) Config.
+// Load reads the metadata file. It is deliberately tolerant: a missing,
+// unreadable, or unparseable file (e.g. left over from an older version with a
+// different shape) yields a fresh empty Config rather than an error — a bad
+// config.json must never stop the app from launching. It will be replaced on
+// the next save.
 func Load(path string) (*Config, error) {
+	fresh := &Config{Hosts: map[string]HostMeta{}}
 	raw, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return &Config{Hosts: map[string]HostMeta{}}, nil
-	}
 	if err != nil {
-		return nil, err
+		return fresh, nil
 	}
 	var c Config
 	if err := json.Unmarshal(raw, &c); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return fresh, nil
 	}
 	if c.Hosts == nil {
 		c.Hosts = map[string]HostMeta{}

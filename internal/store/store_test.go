@@ -1,6 +1,7 @@
 package store
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -12,6 +13,22 @@ func TestLoadMissingReturnsEmpty(t *testing.T) {
 	}
 	if c == nil || c.ClientAlias != "" || len(c.Hosts) != 0 {
 		t.Fatalf("want empty config, got %+v", c)
+	}
+}
+
+func TestLoadCorruptOrOldShapeReturnsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	// An older-version file where "hosts" was an array, not a map.
+	old := filepath.Join(dir, "old.json")
+	os.WriteFile(old, []byte(`{"client_alias":"x","hosts":[{"id":"a"}]}`), 0o600)
+	if c, err := Load(old); err != nil || c == nil || len(c.Hosts) != 0 {
+		t.Fatalf("incompatible config must load as empty, got err=%v c=%+v", err, c)
+	}
+	// Garbage.
+	bad := filepath.Join(dir, "bad.json")
+	os.WriteFile(bad, []byte("not json at all"), 0o600)
+	if c, err := Load(bad); err != nil || c == nil {
+		t.Fatalf("garbage config must load as empty, got err=%v c=%+v", err, c)
 	}
 }
 

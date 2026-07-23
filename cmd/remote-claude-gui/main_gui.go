@@ -8,7 +8,10 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
+	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -47,14 +50,41 @@ func main() {
 		os.Exit(relay.Main(os.Args[2:]))
 	}
 
+	closeLog := setupLog()
+	defer closeLog()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("panic: %v\n%s", r, debug.Stack())
+			os.Exit(1)
+		}
+	}()
+	run()
+}
+
+// setupLog points the standard logger at a file next to the config, so a GUI
+// crash (there is no console on Windows) leaves a trace the user can send. It is
+// best-effort: failures are ignored.
+func setupLog() func() {
+	dir := os.TempDir()
+	if p, err := paths.Resolve(); err == nil {
+		dir = p.RCConfigDir
+	}
+	_ = os.MkdirAll(dir, 0o755)
+	f, err := os.OpenFile(filepath.Join(dir, "gui.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return func() {}
+	}
+	log.SetOutput(f)
+	log.Printf("remote-claude-gui %s starting", version)
+	return func() { f.Close() }
+}
+
+func run() {
 	p, err := paths.Resolve()
 	if err != nil {
 		die(err)
 	}
-	cfg, err := store.Load(store.Path(p))
-	if err != nil {
-		die(err)
-	}
+	cfg, _ := store.Load(store.Path(p)) // tolerant: never nil, never fatal
 	plat := platform.New()
 	mgr := bridge.NewManager(sshbin.SSH())
 	prov := provision.New(p, plat)
@@ -98,6 +128,7 @@ func (g *gui) autoRefresh() {
 }
 
 func die(err error) {
+	log.Printf("fatal: %v", err)
 	fmt.Fprintln(os.Stderr, "remote-claude-gui:", err)
 	os.Exit(1)
 }
