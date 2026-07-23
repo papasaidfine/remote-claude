@@ -10,16 +10,22 @@ import (
 )
 
 func TestSSHArgs(t *testing.T) {
-	args := SSHArgs("remote-claude")
+	args := SSHArgs(Spec{Alias: "remote-claude", ReversePort: 2222})
 	joined := strings.Join(args, " ")
-	if strings.Contains(joined, "-R") {
-		t.Errorf("bridge must not add -R (config owns RemoteForward): %q", joined)
+	if !strings.Contains(joined, "-R 127.0.0.1:2222:127.0.0.1:22") {
+		t.Errorf("missing reverse forward: %q", joined)
 	}
 	if !strings.Contains(joined, "-N") || !strings.Contains(joined, "ExitOnForwardFailure=yes") {
 		t.Errorf("missing -N/ExitOnForwardFailure: %q", joined)
 	}
 	if args[len(args)-1] != "remote-claude" {
 		t.Errorf("alias must be the last arg: %q", joined)
+	}
+}
+
+func TestSSHArgsNoReversePort(t *testing.T) {
+	if joined := strings.Join(SSHArgs(Spec{Alias: "a"}), " "); strings.Contains(joined, "-R") {
+		t.Errorf("no reverse port → no -R: %q", joined)
 	}
 }
 

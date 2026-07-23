@@ -41,8 +41,14 @@
     </section>
 
     <section>
-      <h2>Xray vless nodes <span id="node-count" class="pill"></span></h2>
-      <p class="hint">One <code>vless://</code> URL per line. Used by hosts with xray on. Each connection picks a random node.</p>
+      <h2>Xray <span id="xray-state" class="pill"></span></h2>
+      <p class="hint">Optional, for censored/slow networks. Download the xray binary, then add <code>vless://</code> nodes; turn on “xray” per host to route it through them.</p>
+      <div class="row">
+        <button id="xray-download" class="secondary">Download / update xray</button>
+        <input id="xray-proxy" type="text" placeholder="download via proxy, e.g. http://127.0.0.1:7890 (optional, one-time)">
+        <span id="xray-msg" class="msg"></span>
+      </div>
+      <p class="hint">Nodes <span id="node-count" class="pill"></span> — one <code>vless://</code> URL per line; each connection picks a random node.</p>
       <textarea id="nodes" rows="5" spellcheck="false" placeholder="vless://uuid@host:port?...#name"></textarea>
       <div class="row">
         <button id="nodes-save">Save nodes</button>

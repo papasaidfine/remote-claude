@@ -1,6 +1,7 @@
-// Package store persists the app's own metadata — this machine's name and which
-// ssh hosts to auto-start. The hosts themselves live in ~/.ssh/config (see
-// package sshcfg); this file only holds what ssh config can't express.
+// Package store persists the app's own metadata: this machine's name, and the
+// per-host settings that must NOT live in ~/.ssh/config (the reverse-tunnel port
+// and auto-start). Those are applied as ephemeral ssh args when a tunnel starts,
+// not written to the config — so an ordinary `ssh <host>` never carries them.
 package store
 
 import (
@@ -8,14 +9,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/papasaidfine/remote-claude/internal/paths"
 )
 
-// Config is the persisted app metadata document.
+// HostMeta is the app-managed, non-ssh-config settings for one host.
+type HostMeta struct {
+	ReversePort int  `json:"reverse_port,omitempty"`
+	AutoStart   bool `json:"auto_start,omitempty"`
+}
+
+// Config is the persisted metadata document.
 type Config struct {
-	ClientAlias string   `json:"client_alias"`
-	AutoStart   []string `json:"auto_start"` // ssh host aliases to start on launch
+	ClientAlias string              `json:"client_alias"`
+	Hosts       map[string]HostMeta `json:"hosts,omitempty"`
 }
 
 // Path returns the config.json location for the resolved paths.
@@ -27,7 +35,7 @@ func Path(p paths.Paths) string {
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return &Config{}, nil
+		return &Config{Hosts: map[string]HostMeta{}}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -35,6 +43,9 @@ func Load(path string) (*Config, error) {
 	var c Config
 	if err := json.Unmarshal(raw, &c); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if c.Hosts == nil {
+		c.Hosts = map[string]HostMeta{}
 	}
 	return &c, nil
 }
@@ -67,29 +78,56 @@ func Save(path string, c *Config) error {
 	return os.Rename(tmpName, path)
 }
 
-// IsAutoStart reports whether alias is flagged to start on launch.
-func (c *Config) IsAutoStart(alias string) bool {
-	for _, a := range c.AutoStart {
-		if a == alias {
-			return true
-		}
+// Host returns the metadata for alias (zero value if none).
+func (c *Config) Host(alias string) HostMeta { return c.Hosts[alias] }
+
+func (c *Config) ensure() {
+	if c.Hosts == nil {
+		c.Hosts = map[string]HostMeta{}
 	}
-	return false
 }
 
-// SetAutoStart adds or removes alias from the auto-start list.
+// SetReversePort records (port>0) or clears (port<=0) the host's reverse-tunnel
+// port.
+func (c *Config) SetReversePort(alias string, port int) {
+	c.ensure()
+	m := c.Hosts[alias]
+	m.ReversePort = port
+	c.putOrDrop(alias, m)
+}
+
+// SetAutoStart flags whether alias starts on launch.
 func (c *Config) SetAutoStart(alias string, on bool) {
-	has := c.IsAutoStart(alias)
-	switch {
-	case on && !has:
-		c.AutoStart = append(c.AutoStart, alias)
-	case !on && has:
-		out := c.AutoStart[:0]
-		for _, a := range c.AutoStart {
-			if a != alias {
-				out = append(out, a)
-			}
+	c.ensure()
+	m := c.Hosts[alias]
+	m.AutoStart = on
+	c.putOrDrop(alias, m)
+}
+
+// RemoveHost drops all metadata for alias.
+func (c *Config) RemoveHost(alias string) { delete(c.Hosts, alias) }
+
+// IsAutoStart reports whether alias is flagged to start on launch.
+func (c *Config) IsAutoStart(alias string) bool { return c.Hosts[alias].AutoStart }
+
+// AutoStartAliases returns the aliases flagged to start on launch, sorted.
+func (c *Config) AutoStartAliases() []string {
+	var out []string
+	for alias, m := range c.Hosts {
+		if m.AutoStart {
+			out = append(out, alias)
 		}
-		c.AutoStart = out
 	}
+	sort.Strings(out)
+	return out
+}
+
+// putOrDrop stores m, or deletes the entry entirely when it's all zero (keeps
+// config.json tidy).
+func (c *Config) putOrDrop(alias string, m HostMeta) {
+	if m == (HostMeta{}) {
+		delete(c.Hosts, alias)
+		return
+	}
+	c.Hosts[alias] = m
 }

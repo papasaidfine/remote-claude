@@ -109,7 +109,24 @@ function renderFooter(state) {
   $("#platform").textContent = `Platform: ${state.platform}${state.xray_supported ? "" : " (xray optional on this OS)"}`;
   $("#sshd-state").textContent = state.local_ssh_ok ? "running" : "not running";
   $("#node-count").textContent = `${state.node_count} node${state.node_count === 1 ? "" : "s"}`;
+  $("#xray-state").textContent = state.xray_installed ? "installed" : "not installed";
 }
+
+$("#xray-download").onclick = async () => {
+  const msg = $("#xray-msg");
+  msg.className = "msg";
+  msg.textContent = "Downloading… (this can take a moment)";
+  try {
+    await api("POST", "/api/xray/install", { proxy: $("#xray-proxy").value.trim() });
+    msg.className = "msg ok";
+    msg.textContent = "xray ready.";
+    $("#xray-proxy").value = ""; // one-time, not persisted
+    await refresh();
+  } catch (e) {
+    msg.className = "msg err";
+    msg.textContent = e.message;
+  }
+};
 
 let aliasDirty = false;
 $("#alias").addEventListener("input", () => { aliasDirty = true; });

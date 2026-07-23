@@ -1,13 +1,12 @@
 // Package core is the front-end-agnostic application façade. The host list is
-// the user's ~/.ssh/config (scanned via package sshcfg); editing a host writes
-// back to that file. A small metadata file (package store) holds only what ssh
-// config can't express — this machine's name and which hosts auto-start. Config
-// is config; starting a tunnel is a separate action that just launches
-// `ssh -N <alias>` per that host's config.
+// the user's ~/.ssh/config (scanned via package sshcfg); a host's identity —
+// HostName/User/Port, SetEnv LC_CLIENT_NAME, and ProxyCommand — lives there.
+// The reverse-tunnel port and auto-start are app metadata (package store),
+// applied as ephemeral ssh args when a tunnel starts, NOT written to the config
+// (so an ordinary `ssh <alias>` never carries them and never warns).
 package core
 
 import (
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -20,6 +19,7 @@ import (
 	"github.com/papasaidfine/remote-claude/internal/sshcfg"
 	"github.com/papasaidfine/remote-claude/internal/store"
 	"github.com/papasaidfine/remote-claude/internal/vless"
+	"github.com/papasaidfine/remote-claude/internal/xray"
 )
 
 // Provisioner performs the side-effecting setup the app drives. Injected so App
@@ -64,11 +64,19 @@ func New(meta *store.Config, metaPath string, p paths.Paths, mgr TunnelManager, 
 	return &App{meta: meta, metaPath: metaPath, sshPath: p.SSHConfig, paths: p, mgr: mgr, prov: prov, plat: plat}
 }
 
-// HostView is one ssh-config host flattened for the UI, plus live state.
+// HostView is one host flattened for the UI: its ssh-config identity plus the
+// app-managed reverse-tunnel/auto-start metadata and live tunnel status.
 type HostView struct {
-	sshcfg.Summary
-	Status    bridge.Status `json:"status"`
-	AutoStart bool          `json:"auto_start"`
+	Alias        string        `json:"alias"`
+	HostName     string        `json:"hostname"`
+	User         string        `json:"user"`
+	Port         string        `json:"port"`
+	HasProxy     bool          `json:"has_proxy"`
+	ProxyCommand string        `json:"proxy_command"`
+	ReversePort  int           `json:"reverse_port"` // app metadata, not ssh config
+	HasReverse   bool          `json:"has_reverse"`
+	AutoStart    bool          `json:"auto_start"`
+	Status       bridge.Status `json:"status"`
 }
 
 // Param is one raw config line (for the full per-host editor).
@@ -83,11 +91,12 @@ type State struct {
 	Hosts         []HostView `json:"hosts"`
 	Platform      string     `json:"platform"`
 	XraySupported bool       `json:"xray_supported"`
+	XrayInstalled bool       `json:"xray_installed"`
 	NodeCount     int        `json:"node_count"`
 	LocalSSHOK    bool       `json:"local_ssh_ok"`
 }
 
-// State scans ~/.ssh/config fresh and pairs each host with its tunnel status.
+// State scans ~/.ssh/config fresh and pairs each host with its metadata + status.
 func (a *App) State() State {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -96,22 +105,31 @@ func (a *App) State() State {
 		ClientAlias:   a.meta.ClientAlias,
 		Platform:      a.plat.Name(),
 		XraySupported: a.plat.SupportsXray(),
+		XrayInstalled: xray.Resolve(a.paths) != "",
 		NodeCount:     nodes.Count(a.paths.VlessNodes),
 		LocalSSHOK:    a.plat.StatusIncomingSSH(),
 	}
 	for _, b := range f.Hosts() {
 		alias := b.Alias()
+		s := b.Summary()
+		m := a.meta.Host(alias)
 		st.Hosts = append(st.Hosts, HostView{
-			Summary:   b.Summary(),
-			Status:    a.mgr.Status(alias),
-			AutoStart: a.meta.IsAutoStart(alias),
+			Alias:        alias,
+			HostName:     s.HostName,
+			User:         s.User,
+			Port:         s.Port,
+			HasProxy:     s.HasProxy,
+			ProxyCommand: s.ProxyCommand,
+			ReversePort:  m.ReversePort,
+			HasReverse:   m.ReversePort > 0,
+			AutoStart:    m.AutoStart,
+			Status:       a.mgr.Status(alias),
 		})
 	}
 	return st
 }
 
-// HostParams returns every config line of a host (known + unknown), for the
-// full editor.
+// HostParams returns every config line of a host (for the full editor).
 func (a *App) HostParams(alias string) ([]Param, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -144,7 +162,9 @@ func (a *App) SetAlias(alias string) (string, error) {
 	return alias, nil
 }
 
-// AddHost writes a new "Host <alias>" block with the basics.
+// AddHost writes a new "Host <alias>" block with only the identity keys — no
+// IdentityFile/IdentitiesOnly (id_ed25519 is an ssh default), no keepalive/
+// RemoteForward (those are ephemeral).
 func (a *App) AddHost(alias, hostname, user string, port int) error {
 	alias = strings.TrimSpace(alias)
 	if alias == "" || strings.ContainsAny(alias, " \t") {
@@ -167,16 +187,13 @@ func (a *App) AddHost(alias, hostname, user string, port int) error {
 	if port > 0 {
 		b.Set("Port", strconv.Itoa(port))
 	}
-	b.Set("IdentityFile", "~/.ssh/"+paths.KeyName)
-	b.Set("IdentitiesOnly", "yes")
 	if a.meta.ClientAlias != "" {
 		b.Set("SetEnv", "LC_CLIENT_NAME="+a.meta.ClientAlias)
 	}
 	return a.writeConfig(f)
 }
 
-// RemoveHost stops the host's tunnel, deletes its block, and clears its
-// auto-start flag.
+// RemoveHost stops the host's tunnel, deletes its config block and metadata.
 func (a *App) RemoveHost(alias string) error {
 	a.mgr.Stop(alias)
 	a.mu.Lock()
@@ -185,7 +202,7 @@ func (a *App) RemoveHost(alias string) error {
 	if !f.RemoveHost(alias) {
 		return errf(ErrNotFound, "no such host")
 	}
-	a.meta.SetAutoStart(alias, false)
+	a.meta.RemoveHost(alias)
 	if err := store.Save(a.metaPath, a.meta); err != nil {
 		return wrap(ErrInternal, err)
 	}
@@ -208,49 +225,44 @@ func (a *App) SetParam(alias, key, value string) error {
 	return a.writeConfig(f)
 }
 
-// SetReverseTunnel sets (port>0) or clears (port<=0) the host's RemoteForward —
-// server loopback :port -> this machine's sshd. This is config, not launching.
+// SetReverseTunnel records the host's reverse-tunnel port as metadata (port>0)
+// or clears it (port<=0). It never writes RemoteForward to ssh config; it also
+// strips any leftover app-managed keys from the block so an ordinary
+// `ssh <alias>` stays clean.
 func (a *App) SetReverseTunnel(alias string, port int) error {
-	val := ""
-	if port > 0 {
-		val = fmt.Sprintf("127.0.0.1:%d 127.0.0.1:22", port)
-	}
-	return a.SetParam(alias, "RemoteForward", val)
-}
-
-// SetProxy turns the xray ProxyCommand on (relay) or off for a host.
-func (a *App) SetProxy(alias string, on bool) error {
-	val := ""
-	if on {
-		val = provision.ProxyCommand()
-	}
-	return a.SetParam(alias, "ProxyCommand", val)
-}
-
-// StartTunnel launches the reverse tunnel for a host per its config
-// (`ssh -N <alias>`). Ensures the local key exists first.
-func (a *App) StartTunnel(alias string) (bridge.Status, error) {
 	a.mu.Lock()
-	exists := a.readConfig().FindHost(alias) != nil
-	a.mu.Unlock()
-	if !exists {
-		return bridge.Status{}, errf(ErrNotFound, "no such host")
+	defer a.mu.Unlock()
+	f := a.readConfig()
+	b := f.FindHost(alias)
+	if b == nil {
+		return errf(ErrNotFound, "no such host")
 	}
-	if a.prov != nil {
-		if err := a.prov.EnsureKey(); err != nil {
-			return bridge.Status{}, errf(ErrInternal, "ssh key: %v", err)
+	if stripManaged(b) {
+		if err := a.writeConfig(f); err != nil {
+			return err
 		}
 	}
-	if err := a.mgr.Start(bridge.Spec{Alias: alias}); err != nil {
-		return bridge.Status{}, wrap(ErrInvalid, err)
-	}
-	return a.mgr.Status(alias), nil
+	a.meta.SetReversePort(alias, port)
+	return wrap(ErrInternal, store.Save(a.metaPath, a.meta))
 }
 
-// StopTunnel stops the host's tunnel.
-func (a *App) StopTunnel(alias string) bridge.Status {
-	a.mgr.Stop(alias)
-	return a.mgr.Status(alias)
+// SetProxy turns the xray ProxyCommand on/off for a host (it must be in ssh
+// config so an ordinary `ssh <alias>` also routes through xray).
+func (a *App) SetProxy(alias string, on bool) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	f := a.readConfig()
+	b := f.FindHost(alias)
+	if b == nil {
+		return errf(ErrNotFound, "no such host")
+	}
+	if on {
+		b.Set("ProxyCommand", provision.ProxyCommand())
+	} else {
+		b.Remove("ProxyCommand")
+	}
+	stripManaged(b)
+	return a.writeConfig(f)
 }
 
 // SetAutoStart flags whether a host's tunnel starts when the app launches.
@@ -264,10 +276,40 @@ func (a *App) SetAutoStart(alias string, on bool) error {
 	return wrap(ErrInternal, store.Save(a.metaPath, a.meta))
 }
 
+// StartTunnel launches the reverse tunnel for a host: `ssh -N -R …` with the
+// port from metadata. Requires a reverse port to be set.
+func (a *App) StartTunnel(alias string) (bridge.Status, error) {
+	a.mu.Lock()
+	exists := a.readConfig().FindHost(alias) != nil
+	rport := a.meta.Host(alias).ReversePort
+	a.mu.Unlock()
+	if !exists {
+		return bridge.Status{}, errf(ErrNotFound, "no such host")
+	}
+	if rport <= 0 {
+		return bridge.Status{}, errf(ErrInvalid, "turn on the reverse tunnel (set a port) for %q first", alias)
+	}
+	if a.prov != nil {
+		if err := a.prov.EnsureKey(); err != nil {
+			return bridge.Status{}, errf(ErrInternal, "ssh key: %v", err)
+		}
+	}
+	if err := a.mgr.Start(bridge.Spec{Alias: alias, ReversePort: rport}); err != nil {
+		return bridge.Status{}, wrap(ErrInvalid, err)
+	}
+	return a.mgr.Status(alias), nil
+}
+
+// StopTunnel stops the host's tunnel.
+func (a *App) StopTunnel(alias string) bridge.Status {
+	a.mgr.Stop(alias)
+	return a.mgr.Status(alias)
+}
+
 // AutoStart brings up every auto-start host's tunnel, best-effort.
 func (a *App) AutoStart(warn func(alias string, err error)) {
 	a.mu.Lock()
-	aliases := append([]string(nil), a.meta.AutoStart...)
+	aliases := a.meta.AutoStartAliases()
 	a.mu.Unlock()
 	for _, alias := range aliases {
 		if _, err := a.StartTunnel(alias); err != nil {
@@ -283,13 +325,13 @@ func (a *App) SetupServer(alias, password string) (provision.ServerResult, error
 		return provision.ServerResult{}, errf(ErrUnavailable, "provisioning unavailable")
 	}
 	a.mu.Lock()
-	b := a.readConfig().FindHost(alias)
+	exists := a.readConfig().FindHost(alias) != nil
+	rport := a.meta.Host(alias).ReversePort
 	clientAlias := a.meta.ClientAlias
 	a.mu.Unlock()
-	if b == nil {
+	if !exists {
 		return provision.ServerResult{}, errf(ErrNotFound, "no such host")
 	}
-	rport, _ := strconv.Atoi(b.Summary().ReversePort)
 	res, err := a.prov.ServerBootstrap(alias, clientAlias, rport, password)
 	return res, wrap(ErrRemote, err)
 }
@@ -303,6 +345,23 @@ func (a *App) EnsureLocalSSHD(disablePassword bool) (running bool, err error) {
 		return a.plat.StatusIncomingSSH(), wrap(ErrInternal, err)
 	}
 	return a.plat.StatusIncomingSSH(), nil
+}
+
+// InstallXray downloads (or updates) the xray binary, optionally through a
+// one-shot http proxy (not persisted).
+func (a *App) InstallXray(proxy string) error {
+	c := xray.New(strings.TrimSpace(proxy))
+	var err error
+	if xray.Resolve(a.paths) != "" {
+		err = c.Update(a.paths)
+	} else {
+		err = c.Install(a.paths)
+	}
+	if err != nil {
+		return wrap(ErrInternal, err)
+	}
+	ensureNodesFile(a.paths)
+	return nil
 }
 
 // Nodes returns the raw vless-nodes.txt content and the parsed count.
@@ -332,6 +391,26 @@ func (a *App) SetNodes(raw string) (int, error) {
 
 // ---- internals ----
 
+// managedKeys are keys the app controls out-of-band and keeps OUT of ssh config:
+// the reverse forward + keepalive are ephemeral start-time args, and
+// IdentityFile/IdentitiesOnly just repeat ssh defaults.
+var managedKeys = []string{
+	"RemoteForward", "IdentityFile", "IdentitiesOnly",
+	"ServerAliveInterval", "ServerAliveCountMax", "ForwardAgent",
+}
+
+// stripManaged removes managed keys from a block, reporting whether it changed.
+func stripManaged(b *sshcfg.Block) bool {
+	changed := false
+	for _, k := range managedKeys {
+		if b.Has(k) {
+			b.Remove(k)
+			changed = true
+		}
+	}
+	return changed
+}
+
 func (a *App) readConfig() *sshcfg.File {
 	raw, _ := os.ReadFile(a.sshPath)
 	return sshcfg.Parse(string(raw))
@@ -347,6 +426,18 @@ func (a *App) writeConfig(f *sshcfg.File) error {
 	return nil
 }
 
+func ensureNodesFile(p paths.Paths) error {
+	if _, err := os.Stat(p.VlessNodes); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(p.RCConfigDir, 0o755); err != nil {
+		return err
+	}
+	body := "# vless nodes for the remote-claude tunnel — one vless:// URL per line.\n" +
+		"# Lines starting with # and blank lines are ignored.\n"
+	return os.WriteFile(p.VlessNodes, []byte(body), 0o600)
+}
+
 func (a *App) writeNodesFile(raw string) error {
 	if err := os.MkdirAll(a.paths.RCConfigDir, 0o755); err != nil {
 		return err
@@ -357,7 +448,6 @@ func (a *App) writeNodesFile(raw string) error {
 	return os.WriteFile(a.paths.VlessNodes, []byte(raw), 0o600)
 }
 
-// keyword/valueOf mirror sshcfg's line parsing for HostParams display.
 func keyword(line string) string {
 	s := strings.TrimLeft(line, " \t")
 	if i := strings.IndexAny(s, " \t="); i >= 0 {

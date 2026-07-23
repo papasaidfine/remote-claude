@@ -147,7 +147,7 @@ func TestReverseAndProxyAreConfig(t *testing.T) {
 		t.Fatalf("set proxy code %d", code)
 	}
 	h := hosts(t, s)[0].(map[string]any)
-	if h["has_reverse"] != true || h["reverse_port"] != "2222" || h["has_proxy"] != true {
+	if h["has_reverse"] != true || h["reverse_port"] != float64(2222) || h["has_proxy"] != true {
 		t.Errorf("reverse/proxy not reflected: %v", h)
 	}
 }
@@ -176,6 +176,7 @@ func TestStartSuccess(t *testing.T) {
 	s, fm := newTestServer(t)
 	do(t, s, "POST", "/api/alias", map[string]string{"alias": "lisa"})
 	addHost(t, s, "wb")
+	do(t, s, "POST", "/api/hosts/wb/reverse", map[string]int{"port": 2222}) // required to start
 	code, _ := do(t, s, "POST", "/api/hosts/wb/start", nil)
 	if code != 200 {
 		t.Fatalf("start code %d", code)

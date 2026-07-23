@@ -124,7 +124,7 @@ func (g *gui) build() fyne.CanvasObject {
 
 	toolbar := container.NewHBox(
 		widget.NewButton("+ Add host", g.showAddHost),
-		widget.NewButton("Xray nodes", g.showNodes),
+		widget.NewButton("Xray", g.showXray),
 		widget.NewButton("Local ssh server", g.showLocalSSHD),
 		widget.NewButton("Refresh", g.refresh),
 	)
@@ -177,7 +177,7 @@ func (g *gui) hostCard(h core.HostView) fyne.CanvasObject {
 	rows := []fyne.CanvasObject{title}
 	if h.HasReverse {
 		// A tunnel host: full tunnel controls.
-		rows = append(rows, widget.NewLabel(fmt.Sprintf("reverse tunnel :%s  ·  tunnel: %s",
+		rows = append(rows, widget.NewLabel(fmt.Sprintf("reverse tunnel :%d  ·  tunnel: %s",
 			h.ReversePort, stateLabel(h.Status))))
 		start := widget.NewButton("Start", func() {
 			g.do(func() error { _, err := g.core.StartTunnel(alias); return err })
@@ -233,7 +233,7 @@ func (g *gui) showAddHost() {
 		widget.NewFormItem("SSH user", user),
 		widget.NewFormItem("SSH port", port),
 	}
-	dialog.ShowForm("Add host", "Add", "Cancel", items, func(ok bool) {
+	d := dialog.NewForm("Add host", "Add", "Cancel", items, func(ok bool) {
 		if !ok {
 			return
 		}
@@ -241,6 +241,8 @@ func (g *gui) showAddHost() {
 			return g.core.AddHost(alias.Text, host.Text, user.Text, atoi(port.Text, 22))
 		})
 	}, g.win)
+	d.Resize(fyne.NewSize(460, 300)) // wide enough to see a full IP
+	d.Show()
 }
 
 func (g *gui) showEdit(h core.HostView) {
@@ -251,7 +253,9 @@ func (g *gui) showEdit(h core.HostView) {
 	port := widget.NewEntry()
 	port.SetText(h.Port)
 	rport := widget.NewEntry()
-	rport.SetText(h.ReversePort)
+	if h.ReversePort > 0 {
+		rport.SetText(strconv.Itoa(h.ReversePort))
+	}
 	items := []*widget.FormItem{
 		widget.NewFormItem("Host / IP", host),
 		widget.NewFormItem("SSH user", user),
@@ -259,7 +263,7 @@ func (g *gui) showEdit(h core.HostView) {
 		widget.NewFormItem("Reverse port (blank = off)", rport),
 	}
 	alias := h.Alias
-	dialog.ShowForm("Edit "+alias, "Save", "Cancel", items, func(ok bool) {
+	d := dialog.NewForm("Edit "+alias, "Save", "Cancel", items, func(ok bool) {
 		if !ok {
 			return
 		}
@@ -273,9 +277,12 @@ func (g *gui) showEdit(h core.HostView) {
 			if err := g.core.SetParam(alias, "Port", strings.TrimSpace(port.Text)); err != nil {
 				return err
 			}
+			// Reverse tunnel is app metadata, not ssh config: blank/0 turns it off.
 			return g.core.SetReverseTunnel(alias, atoi(rport.Text, 0))
 		})
 	}, g.win)
+	d.Resize(fyne.NewSize(460, 340))
+	d.Show()
 }
 
 // showSetupServer tries key/agent auth first (no prompt) and only asks for a
@@ -343,24 +350,54 @@ func (g *gui) do(fn func() error) {
 	g.refresh()
 }
 
-func (g *gui) showNodes() {
+func (g *gui) showXray() {
+	proxy := widget.NewEntry()
+	proxy.SetPlaceHolder("download via proxy, e.g. http://127.0.0.1:7890 (optional, one-time)")
+	status := widget.NewLabel("")
+	var download *widget.Button
+	download = widget.NewButton("Download / update xray", func() {
+		download.Disable()
+		status.SetText("Downloading… (this can take a moment)")
+		p := strings.TrimSpace(proxy.Text)
+		go func() {
+			err := g.core.InstallXray(p)
+			fyne.Do(func() {
+				download.Enable()
+				if err != nil {
+					status.SetText("Failed: " + err.Error())
+					return
+				}
+				status.SetText("xray ready.")
+				proxy.SetText("")
+				g.refresh()
+			})
+		}()
+	})
+
+	nodesEntry := widget.NewMultiLineEntry()
 	raw, _ := g.core.Nodes()
-	entry := widget.NewMultiLineEntry()
-	entry.SetText(raw)
-	entry.SetPlaceHolder("one vless:// URL per line; # comments allowed")
-	entry.Wrapping = fyne.TextWrapOff
-	d := dialog.NewCustomConfirm("Xray vless nodes", "Save", "Cancel",
-		container.NewVScroll(entry), func(ok bool) {
-			if !ok {
-				return
-			}
-			if _, err := g.core.SetNodes(entry.Text); err != nil {
-				dialog.ShowError(err, g.win)
-				return
-			}
-			g.refresh()
-		}, g.win)
-	d.Resize(fyne.NewSize(540, 380))
+	nodesEntry.SetText(raw)
+	nodesEntry.SetPlaceHolder("one vless:// URL per line; # comments allowed")
+	nodesEntry.Wrapping = fyne.TextWrapOff
+
+	top := container.NewVBox(
+		container.NewBorder(nil, nil, nil, download, proxy),
+		status,
+		widget.NewLabel("Nodes (one vless:// per line):"),
+	)
+	content := container.NewBorder(top, nil, nil, nil, container.NewVScroll(nodesEntry))
+
+	d := dialog.NewCustomConfirm("Xray", "Save nodes", "Close", content, func(ok bool) {
+		if !ok {
+			return
+		}
+		if _, err := g.core.SetNodes(nodesEntry.Text); err != nil {
+			dialog.ShowError(err, g.win)
+			return
+		}
+		g.refresh()
+	}, g.win)
+	d.Resize(fyne.NewSize(580, 480))
 	d.Show()
 }
 

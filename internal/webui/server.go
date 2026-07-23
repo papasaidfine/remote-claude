@@ -43,6 +43,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/hosts/{alias}/setup-server", s.handleSetupServer)
 	mux.HandleFunc("GET /api/nodes", s.handleGetNodes)
 	mux.HandleFunc("POST /api/nodes", s.handleSetNodes)
+	mux.HandleFunc("POST /api/xray/install", s.handleInstallXray)
 	mux.HandleFunc("POST /api/local-sshd", s.handleLocalSSHD)
 
 	sub, _ := fs.Sub(staticFS, "static")
@@ -209,6 +210,18 @@ func (s *Server) handleLocalSSHD(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true, "running": running})
+}
+
+func (s *Server) handleInstallXray(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Proxy string `json:"proxy"` // optional one-shot download proxy, not persisted
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	if err := s.app.InstallXray(body.Proxy); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (s *Server) handleGetNodes(w http.ResponseWriter, r *http.Request) {

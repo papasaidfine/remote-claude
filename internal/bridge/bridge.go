@@ -36,11 +36,14 @@ type Status struct {
 	Since     time.Time `json:"since"`
 }
 
-// Spec identifies a tunnel: the ssh Host alias to connect. The reverse forward
-// comes from that host's ~/.ssh/config (its RemoteForward), so the supervisor
-// just runs `ssh -N <alias>`.
+// Spec identifies a tunnel: the ssh Host alias plus the reverse-tunnel port to
+// bind. The reverse forward and keepalive are passed as ephemeral ssh args, NOT
+// written to ~/.ssh/config — so an ordinary `ssh <alias>` never carries them and
+// never conflicts with the bridge.
 type Spec struct {
-	Alias string
+	Alias       string
+	ReversePort int // server-side loopback port to bind (0 → no reverse forward)
+	LocalPort   int // local sshd port the reverse forward targets (default 22)
 }
 
 // Runner starts the tunnel process and blocks until it exits or ctx is done.
@@ -48,19 +51,27 @@ type Runner interface {
 	Run(ctx context.Context, args []string) error
 }
 
-// SSHArgs builds the ssh argument list (excluding the ssh binary itself). It
-// runs `ssh -N <alias>`, relying on the host's config for the reverse forward
-// and proxy. ExitOnForwardFailure=yes (on the bridge's own connection only)
+// SSHArgs builds the ssh argument list (excluding the ssh binary itself):
+// `ssh -N -R 127.0.0.1:<rport>:127.0.0.1:<lport> <alias>` with ephemeral
+// keepalive. ExitOnForwardFailure=yes (on the bridge's own connection only)
 // makes ssh fail loudly — and the loop retry/report — when the reverse port is
 // already taken, instead of silently running without a forward.
-func SSHArgs(alias string) []string {
-	return []string{
+func SSHArgs(spec Spec) []string {
+	args := []string{
 		"-N",
 		"-o", "ExitOnForwardFailure=yes",
 		"-o", "ServerAliveInterval=30",
 		"-o", "ServerAliveCountMax=3",
-		alias,
+		"-o", "ForwardAgent=no",
 	}
+	if spec.ReversePort > 0 {
+		lp := spec.LocalPort
+		if lp == 0 {
+			lp = 22
+		}
+		args = append(args, "-R", fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", spec.ReversePort, lp))
+	}
+	return append(args, spec.Alias)
 }
 
 // backoffFor returns base*2^attempt, clamped to [base, max]. Loop-based so it
@@ -190,7 +201,7 @@ func (t *tunnel) runOnce(ctx context.Context) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- t.runner.Run(runCtx, SSHArgs(t.spec.Alias))
+		errCh <- t.runner.Run(runCtx, SSHArgs(t.spec))
 	}()
 
 	select {
