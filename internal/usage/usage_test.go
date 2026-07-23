@@ -42,9 +42,9 @@ func TestParseWindowsAndAggregation(t *testing.T) {
 }
 
 func TestPricingByFamily(t *testing.T) {
-	// opus: 1000 in, 500 out, 200 cacheW, 3000 cacheR
+	// opus 4.x: 1000 in, 500 out, 200 cacheW, 3000 cacheR at $5/$25/$6.25/$0.50
 	got := cost("claude-opus-4-8", Tokens{Input: 1000, Output: 500, CacheWrite: 200, CacheRead: 3000})
-	want := (1000*15.0 + 500*75.0 + 200*18.75 + 3000*1.5) / 1e6
+	want := (1000*5.0 + 500*25.0 + 200*6.25 + 3000*0.5) / 1e6
 	if got != want {
 		t.Errorf("opus cost = %v, want %v", got, want)
 	}

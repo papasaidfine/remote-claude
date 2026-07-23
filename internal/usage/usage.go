@@ -51,15 +51,19 @@ type Report struct {
 // rate is per-million-token pricing (USD/MTok).
 type rate struct{ in, out, cacheWrite, cacheRead float64 }
 
-// rateFor returns Anthropic list pricing by model family (5m cache-write rate).
+// rateFor returns Anthropic list pricing by model family. Cache-write is the
+// 5-minute rate (1.25x input); cache-read is 0.1x input. Current Opus (4.5/4.6/
+// 4.7/4.8) lists at $5/$25 — a third of the legacy Opus 3/4/4.1 $15/$75 tier.
 func rateFor(model string) rate {
 	m := strings.ToLower(model)
 	switch {
+	case strings.Contains(m, "fable") || strings.Contains(m, "mythos"):
+		return rate{10, 50, 12.5, 1.0}
 	case strings.Contains(m, "opus"):
-		return rate{15, 75, 18.75, 1.5}
+		return rate{5, 25, 6.25, 0.5}
 	case strings.Contains(m, "haiku"):
 		return rate{1, 5, 1.25, 0.1}
-	default: // sonnet / fable / unknown → sonnet tier
+	default: // sonnet / unknown → sonnet tier
 		return rate{3, 15, 3.75, 0.3}
 	}
 }
