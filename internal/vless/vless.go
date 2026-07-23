@@ -155,54 +155,15 @@ func Validate(rawURL string) error {
 // ToJSON builds the full xray config JSON for one node, with the dokodemo-door
 // inbound listening on dokoPort and forwarding to destHost:destPort.
 func ToJSON(rawURL string, dokoPort int, destHost string, destPort int) (string, error) {
-	uuid, host, port, p, err := Parse(rawURL)
+	ob, err := outboundFor(rawURL)
 	if err != nil {
 		return "", err
 	}
-	u := user{ID: uuid, Encryption: "none", Flow: p.flow}
-	st := stream{Network: p.typ, Security: p.security}
-	switch p.security {
-	case "reality":
-		fp := p.fp
-		if fp == "" {
-			fp = "chrome"
-		}
-		st.RealitySettings = &realitySet{
-			ServerName: p.sni, Fingerprint: fp, PublicKey: p.pbk, ShortID: p.sid, SpiderX: "",
-		}
-	case "tls":
-		fp := p.fp
-		if fp == "" {
-			fp = "chrome"
-		}
-		var alpn []string
-		if p.alpn != "" {
-			alpn = strings.Split(p.alpn, ",")
-		} else {
-			alpn = []string{}
-		}
-		st.TLSSettings = &tlsSet{ServerName: p.sni, Fingerprint: fp, Alpn: alpn}
-	}
-	switch p.typ {
-	case "ws":
-		path := p.path
-		if path == "" {
-			path = "/"
-		}
-		st.WSSettings = &wsSet{Path: path, Headers: map[string]string{"Host": p.hosthdr}}
-	case "grpc":
-		st.GRPCSettings = &grpcSet{ServiceName: p.servicename}
-	case "tcp":
-		st.TCPSettings = &struct{}{}
-	}
-
 	cfg := Config{
 		Log: logCfg{Loglevel: "warning"},
 		Inbounds: []inbound{{Listen: "127.0.0.1", Port: dokoPort, Protocol: "dokodemo-door",
 			Settings: inboundSet{Address: destHost, Port: destPort, Network: "tcp"}}},
-		Outbounds: []outbound{{Protocol: "vless",
-			Settings:       outSet{Vnext: []vnext{{Address: host, Port: port, Users: []user{u}}}},
-			StreamSettings: st}},
+		Outbounds: []outbound{ob},
 	}
 	out, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

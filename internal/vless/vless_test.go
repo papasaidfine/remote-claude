@@ -74,3 +74,32 @@ func TestNotVlessErrors(t *testing.T) {
 		t.Error("expected error for non-vless URL")
 	}
 }
+
+func TestProxyJSON(t *testing.T) {
+	u := "vless://11111111-2222-3333-4444-555555555555@example.com:443?type=tcp&security=reality&pbk=PUBKEYXYZ&sid=ab12&sni=www.microsoft.com&fp=chrome&flow=xtls-rprx-vision#node"
+	j, err := ProxyJSON(u, 20800)
+	if err != nil {
+		t.Fatalf("ProxyJSON error: %v", err)
+	}
+	// HTTP forward-proxy inbound with an empty settings object.
+	has(t, j, `"protocol": "http"`)
+	has(t, j, `"listen": "127.0.0.1"`)
+	has(t, j, `"port": 20800`)
+	has(t, j, `"settings": {}`)
+	// Same outbound as ToJSON produces.
+	has(t, j, `"protocol": "vless"`)
+	has(t, j, `"id": "11111111-2222-3333-4444-555555555555"`)
+	has(t, j, `"address": "example.com"`)
+	has(t, j, `"publicKey": "PUBKEYXYZ"`)
+	has(t, j, `"flow": "xtls-rprx-vision"`)
+	// It is NOT a dokodemo-door relay.
+	if strings.Contains(j, "dokodemo-door") {
+		t.Errorf("ProxyJSON should not contain a dokodemo-door inbound:\n%s", j)
+	}
+}
+
+func TestProxyJSONBadURL(t *testing.T) {
+	if _, err := ProxyJSON("https://example.com", 20800); err == nil {
+		t.Error("expected error for non-vless URL")
+	}
+}
