@@ -22,9 +22,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest,  suffix: linux_amd64,   ext: '' }
-          - { os: macos-latest,   suffix: darwin_arm64,  ext: '' }
-          - { os: windows-latest, suffix: windows_amd64, ext: '.exe' }
+          - { os: ubuntu-latest,  suffix: linux_amd64,   ext: '',   ldflags: '' }
+          - { os: macos-latest,   suffix: darwin_arm64,  ext: '',   ldflags: '' }
+          # -H=windowsgui → GUI subsystem, so no console window pops up.
+          - { os: windows-latest, suffix: windows_amd64, ext: .exe, ldflags: '-H=windowsgui' }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -39,7 +40,7 @@ jobs:
       - name: Build GUI
         env:
           CGO_ENABLED: '1'
-        run: go build -tags gui -trimpath -ldflags "-s -w" -o "remote-claude-gui_${{ matrix.suffix }}${{ matrix.ext }}" ./cmd/remote-claude-gui
+        run: go build -tags gui -trimpath -ldflags "-s -w ${{ matrix.ldflags }}" -o "remote-claude-gui_${{ matrix.suffix }}${{ matrix.ext }}" ./cmd/remote-claude-gui
       - uses: actions/upload-artifact@v4
         with:
           name: remote-claude-gui_${{ matrix.suffix }}
