@@ -80,6 +80,7 @@
         <button class="start">Start tunnel</button>
         <button class="stop secondary">Stop</button>
         <button class="setupserver secondary">Set up server</button>
+        <button class="usage secondary">Usage</button>
         <button class="edit secondary">Edit</button>
         <button class="del danger">Delete</button>
       </div>
@@ -116,6 +117,17 @@
         <button value="save">Save</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="usage-dialog">
+    <h3 id="usage-title">Claude usage</h3>
+    <div class="tabs">
+      <button type="button" class="tab active" data-w="day">Past 1 day</button>
+      <button type="button" class="tab" data-w="week">Past 7 days</button>
+      <button type="button" class="tab" data-w="month">Past 30 days</button>
+    </div>
+    <div id="usage-body"><p class="hint">Loading…</p></div>
+    <div class="row end"><button id="usage-close" class="secondary">Close</button></div>
   </dialog>
 
   <script src="/static/app.js"></script>

@@ -41,6 +41,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/hosts/{alias}/start", s.handleStart)
 	mux.HandleFunc("POST /api/hosts/{alias}/stop", s.handleStop)
 	mux.HandleFunc("POST /api/hosts/{alias}/setup-server", s.handleSetupServer)
+	mux.HandleFunc("GET /api/hosts/{alias}/usage", s.handleUsage)
 	mux.HandleFunc("GET /api/nodes", s.handleGetNodes)
 	mux.HandleFunc("POST /api/nodes", s.handleSetNodes)
 	mux.HandleFunc("POST /api/xray/install", s.handleInstallXray)
@@ -210,6 +211,15 @@ func (s *Server) handleLocalSSHD(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true, "running": running})
+}
+
+func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
+	rep, err := s.app.HostUsage(r.PathValue("alias"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rep)
 }
 
 func (s *Server) handleInstallXray(w http.ResponseWriter, r *http.Request) {

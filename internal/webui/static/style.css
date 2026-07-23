@@ -88,6 +88,14 @@ dialog h3 { margin: 0 0 14px; }
 .empty { color: var(--dim); padding: 20px; text-align: center; border: 1px dashed var(--line); border-radius: 10px; }
 label.check.inline { display: inline-flex; align-items: center; gap: 6px; color: var(--text); font-size: 13px; }
 label.check.inline input { width: auto; }
+#usage-dialog { width: min(680px, 94vw); }
+.tabs { display: flex; gap: 4px; margin: 4px 0 12px; border-bottom: 1px solid var(--line); }
+.tab { background: transparent; color: var(--dim); border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 6px 12px; font-weight: 600; }
+.tab.active { color: var(--text); border-bottom-color: var(--accent); }
+.usage-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.usage-table th, .usage-table td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.usage-table th:first-child, .usage-table td:first-child { text-align: left; }
+.usage-table tr.total td { font-weight: 700; border-top: 2px solid var(--line); }
 .controls { display: flex; gap: 14px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
 .controls .rev-port { width: 84px; }
 .params { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; max-height: 200px; overflow: auto; white-space: pre-wrap; color: var(--dim); }

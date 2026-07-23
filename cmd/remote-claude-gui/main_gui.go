@@ -33,6 +33,7 @@ import (
 	"github.com/papasaidfine/remote-claude/internal/relay"
 	"github.com/papasaidfine/remote-claude/internal/sshbin"
 	"github.com/papasaidfine/remote-claude/internal/store"
+	"github.com/papasaidfine/remote-claude/internal/usage"
 )
 
 // version is stamped at release time via -ldflags "-X main.version=...".
@@ -222,6 +223,7 @@ func (g *gui) hostCard(h core.HostView) fyne.CanvasObject {
 	xrayCheck.OnChanged = func(on bool) { g.do(func() error { return g.core.SetProxy(alias, on) }) }
 
 	edit := widget.NewButton("Edit", func() { g.showEdit(h) })
+	usageBtn := widget.NewButton("Usage", func() { g.showUsage(alias) })
 	del := widget.NewButton("Delete", func() {
 		dialog.ShowConfirm("Delete host", "Delete “"+alias+"” from ~/.ssh/config? This stops its tunnel.",
 			func(ok bool) {
@@ -250,7 +252,7 @@ func (g *gui) hostCard(h core.HostView) fyne.CanvasObject {
 		auto.SetChecked(h.AutoStart)
 		auto.OnChanged = func(on bool) { g.do(func() error { return g.core.SetAutoStart(alias, on) }) }
 		rows = append(rows,
-			container.NewHBox(start, stop, setup),
+			container.NewHBox(start, stop, setup, usageBtn),
 			container.NewHBox(xrayCheck, auto, edit, del))
 	} else {
 		// A plain ssh host: just show it and offer to make it a tunnel host.
@@ -261,7 +263,7 @@ func (g *gui) hostCard(h core.HostView) fyne.CanvasObject {
 				widget.NewButton("Enable reverse tunnel", func() {
 					g.do(func() error { return g.core.SetReverseTunnel(alias, 2222) })
 				}),
-				xrayCheck, edit, del))
+				usageBtn, xrayCheck, edit, del))
 	}
 	rows = append(rows, widget.NewSeparator())
 	return container.NewVBox(rows...)
@@ -396,6 +398,75 @@ func (g *gui) setupDone(res provision.ServerResult) {
 		fmt.Sprintf("Configured as %q. Its connect-back key was %s on this machine.",
 			res.Alias, authLabel(res.Authorized)), g.win)
 	g.refresh()
+}
+
+// showUsage fetches Claude usage from the host over ssh (off the UI thread) and
+// shows a 1D/7D/30D tabbed, priced breakdown.
+func (g *gui) showUsage(alias string) {
+	body := container.NewStack(container.NewPadded(
+		widget.NewLabel("Reading Claude usage from " + alias + " …")))
+	d := dialog.NewCustom("Claude usage — "+alias, "Close", body, g.win)
+	d.Resize(fyne.NewSize(640, 480))
+	d.Show()
+	go func() {
+		rep, err := g.core.HostUsage(alias)
+		fyne.Do(func() {
+			if err != nil {
+				body.Objects = []fyne.CanvasObject{container.NewPadded(widget.NewLabel("Failed: " + err.Error()))}
+			} else {
+				body.Objects = []fyne.CanvasObject{usageTabs(rep)}
+			}
+			body.Refresh()
+		})
+	}()
+}
+
+func usageTabs(rep usage.Report) fyne.CanvasObject {
+	return container.NewAppTabs(
+		container.NewTabItem("Past 1 day", usageWindow(rep.Day)),
+		container.NewTabItem("Past 7 days", usageWindow(rep.Week)),
+		container.NewTabItem("Past 30 days", usageWindow(rep.Month)),
+	)
+}
+
+func usageWindow(w usage.Window) fyne.CanvasObject {
+	if len(w.Models) == 0 {
+		return container.NewPadded(widget.NewLabel("No usage in this window."))
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%-22s %9s %9s %9s %9s %10s\n", "Model", "Input", "Output", "CacheW", "CacheR", "Cost")
+	for _, m := range w.Models {
+		fmt.Fprintf(&b, "%-22s %9s %9s %9s %9s %10s\n",
+			shortModel(m.Model), tok(m.Tokens.Input), tok(m.Tokens.Output),
+			tok(m.Tokens.CacheWrite), tok(m.Tokens.CacheRead), "$"+money(m.Cost))
+	}
+	fmt.Fprintf(&b, "%-22s %9s %9s %9s %9s %10s\n", "TOTAL",
+		tok(w.Total.Input), tok(w.Total.Output), tok(w.Total.CacheWrite), tok(w.Total.CacheRead), "$"+money(w.Cost))
+	return container.NewVScroll(widget.NewTextGridFromString(b.String()))
+}
+
+func tok(n int64) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1e6)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fK", float64(n)/1e3)
+	default:
+		return strconv.FormatInt(n, 10)
+	}
+}
+
+func money(f float64) string { return fmt.Sprintf("%.2f", f) }
+
+func shortModel(s string) string {
+	s = strings.TrimPrefix(s, "claude-")
+	if i := strings.IndexByte(s, '['); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 22 {
+		s = s[:22]
+	}
+	return s
 }
 
 // do runs a mutating action, shows any error, and refreshes on success.

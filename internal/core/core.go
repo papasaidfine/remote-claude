@@ -8,16 +8,20 @@ package core
 
 import (
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/papasaidfine/remote-claude/internal/bridge"
 	"github.com/papasaidfine/remote-claude/internal/nodes"
 	"github.com/papasaidfine/remote-claude/internal/paths"
 	"github.com/papasaidfine/remote-claude/internal/provision"
+	"github.com/papasaidfine/remote-claude/internal/sshbin"
 	"github.com/papasaidfine/remote-claude/internal/sshcfg"
 	"github.com/papasaidfine/remote-claude/internal/store"
+	"github.com/papasaidfine/remote-claude/internal/usage"
 	"github.com/papasaidfine/remote-claude/internal/vless"
 	"github.com/papasaidfine/remote-claude/internal/xray"
 )
@@ -362,6 +366,46 @@ func (a *App) InstallXray(proxy string) error {
 	}
 	ensureNodesFile(a.paths)
 	return nil
+}
+
+// HostUsage reads Claude Code usage from the host's ~/.claude transcripts over a
+// plain `ssh <alias>` (the host's ProxyCommand/xray applies automatically; no
+// reverse tunnel needed) and returns a priced 1D/7D/30D report. It scans only
+// files modified in the last ~31 days.
+func (a *App) HostUsage(alias string) (usage.Report, error) {
+	a.mu.Lock()
+	exists := a.readConfig().FindHost(alias) != nil
+	a.mu.Unlock()
+	if !exists {
+		return usage.Report{}, errf(ErrNotFound, "no such host")
+	}
+	const remote = `find "$HOME/.claude/projects" -type f -name '*.jsonl' -mtime -31 -exec grep -h output_tokens {} + 2>/dev/null`
+	cmd := exec.Command(sshbin.SSH(),
+		"-o", "BatchMode=yes", "-o", "ConnectTimeout=20", "-o", "IdentitiesOnly=no",
+		alias, remote)
+	out, err := cmd.Output()
+	if len(out) > 0 {
+		// grep may exit non-zero on a final no-match batch even with data — parse it.
+		return usage.Parse(out, time.Now()), nil
+	}
+	if err == nil {
+		return usage.Report{}, nil // connected fine, just no usage yet
+	}
+	if ee, ok := err.(*exec.ExitError); ok {
+		if ee.ExitCode() == 1 {
+			return usage.Report{}, nil // find/grep: no transcripts found
+		}
+		return usage.Report{}, errf(ErrRemote, "reading usage from %q failed: %s", alias, tailBytes(ee.Stderr, 300))
+	}
+	return usage.Report{}, errf(ErrRemote, "reading usage from %q: %v", alias, err)
+}
+
+func tailBytes(b []byte, n int) string {
+	s := strings.TrimSpace(string(b))
+	if len(s) > n {
+		s = "…" + s[len(s)-n:]
+	}
+	return s
 }
 
 // Nodes returns the raw vless-nodes.txt content and the parsed count.

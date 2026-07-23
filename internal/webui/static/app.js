@@ -71,6 +71,7 @@ function renderHosts(state) {
     $(".start", node).onclick = () => act(() => api("POST", `/api/hosts/${h.alias}/start`));
     $(".stop", node).onclick = () => act(() => api("POST", `/api/hosts/${h.alias}/stop`));
     $(".setupserver", node).onclick = () => setupServer(h.alias);
+    $(".usage", node).onclick = () => openUsage(h.alias);
     $(".edit", node).onclick = () => openEdit(h);
     $(".del", node).onclick = () => {
       if (confirm(`Delete host “${h.alias}” from ~/.ssh/config? This stops its tunnel.`))
@@ -222,6 +223,51 @@ $("#nodes-save").onclick = async () => {
     await refresh();
   } catch (e) { msg.className = "msg err"; msg.textContent = e.message; }
 };
+
+// ---- Claude usage ----
+let usageReport = null;
+const usageDialog = $("#usage-dialog");
+$("#usage-close").onclick = () => usageDialog.close();
+document.querySelectorAll("#usage-dialog .tab").forEach(t => t.onclick = () => showUsageWindow(t.dataset.w));
+
+function fmtTok(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+  return "" + n;
+}
+function shortModel(s) {
+  s = s.replace(/^claude-/, "");
+  const i = s.indexOf("[");
+  return i >= 0 ? s.slice(0, i) : s;
+}
+function usageRow(label, tk, cost, cls) {
+  return `<tr${cls ? ` class="${cls}"` : ""}><td>${label}</td><td>${fmtTok(tk.input)}</td>` +
+    `<td>${fmtTok(tk.output)}</td><td>${fmtTok(tk.cache_write)}</td><td>${fmtTok(tk.cache_read)}</td>` +
+    `<td>$${cost.toFixed(2)}</td></tr>`;
+}
+function renderUsageWindow(w) {
+  if (!w || !w.models || w.models.length === 0) return `<p class="hint">No usage in this window.</p>`;
+  const body = w.models.map(m => usageRow(shortModel(m.model), m.tokens, m.cost)).join("") +
+    usageRow("TOTAL", w.total, w.cost, "total");
+  return `<table class="usage-table"><thead><tr><th>Model</th><th>Input</th><th>Output</th>` +
+    `<th>CacheW</th><th>CacheR</th><th>Cost</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+function showUsageWindow(which) {
+  document.querySelectorAll("#usage-dialog .tab").forEach(t => t.classList.toggle("active", t.dataset.w === which));
+  $("#usage-body").innerHTML = usageReport ? renderUsageWindow(usageReport[which]) : `<p class="hint">Loading…</p>`;
+}
+async function openUsage(alias) {
+  usageReport = null;
+  $("#usage-title").textContent = "Claude usage — " + alias;
+  $("#usage-body").innerHTML = `<p class="hint">Reading usage from ${alias} …</p>`;
+  usageDialog.showModal();
+  try {
+    usageReport = await api("GET", `/api/hosts/${alias}/usage`);
+    showUsageWindow("day");
+  } catch (e) {
+    $("#usage-body").innerHTML = `<p class="msg err">${e.message}</p>`;
+  }
+}
 
 // ---- boot ----
 loadNodes();
