@@ -116,8 +116,13 @@ jobs:
           </dict></plist>
           PLIST
           codesign --force --deep --sign - "$app" || true   # ad-hoc sign (no cert)
+          # Stage the .app next to an /Applications symlink so the mounted dmg
+          # shows the standard "drag me into Applications" install target.
+          stage="dmg-stage"; mkdir -p "$stage"
+          cp -R "$app" "$stage/"
+          ln -s /Applications "$stage/Applications"
           dmg="remote-claude-gui_${{ matrix.suffix }}.dmg"
-          hdiutil create -volname "remote-claude" -srcfolder "$app" -ov -format UDZO "$dmg" >/dev/null
+          hdiutil create -volname "remote-claude" -srcfolder "$stage" -ov -format UDZO "$dmg" >/dev/null
           sha256sum "$dmg" > "$dmg.sha256"
       - uses: actions/upload-artifact@v4
         with:
