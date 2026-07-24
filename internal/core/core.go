@@ -153,10 +153,9 @@ func (a *App) HostParams(alias string) ([]Param, error) {
 	return out, nil
 }
 
-// SetAlias sanitizes, stores, and persists this machine's name, then propagates
-// it as SetEnv LC_CLIENT_NAME=<name> onto every host — so the server-side agent
-// can ssh back via $LC_CLIENT_NAME no matter when the host was added or the
-// machine (re)named. Hosts carrying an unrelated SetEnv line are left alone.
+// SetAlias sanitizes, stores, and persists this machine's name. The name is
+// written onto a host's SetEnv LC_CLIENT_NAME lazily — when that host's tunnel is
+// started (see StartTunnel) — not onto every host, since not every host needs it.
 func (a *App) SetAlias(alias string) (string, error) {
 	alias = sanitizeAlias(alias)
 	if alias == "" {
@@ -167,18 +166,6 @@ func (a *App) SetAlias(alias string) (string, error) {
 	a.meta.ClientAlias = alias
 	if err := store.Save(a.metaPath, a.meta); err != nil {
 		return "", wrap(ErrInternal, err)
-	}
-	f := a.readConfig()
-	changed := false
-	for _, b := range f.Hosts() {
-		if applyClientName(b, alias) {
-			changed = true
-		}
-	}
-	if changed {
-		if err := a.writeConfig(f); err != nil {
-			return "", wrap(ErrInternal, err)
-		}
 	}
 	return alias, nil
 }
@@ -209,7 +196,7 @@ func (a *App) AddHost(alias, hostname, user string, port int) error {
 		b.Set("Port", strconv.Itoa(port))
 	}
 	if a.meta.ClientAlias != "" {
-		applyClientName(b, a.meta.ClientAlias)
+		ensureClientName(b, a.meta.ClientAlias)
 	}
 	return a.writeConfig(f)
 }
@@ -301,9 +288,22 @@ func (a *App) SetAutoStart(alias string, on bool) error {
 // port from metadata. Requires a reverse port to be set.
 func (a *App) StartTunnel(alias string) (bridge.Status, error) {
 	a.mu.Lock()
-	exists := a.readConfig().FindHost(alias) != nil
+	f := a.readConfig()
+	b := f.FindHost(alias)
+	exists := b != nil
 	rport := a.meta.Host(alias).ReversePort
+	name := a.meta.ClientAlias
+	// A host you're starting is a remote-claude host, so make sure its
+	// SetEnv LC_CLIENT_NAME matches the current machine name (add or correct it) —
+	// only this host, not every host. Other hosts are left untouched.
+	var fixErr error
+	if exists && rport > 0 && name != "" && ensureClientName(b, name) {
+		fixErr = a.writeConfig(f)
+	}
 	a.mu.Unlock()
+	if fixErr != nil {
+		return bridge.Status{}, wrap(ErrInternal, fixErr)
+	}
 	if !exists {
 		return bridge.Status{}, errf(ErrNotFound, "no such host")
 	}
@@ -392,20 +392,31 @@ func (a *App) preflightProxy(proxyCmd string) error {
 	return nil
 }
 
-// applyClientName sets SetEnv LC_CLIENT_NAME=<name> on b when it is missing or is
-// already an LC_CLIENT_NAME line; it leaves a host's unrelated SetEnv untouched.
-// Returns whether the block changed.
-func applyClientName(b *sshcfg.Block, name string) bool {
+// ensureClientName makes the host's SetEnv carry LC_CLIENT_NAME=<name>, merging it
+// into any existing SetEnv line (other variables are preserved) — so a host that
+// has none gets it, and one with a stale name is corrected. Returns whether the
+// block changed.
+func ensureClientName(b *sshcfg.Block, name string) bool {
 	want := "LC_CLIENT_NAME=" + name
-	cur := strings.TrimSpace(b.Get("SetEnv"))
-	if cur == want {
+	var out []string
+	found := false
+	for _, tok := range strings.Fields(b.Get("SetEnv")) {
+		if strings.HasPrefix(tok, "LC_CLIENT_NAME=") {
+			out = append(out, want)
+			found = true
+		} else {
+			out = append(out, tok)
+		}
+	}
+	if !found {
+		out = append(out, want)
+	}
+	val := strings.Join(out, " ")
+	if val == strings.TrimSpace(b.Get("SetEnv")) {
 		return false
 	}
-	if cur == "" || strings.HasPrefix(cur, "LC_CLIENT_NAME=") {
-		b.Set("SetEnv", want)
-		return true
-	}
-	return false
+	b.Set("SetEnv", val)
+	return true
 }
 
 // proxyBinPath extracts the relay binary path from a ProxyCommand of the form

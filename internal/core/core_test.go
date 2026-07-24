@@ -213,25 +213,37 @@ func TestSetupServerUsesMetadataReversePort(t *testing.T) {
 	}
 }
 
-func TestSetAliasPropagatesClientName(t *testing.T) {
+func TestStartTunnelFixesClientNameOnlyForStartedHost(t *testing.T) {
 	app, _, _ := newTestApp(t)
-	app.AddHost("wb", "h", "u", 22) // added before naming → no SetEnv yet
-	if strings.Contains(readSSH(t, app), "LC_CLIENT_NAME") {
-		t.Fatal("SetEnv should be absent before the machine is named")
-	}
+	app.AddHost("wb", "h", "u", 22)     // added before naming → no SetEnv
+	app.AddHost("other", "h2", "u", 22) // never started → must stay untouched
 	if _, err := app.SetAlias("lc-pc"); err != nil {
 		t.Fatalf("SetAlias: %v", err)
 	}
-	if !strings.Contains(readSSH(t, app), "SetEnv LC_CLIENT_NAME=lc-pc") {
-		t.Errorf("SetAlias did not propagate SetEnv to the existing host:\n%s", readSSH(t, app))
+	// SetAlias must NOT write SetEnv onto any host.
+	if strings.Contains(readSSH(t, app), "LC_CLIENT_NAME") {
+		t.Fatalf("SetAlias must not touch host config:\n%s", readSSH(t, app))
 	}
-	// Renaming updates every host.
-	if _, err := app.SetAlias("lc-mac"); err != nil {
-		t.Fatalf("SetAlias rename: %v", err)
+	app.SetReverseTunnel("wb", 2222)
+	if _, err := app.StartTunnel("wb"); err != nil {
+		t.Fatalf("StartTunnel: %v", err)
 	}
 	cfg := readSSH(t, app)
-	if strings.Contains(cfg, "lc-pc") || !strings.Contains(cfg, "SetEnv LC_CLIENT_NAME=lc-mac") {
-		t.Errorf("rename did not update SetEnv:\n%s", cfg)
+	if !strings.Contains(cfg, "SetEnv LC_CLIENT_NAME=lc-pc") {
+		t.Errorf("StartTunnel did not set the started host's SetEnv:\n%s", cfg)
+	}
+	// Only the started host (wb) — "other" stays without it.
+	if strings.Count(cfg, "LC_CLIENT_NAME") != 1 {
+		t.Errorf("SetEnv leaked to a host that was never started:\n%s", cfg)
+	}
+	// Renaming then re-starting corrects the stale value in place.
+	app.SetAlias("lc-mac")
+	if _, err := app.StartTunnel("wb"); err != nil {
+		t.Fatalf("StartTunnel after rename: %v", err)
+	}
+	cfg = readSSH(t, app)
+	if strings.Contains(cfg, "lc-pc") || !strings.Contains(cfg, "LC_CLIENT_NAME=lc-mac") {
+		t.Errorf("StartTunnel did not correct the stale SetEnv:\n%s", cfg)
 	}
 }
 
