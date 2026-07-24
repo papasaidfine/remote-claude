@@ -11,16 +11,9 @@ that variable — never hardcode or guess a device name.
 
 Run `echo "$LC_CLIENT_NAME"` at the start of a session:
 - Prints a name → that is your device; use `ssh "$LC_CLIENT_NAME" …`.
-- EMPTY → the ssh session didn't forward it. A plain terminal `ssh <host>` does
-  carry it, so the config is usually fine — the common culprit is **VS Code
-  Remote-SSH**, whose persistent remote server does not pick up `SetEnv`
-  variables retroactively: it only inherits them if it was (re)started after the
-  variable was set. Stop and tell the user to fix it on their side, then
-  reconnect — do NOT guess a device:
-    - In VS Code, run "Remote-SSH: Kill VS Code Server on Host…" (after "Close
-      Remote Connection"), then reconnect; the freshly-started server inherits it.
-    - Or set it in their remote shell startup (e.g. `export LC_CLIENT_NAME=<name>`
-      in ~/.zshrc or ~/.bashrc), which every new terminal then picks up.
+- EMPTY → the ssh session didn't forward it. Ask the user which device to work
+  on, then use that literal name everywhere these instructions say
+  `$LC_CLIENT_NAME` (the `ssh` targets and the facts path below). Never guess.
 
 Work EXACTLY as on a local project: explore first, read the relevant files,
 then plan, edit, run, verify. Being remote changes only the mechanics:
@@ -53,6 +46,11 @@ Edit an existing project file — copy it here, edit, copy it back:
 Create a new project file — Write it under `~/tmp/`, then scp it in.
 
 ## Durable facts: ~/.config/remote-claude/facts/$LC_CLIENT_NAME.json
+
+You launch from the home directory, so Claude Code's own per-directory,
+cross-session memory is meaningless here — do NOT rely on it. Keep durable
+facts ONLY in the device-keyed file below; it isn't tied to any working
+directory, so it survives wherever you start.
 
 Per-device memory — a user's laptop and desktop keep separate files. Read your
 device's file at the START of every session; create/update it (it may not exist
