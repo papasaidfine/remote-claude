@@ -85,8 +85,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/**/*
-          name: remote-claude ${{ github.ref_name }}
-          generate_release_notes: true
+          # No name/body: the release title is just the tag (e.g. "v0.2.0").
           # A tag with a pre-release suffix (v0.2.0-rc.1) is a pre-release; a
           # bare tag (v0.2.0) is a full release and becomes "Latest".
           prerelease: ${{ contains(github.ref_name, '-') }}
