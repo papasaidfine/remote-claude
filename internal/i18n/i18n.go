@@ -135,6 +135,7 @@ var messages = map[string]map[Lang]string{
 	"reverse_port":   {EN: "Reverse port (blank = off)", ZH: "反向端口（留空 = 关闭）"},
 
 	// set up server
+	"connecting_fmt":    {EN: "Connecting to %s …", ZH: "正在连接 %s …"},
 	"authorize_title":   {EN: "Authorize this machine on the server", ZH: "在服务器上授权这台机器"},
 	"authorize_instr":   {EN: "The server %s hasn't authorized this machine's key yet.\nAdd the public key below to ~/.ssh/authorized_keys on the server, then click “Set up server” again.", ZH: "服务器 %s 还没授权这台机器的密钥。\n把下面这段公钥加到服务器的 ~/.ssh/authorized_keys，然后再点一次“配置服务器”。"},
 	"copy":              {EN: "Copy", ZH: "复制"},

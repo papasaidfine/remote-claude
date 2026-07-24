@@ -8,13 +8,24 @@ import (
 	"fyne.io/fyne/v2"
 )
 
-//go:embed claude.svg
-var claudeSVG []byte
-
-// appIcon is the Claude logo used for the window/taskbar icon and the system
-// tray icon while the app is running. Fyne rasterizes the SVG at whatever size
-// each surface needs.
+// The app ships three Claude marks. Fyne rasterizes each SVG at whatever size the
+// surface it lands on needs:
 //
+//   - appIcon  (claude-front.svg): the window / taskbar icon — Claude face-on.
+//   - trayIcon (claude-tray.svg):  the system-tray icon while the app runs; the
+//     classic logo reads better than the face at 16px.
+//   - surfIcon (claude-surf.svg):  the "hang tight" mark the waiting() panel shows
+//     in dialogs that block on the network (usage, server setup, updates).
+
+//go:embed claude-front.svg
+var claudeFrontSVG []byte
+
+//go:embed claude-tray.svg
+var claudeTraySVG []byte
+
+//go:embed claude-surf.svg
+var claudeSurfSVG []byte
+
 // The icon on the downloaded artifact itself is separate — SetIcon can't do it:
 //   - Windows: rsrc_windows_amd64.syso (a compiled .rsrc the Go linker embeds
 //     into the .exe automatically). Icon.png here is the source.
@@ -22,10 +33,14 @@ var claudeSVG []byte
 //     generated from Icon.png (sips + iconutil), then wraps it in a .dmg.
 //   - Linux: executables carry no icon (that's a .desktop-file concern).
 //
-// Regenerate the Windows resource after changing the logo:
+// Regenerate the Windows resource after changing the logo (source: claude-front.svg):
 //
 //	uv run --with cairosvg --with pillow python -c 'import cairosvg;\
-//	  cairosvg.svg2png(url="claude.svg",write_to="Icon.png",output_width=1024,output_height=1024)'
+//	  cairosvg.svg2png(url="claude-front.svg",write_to="Icon.png",output_width=1024,output_height=1024)'
 //	# then Icon.png -> multi-size Icon.ico (Pillow) -> rsrc:
 //	go run github.com/akavel/rsrc@latest -ico Icon.ico -arch amd64 -o rsrc_windows_amd64.syso
-var appIcon = fyne.NewStaticResource("claude.svg", claudeSVG)
+var (
+	appIcon  = fyne.NewStaticResource("claude-front.svg", claudeFrontSVG)
+	trayIcon = fyne.NewStaticResource("claude-tray.svg", claudeTraySVG)
+	surfIcon = fyne.NewStaticResource("claude-surf.svg", claudeSurfSVG)
+)

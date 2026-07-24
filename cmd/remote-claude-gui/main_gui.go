@@ -18,6 +18,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
@@ -111,7 +112,7 @@ func run() {
 	// System tray: closing the window hides to the tray so the app keeps holding
 	// the tunnels up; Fyne adds a native Quit item. Only where a tray exists.
 	if desk, ok := a.(desktop.App); ok {
-		desk.SetSystemTrayIcon(appIcon)
+		desk.SetSystemTrayIcon(trayIcon)
 		desk.SetSystemTrayMenu(fyne.NewMenu("remote-claude",
 			fyne.NewMenuItem("Open", func() { w.Show() }),
 		))
@@ -135,6 +136,19 @@ func die(err error) {
 	log.Printf("fatal: %v", err)
 	fmt.Fprintln(os.Stderr, "remote-claude-gui:", err)
 	os.Exit(1)
+}
+
+// waiting is the panel shown in dialogs that block on the network: Claude surfing
+// above the status line, so a slow ssh/HTTP round-trip reads as "hang tight"
+// rather than a frozen window.
+func waiting(msg string) fyne.CanvasObject {
+	surf := canvas.NewImageFromResource(surfIcon)
+	surf.FillMode = canvas.ImageFillContain
+	surf.SetMinSize(fyne.NewSize(128, 128))
+	return container.NewCenter(container.NewVBox(
+		surf,
+		widget.NewLabelWithStyle(msg, fyne.TextAlignCenter, fyne.TextStyle{}),
+	))
 }
 
 type gui struct {
@@ -387,9 +401,13 @@ func (g *gui) showEdit(h core.HostView) {
 // the user to add to the server, then re-run setup. The ssh work runs off the UI
 // thread so the window stays responsive.
 func (g *gui) showSetupServer(alias string) {
+	prog := dialog.NewCustom(g.t("setup_server"), g.t("close"),
+		waiting(fmt.Sprintf(g.t("connecting_fmt"), alias)), g.win)
+	prog.Show()
 	go func() {
 		res, err := g.core.SetupServer(alias)
 		fyne.Do(func() {
+			prog.Hide()
 			switch {
 			case err == nil:
 				g.setupDone(res)
@@ -442,8 +460,7 @@ func (g *gui) setupDone(res provision.ServerResult) {
 // showUsage fetches Claude usage from the host over ssh (off the UI thread) and
 // shows a 1D/7D/30D tabbed, priced breakdown.
 func (g *gui) showUsage(alias string) {
-	body := container.NewStack(container.NewPadded(
-		widget.NewLabel(fmt.Sprintf(g.t("reading_usage_fmt"), alias))))
+	body := container.NewStack(waiting(fmt.Sprintf(g.t("reading_usage_fmt"), alias)))
 	d := dialog.NewCustom(fmt.Sprintf(g.t("usage_title_fmt"), alias), g.t("close"), body, g.win)
 	d.Resize(fyne.NewSize(640, 480))
 	d.Show()
@@ -608,7 +625,7 @@ func (g *gui) showLocalSSHD() {
 // download and install it. Network work runs off the UI thread.
 func (g *gui) checkUpdate() {
 	prog := dialog.NewCustom(g.t("update_title"), g.t("close"),
-		widget.NewLabel(g.t("update_checking")), g.win)
+		waiting(g.t("update_checking")), g.win)
 	prog.Show()
 	go func() {
 		rel, err := selfupdate.Check(version)
@@ -637,7 +654,7 @@ func (g *gui) checkUpdate() {
 // applyUpdate downloads and installs the latest release, then offers a restart.
 func (g *gui) applyUpdate() {
 	prog := dialog.NewCustom(g.t("update_title"), g.t("close"),
-		widget.NewLabel(g.t("update_downloading")), g.win)
+		waiting(g.t("update_downloading")), g.win)
 	prog.Show()
 	go func() {
 		err := selfupdate.Apply("")
