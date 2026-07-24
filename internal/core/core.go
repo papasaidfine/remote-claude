@@ -153,7 +153,10 @@ func (a *App) HostParams(alias string) ([]Param, error) {
 	return out, nil
 }
 
-// SetAlias sanitizes, stores, and persists this machine's name.
+// SetAlias sanitizes, stores, and persists this machine's name, then propagates
+// it as SetEnv LC_CLIENT_NAME=<name> onto every host — so the server-side agent
+// can ssh back via $LC_CLIENT_NAME no matter when the host was added or the
+// machine (re)named. Hosts carrying an unrelated SetEnv line are left alone.
 func (a *App) SetAlias(alias string) (string, error) {
 	alias = sanitizeAlias(alias)
 	if alias == "" {
@@ -164,6 +167,18 @@ func (a *App) SetAlias(alias string) (string, error) {
 	a.meta.ClientAlias = alias
 	if err := store.Save(a.metaPath, a.meta); err != nil {
 		return "", wrap(ErrInternal, err)
+	}
+	f := a.readConfig()
+	changed := false
+	for _, b := range f.Hosts() {
+		if applyClientName(b, alias) {
+			changed = true
+		}
+	}
+	if changed {
+		if err := a.writeConfig(f); err != nil {
+			return "", wrap(ErrInternal, err)
+		}
 	}
 	return alias, nil
 }
@@ -194,7 +209,7 @@ func (a *App) AddHost(alias, hostname, user string, port int) error {
 		b.Set("Port", strconv.Itoa(port))
 	}
 	if a.meta.ClientAlias != "" {
-		b.Set("SetEnv", "LC_CLIENT_NAME="+a.meta.ClientAlias)
+		applyClientName(b, a.meta.ClientAlias)
 	}
 	return a.writeConfig(f)
 }
@@ -375,6 +390,22 @@ func (a *App) preflightProxy(proxyCmd string) error {
 		return errf(ErrInvalid, "no vless nodes on this machine — add one under Xray (nodes are per-machine, not shared across your devices)")
 	}
 	return nil
+}
+
+// applyClientName sets SetEnv LC_CLIENT_NAME=<name> on b when it is missing or is
+// already an LC_CLIENT_NAME line; it leaves a host's unrelated SetEnv untouched.
+// Returns whether the block changed.
+func applyClientName(b *sshcfg.Block, name string) bool {
+	want := "LC_CLIENT_NAME=" + name
+	cur := strings.TrimSpace(b.Get("SetEnv"))
+	if cur == want {
+		return false
+	}
+	if cur == "" || strings.HasPrefix(cur, "LC_CLIENT_NAME=") {
+		b.Set("SetEnv", want)
+		return true
+	}
+	return false
 }
 
 // proxyBinPath extracts the relay binary path from a ProxyCommand of the form
