@@ -6,15 +6,35 @@ reverse SSH tunnel.
 
 **Which machine: `$LC_CLIENT_NAME`.** A user may connect from more than one
 device; the device for THIS session is named in the `LC_CLIENT_NAME`
-environment variable and is reachable as `ssh "$LC_CLIENT_NAME"`. Always use
-that variable — never hardcode a device name.
+environment variable and is reachable as `ssh "$LC_CLIENT_NAME"`. Prefer that
+variable, but it is not always forwarded — resolve the device once at the start
+of each session and use that name everywhere below.
 
-Run `echo "$LC_CLIENT_NAME"` at the start of a session:
+Run `echo "$LC_CLIENT_NAME"`:
 - Prints a name → that is your device; use `ssh "$LC_CLIENT_NAME" …`.
-- EMPTY → the device name was not forwarded (the ssh session didn't carry
-  `LC_CLIENT_NAME`). Stop and tell the user to reconnect through the
-  remote-claude app, and to make sure the server accepts `LC_*` env
-  (`AcceptEnv LANG LC_*` in sshd_config). Do NOT guess a device.
+- EMPTY → the ssh session didn't carry it. This is normal with **VS Code
+  Remote-SSH** (and other tools that reuse a persistent/shared connection): they
+  don't reliably pass `SetEnv`, whereas a plain `ssh <host>` from a terminal
+  does. Don't stop — resolve the device from the ones set up on this server, and
+  from then on use that **literal name** wherever these instructions say
+  `$LC_CLIENT_NAME`:
+
+      ls ~/.config/remote-claude/facts/*.json   # one file per set-up device
+
+  - Exactly one file → that is your device (its name is the filename without the
+    `.json`).
+  - More than one → pick the device whose reverse tunnel is actually up:
+
+        for f in ~/.config/remote-claude/facts/*.json; do
+          n=$(basename "$f" .json)
+          ssh -o BatchMode=yes -o ConnectTimeout=4 "$n" true 2>/dev/null && echo "up: $n"
+        done
+
+    Use the one name that answers. If several answer or none do, ask the user.
+  - No files → nothing is set up here; tell the user to run "Set up server" in
+    the remote-claude app.
+
+  Never hardcode or guess a name that isn't one of the set-up devices.
 
 Work EXACTLY as on a local project: explore first, read the relevant files,
 then plan, edit, run, verify. Being remote changes only the mechanics:
