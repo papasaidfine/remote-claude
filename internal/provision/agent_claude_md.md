@@ -6,35 +6,21 @@ reverse SSH tunnel.
 
 **Which machine: `$LC_CLIENT_NAME`.** A user may connect from more than one
 device; the device for THIS session is named in the `LC_CLIENT_NAME`
-environment variable and is reachable as `ssh "$LC_CLIENT_NAME"`. Prefer that
-variable, but it is not always forwarded — resolve the device once at the start
-of each session and use that name everywhere below.
+environment variable and is reachable as `ssh "$LC_CLIENT_NAME"`. Always use
+that variable — never hardcode or guess a device name.
 
-Run `echo "$LC_CLIENT_NAME"`:
+Run `echo "$LC_CLIENT_NAME"` at the start of a session:
 - Prints a name → that is your device; use `ssh "$LC_CLIENT_NAME" …`.
-- EMPTY → the ssh session didn't carry it. This is normal with **VS Code
-  Remote-SSH** (and other tools that reuse a persistent/shared connection): they
-  don't reliably pass `SetEnv`, whereas a plain `ssh <host>` from a terminal
-  does. Don't stop — resolve the device from the ones set up on this server, and
-  from then on use that **literal name** wherever these instructions say
-  `$LC_CLIENT_NAME`:
-
-      ls ~/.config/remote-claude/facts/*.json   # one file per set-up device
-
-  - Exactly one file → that is your device (its name is the filename without the
-    `.json`).
-  - More than one → pick the device whose reverse tunnel is actually up:
-
-        for f in ~/.config/remote-claude/facts/*.json; do
-          n=$(basename "$f" .json)
-          ssh -o BatchMode=yes -o ConnectTimeout=4 "$n" true 2>/dev/null && echo "up: $n"
-        done
-
-    Use the one name that answers. If several answer or none do, ask the user.
-  - No files → nothing is set up here; tell the user to run "Set up server" in
-    the remote-claude app.
-
-  Never hardcode or guess a name that isn't one of the set-up devices.
+- EMPTY → the ssh session didn't forward it. A plain terminal `ssh <host>` does
+  carry it, so the config is usually fine — the common culprit is **VS Code
+  Remote-SSH**, whose persistent remote server does not pick up `SetEnv`
+  variables retroactively: it only inherits them if it was (re)started after the
+  variable was set. Stop and tell the user to fix it on their side, then
+  reconnect — do NOT guess a device:
+    - In VS Code, run "Remote-SSH: Kill VS Code Server on Host…" (after "Close
+      Remote Connection"), then reconnect; the freshly-started server inherits it.
+    - Or set it in their remote shell startup (e.g. `export LC_CLIENT_NAME=<name>`
+      in ~/.zshrc or ~/.bashrc), which every new terminal then picks up.
 
 Work EXACTLY as on a local project: explore first, read the relevant files,
 then plan, edit, run, verify. Being remote changes only the mechanics:
