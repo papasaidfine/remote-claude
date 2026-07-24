@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"time"
+
+	"github.com/papasaidfine/remote-claude/internal/sysproc"
 )
 
 // Platform is the set of OS-divergent operations.
@@ -30,9 +32,22 @@ type Platform interface {
 // New returns the Platform implementation for the current OS.
 func New() Platform { return newPlatform() }
 
+// command builds an exec.Cmd for an OS helper with its console window suppressed.
+// The GUI runs windowless (built -H=windowsgui, so it owns no console); without
+// this, every console-subsystem child it spawns — icacls, powershell, sshd -t —
+// allocates and flashes its own black window. Local setup fires icacls four times
+// per SetStrictPerms and several times per run, so the flashes read as a swarm.
+// sysproc.Hide is a no-op off Windows, so the CLI's interactive sudo prompts in
+// run() keep their terminal.
+func command(bin string, args ...string) *exec.Cmd {
+	cmd := exec.Command(bin, args...)
+	sysproc.Hide(cmd)
+	return cmd
+}
+
 // run executes a command with its output attached to the console.
 func run(bin string, args ...string) error {
-	cmd := exec.Command(bin, args...)
+	cmd := command(bin, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
@@ -41,7 +56,7 @@ func run(bin string, args ...string) error {
 
 // runQuiet executes a command and captures its combined output.
 func runQuiet(bin string, args ...string) ([]byte, error) {
-	return exec.Command(bin, args...).CombinedOutput()
+	return command(bin, args...).CombinedOutput()
 }
 
 // timestamp is the suffix used for backup files.
