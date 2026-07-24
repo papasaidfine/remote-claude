@@ -21,6 +21,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/papasaidfine/remote-claude/internal/autostart"
@@ -96,6 +97,7 @@ func run() {
 	appCore.AutoStart(func(string, error) {})
 
 	a := app.New()
+	a.Settings().SetTheme(newCJKTheme()) // CJK-capable font so Chinese renders correctly
 	a.SetIcon(appIcon)
 	// Quitting stops the tunnels (their ssh children would otherwise be orphaned).
 	a.Lifecycle().SetOnStopped(func() { mgr.StopAll() })
@@ -465,21 +467,37 @@ func (g *gui) usageTabs(rep usage.Report) fyne.CanvasObject {
 	)
 }
 
+// usageWindow renders the priced breakdown as a real 6-column grid (not a
+// monospace ASCII table): full-width CJK glyphs and proportional fonts can't be
+// aligned by space-padding, so each cell is its own aligned label.
 func (g *gui) usageWindow(w usage.Window) fyne.CanvasObject {
 	if len(w.Models) == 0 {
 		return container.NewPadded(widget.NewLabel(g.t("no_usage_window")))
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "%-22s %9s %9s %9s %9s %10s\n",
-		g.t("col_model"), g.t("col_input"), g.t("col_output"), g.t("col_cache_w"), g.t("col_cache_r"), g.t("col_cost"))
-	for _, m := range w.Models {
-		fmt.Fprintf(&b, "%-22s %9s %9s %9s %9s %10s\n",
-			shortModel(m.Model), tok(m.Tokens.Input), tok(m.Tokens.Output),
-			tok(m.Tokens.CacheWrite), tok(m.Tokens.CacheRead), "$"+money(m.Cost))
+	var cells []fyne.CanvasObject
+	cell := func(text string, align fyne.TextAlign, bold bool) {
+		cells = append(cells, widget.NewLabelWithStyle(text, align, fyne.TextStyle{Bold: bold}))
 	}
-	fmt.Fprintf(&b, "%-22s %9s %9s %9s %9s %10s\n", g.t("col_total"),
-		tok(w.Total.Input), tok(w.Total.Output), tok(w.Total.CacheWrite), tok(w.Total.CacheRead), "$"+money(w.Cost))
-	return container.NewVScroll(widget.NewTextGridFromString(b.String()))
+	row := func(name string, tk usage.Tokens, cost float64, bold bool) {
+		cell(name, fyne.TextAlignLeading, bold)
+		cell(tok(tk.Input), fyne.TextAlignTrailing, bold)
+		cell(tok(tk.Output), fyne.TextAlignTrailing, bold)
+		cell(tok(tk.CacheWrite), fyne.TextAlignTrailing, bold)
+		cell(tok(tk.CacheRead), fyne.TextAlignTrailing, bold)
+		cell("$"+money(cost), fyne.TextAlignTrailing, bold)
+	}
+	cell(g.t("col_model"), fyne.TextAlignLeading, true)
+	cell(g.t("col_input"), fyne.TextAlignTrailing, true)
+	cell(g.t("col_output"), fyne.TextAlignTrailing, true)
+	cell(g.t("col_cache_w"), fyne.TextAlignTrailing, true)
+	cell(g.t("col_cache_r"), fyne.TextAlignTrailing, true)
+	cell(g.t("col_cost"), fyne.TextAlignTrailing, true)
+	for _, m := range w.Models {
+		row(shortModel(m.Model), m.Tokens, m.Cost, false)
+	}
+	row(g.t("col_total"), w.Total, w.Cost, true)
+	grid := container.New(layout.NewGridLayoutWithColumns(6), cells...)
+	return container.NewVScroll(container.NewPadded(grid))
 }
 
 func tok(n int64) string {

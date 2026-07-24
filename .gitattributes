@@ -3,3 +3,7 @@
 # would break them. Force LF on checkout regardless of core.autocrlf.
 *.sh text eol=lf
 internal/provision/agent_claude_md.md text eol=lf
+
+# Embedded fonts are binary — never apply line-ending normalization (a CRLF
+# munge on a Windows checkout would corrupt the go:embed-ed OTF).
+*.otf binary
