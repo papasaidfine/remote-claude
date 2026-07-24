@@ -31,7 +31,8 @@ import (
 // stays testable; may be nil (setup capabilities disabled).
 type Provisioner interface {
 	EnsureKey() error
-	ServerBootstrap(alias, clientAlias string, reversePort int, password string) (provision.ServerResult, error)
+	ServerBootstrap(alias, clientAlias string, reversePort int) (provision.ServerResult, error)
+	PublicKey() (string, error)
 	EnsureLocalSSHD(disablePassword bool) error
 }
 
@@ -324,8 +325,11 @@ func (a *App) AutoStart(warn func(alias string, err error)) {
 }
 
 // SetupServer bootstraps the server end of a host over its connection using the
-// host's reverse-tunnel port, then authorizes the returned key locally.
-func (a *App) SetupServer(alias, password string) (provision.ServerResult, error) {
+// host's reverse-tunnel port, then authorizes the returned key locally. It uses
+// key/agent auth only — no password. If the local key isn't authorized on the
+// server yet, ssh fails with a publickey error; the caller then shows the public
+// key (see PublicKey) for the user to authorize on the server.
+func (a *App) SetupServer(alias string) (provision.ServerResult, error) {
 	if a.prov == nil {
 		return provision.ServerResult{}, errf(ErrUnavailable, "provisioning unavailable")
 	}
@@ -337,8 +341,21 @@ func (a *App) SetupServer(alias, password string) (provision.ServerResult, error
 	if !exists {
 		return provision.ServerResult{}, errf(ErrNotFound, "no such host")
 	}
-	res, err := a.prov.ServerBootstrap(alias, clientAlias, rport, password)
+	res, err := a.prov.ServerBootstrap(alias, clientAlias, rport)
 	return res, wrap(ErrRemote, err)
+}
+
+// PublicKey ensures the local ssh key exists and returns its public half, for
+// the user to copy onto a server that hasn't authorized it yet.
+func (a *App) PublicKey() (string, error) {
+	if a.prov == nil {
+		return "", errf(ErrUnavailable, "provisioning unavailable")
+	}
+	pub, err := a.prov.PublicKey()
+	if err != nil {
+		return "", wrap(ErrInternal, err)
+	}
+	return pub, nil
 }
 
 // EnsureLocalSSHD installs/ensures the local ssh server (may need elevation).

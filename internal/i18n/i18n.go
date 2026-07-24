@@ -135,12 +135,14 @@ var messages = map[string]map[Lang]string{
 	"reverse_port":   {EN: "Reverse port (blank = off)", ZH: "反向端口（留空 = 关闭）"},
 
 	// set up server
-	"setup_pw_info":      {EN: "The server rejected your key — it isn't authorized there yet.\nIf the server accepts a password, enter it to authorize your key.\n(Key-only server? Cancel and add ~/.ssh/id_ed25519.pub to its\nauthorized_keys yourself.)", ZH: "服务器拒绝了你的密钥——它还没在那边被授权。\n如果服务器接受密码，输入密码以授权你的密钥。\n（仅密钥的服务器？取消，并自行把 ~/.ssh/id_ed25519.pub\n加到它的 authorized_keys。）"},
-	"setup_pw_authorize": {EN: "Authorize with password", ZH: "用密码授权"},
-	"server_configured":  {EN: "Server configured", ZH: "服务器已配置"},
-	"server_conf_fmt":    {EN: "Configured as %q. Its connect-back key was %s on this machine.", ZH: "已配置为 %q。它的回连密钥在本机%s。"},
-	"authorized":         {EN: "authorized", ZH: "已授权"},
-	"already_present":    {EN: "already present", ZH: "本已存在"},
+	"authorize_title":   {EN: "Authorize this machine on the server", ZH: "在服务器上授权这台机器"},
+	"authorize_instr":   {EN: "The server %s hasn't authorized this machine's key yet.\nAdd the public key below to ~/.ssh/authorized_keys on the server, then click “Set up server” again.", ZH: "服务器 %s 还没授权这台机器的密钥。\n把下面这段公钥加到服务器的 ~/.ssh/authorized_keys，然后再点一次“配置服务器”。"},
+	"copy":              {EN: "Copy", ZH: "复制"},
+	"copied":            {EN: "Public key copied to clipboard.", ZH: "公钥已复制到剪贴板。"},
+	"server_configured": {EN: "Server configured", ZH: "服务器已配置"},
+	"server_conf_fmt":   {EN: "Configured as %q. Its connect-back key was %s on this machine.", ZH: "已配置为 %q。它的回连密钥在本机%s。"},
+	"authorized":        {EN: "authorized", ZH: "已授权"},
+	"already_present":   {EN: "already present", ZH: "本已存在"},
 
 	// usage
 	"reading_usage_fmt": {EN: "Reading Claude usage from %s …", ZH: "正在从 %s 读取 Claude 用量 …"},

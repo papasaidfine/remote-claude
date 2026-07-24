@@ -138,6 +138,17 @@
     <div class="row end"><button id="usage-close" class="secondary" data-i18n="close">Close</button></div>
   </dialog>
 
+  <dialog id="authkey-dialog">
+    <h3 data-i18n="authorize_title">Authorize this machine on the server</h3>
+    <p class="hint" id="authkey-instr"></p>
+    <textarea id="authkey-text" rows="4" readonly spellcheck="false"></textarea>
+    <div class="row">
+      <button id="authkey-copy" data-i18n="copy">Copy</button>
+      <span id="authkey-msg" class="msg ok"></span>
+    </div>
+    <div class="row end"><button id="authkey-close" class="secondary" data-i18n="close">Close</button></div>
+  </dialog>
+
   <script src="/static/app.js"></script>
 </body>
 </html>

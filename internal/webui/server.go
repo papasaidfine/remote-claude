@@ -41,6 +41,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/hosts/{alias}/start", s.handleStart)
 	mux.HandleFunc("POST /api/hosts/{alias}/stop", s.handleStop)
 	mux.HandleFunc("POST /api/hosts/{alias}/setup-server", s.handleSetupServer)
+	mux.HandleFunc("GET /api/pubkey", s.handlePubKey)
 	mux.HandleFunc("GET /api/hosts/{alias}/usage", s.handleUsage)
 	mux.HandleFunc("GET /api/nodes", s.handleGetNodes)
 	mux.HandleFunc("POST /api/nodes", s.handleSetNodes)
@@ -186,16 +187,21 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSetupServer(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Password string `json:"password"`
-	}
-	json.NewDecoder(r.Body).Decode(&body) // body optional
-	res, err := s.app.SetupServer(r.PathValue("alias"), body.Password)
+	res, err := s.app.SetupServer(r.PathValue("alias"))
 	if err != nil {
 		fail(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) handlePubKey(w http.ResponseWriter, r *http.Request) {
+	pub, err := s.app.PublicKey()
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"pubkey": pub})
 }
 
 func (s *Server) handleLocalSSHD(w http.ResponseWriter, r *http.Request) {

@@ -3,7 +3,6 @@ package provision
 import (
 	_ "embed"
 	"fmt"
-	"os"
 	"os/exec"
 	"os/user"
 	"strconv"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/papasaidfine/remote-claude/internal/authorize"
 	"github.com/papasaidfine/remote-claude/internal/keys"
-	"github.com/papasaidfine/remote-claude/internal/paths"
 	"github.com/papasaidfine/remote-claude/internal/sshbin"
 	"github.com/papasaidfine/remote-claude/internal/sysproc"
 )
@@ -48,11 +46,10 @@ type serverInput struct {
 // device-aware CLAUDE.md + per-device facts, and authorizes the returned
 // connect-back key locally (loopback only).
 //
-// password is used only for first contact, when the local key isn't authorized
-// on the server yet: it is fed to ssh headlessly via SSH_ASKPASS. Empty password
-// means key/agent auth only (BatchMode). Once this runs, the local key is
-// authorized, so later connections need no password.
-func (c *Client) ServerBootstrap(alias, clientAlias string, reversePort int, password string) (ServerResult, error) {
+// It connects with key/agent auth only (BatchMode) — never a password. If the
+// local key isn't authorized on the server yet, ssh fails with a publickey
+// error and the caller surfaces the public key for the user to authorize.
+func (c *Client) ServerBootstrap(alias, clientAlias string, reversePort int) (ServerResult, error) {
 	if alias == "" {
 		return ServerResult{}, fmt.Errorf("no ssh host selected")
 	}
@@ -77,12 +74,9 @@ func (c *Client) ServerBootstrap(alias, clientAlias string, reversePort int, pas
 		LocalPubKey: strings.TrimSpace(res.Pub),
 	}, agentClaudeMD)
 
-	cmd := exec.Command(sshbin.SSH(), bootstrapSSHArgs(alias, password)...)
+	cmd := exec.Command(sshbin.SSH(), bootstrapSSHArgs(alias)...)
 	sysproc.Hide(cmd)
 	cmd.Stdin = strings.NewReader(script)
-	if password != "" {
-		cmd.Env = append(os.Environ(), askpassEnv(password)...)
-	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return ServerResult{}, fmt.Errorf("server setup over 'ssh %s' failed: %v\n%s",
@@ -107,36 +101,19 @@ func (c *Client) ServerBootstrap(alias, clientAlias string, reversePort int, pas
 // shell-escaped inputs, a quoted heredoc carrying the CLAUDE.md body (so nothing
 // in it is expanded here — `$LC_CLIENT_NAME` stays literal for the agent), then
 // the static body.
-// bootstrapSSHArgs builds the ssh args to pipe the bootstrap script. With a
-// password it drops BatchMode and lets ssh use the SSH_ASKPASS helper; without,
-// it stays key/agent-only (BatchMode).
-func bootstrapSSHArgs(alias, password string) []string {
-	args := []string{
+// bootstrapSSHArgs builds the ssh args to pipe the bootstrap script. It is always
+// key/agent-only (BatchMode) — never a password; if the key isn't authorized yet
+// ssh fails fast with a publickey error.
+func bootstrapSSHArgs(alias string) []string {
+	return []string{
 		"-o", "ConnectTimeout=15",
 		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "BatchMode=yes",
 		// Use the user's agent/default keys too, not only the app's key — the
 		// host block forces IdentitiesOnly, but for this one-time bootstrap we
 		// want to get in however the user already can.
 		"-o", "IdentitiesOnly=no",
-	}
-	if password == "" {
-		args = append(args, "-o", "BatchMode=yes")
-	} else {
-		args = append(args, "-o", "NumberOfPasswordPrompts=1")
-	}
-	return append(args, alias, "bash -s")
-}
-
-// askpassEnv makes ssh fetch the password non-interactively by re-executing this
-// binary in askpass mode (see main.go RC_ASKPASS_MODE). DISPLAY is a fallback
-// for OpenSSH older than the SSH_ASKPASS_REQUIRE flag.
-func askpassEnv(password string) []string {
-	return []string{
-		"SSH_ASKPASS=" + paths.SelfExe(),
-		"SSH_ASKPASS_REQUIRE=force",
-		"RC_ASKPASS_MODE=1",
-		"RC_ASKPASS_SECRET=" + password,
-		"DISPLAY=:0",
+		alias, "bash -s",
 	}
 }
 

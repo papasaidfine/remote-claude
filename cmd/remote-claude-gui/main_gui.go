@@ -42,14 +42,10 @@ import (
 var version = "dev"
 
 func main() {
-	// ssh invokes this same binary headlessly for the xray ProxyCommand relay and
-	// the SSH_ASKPASS helper (a host's ProxyCommand points at whichever binary
-	// wrote it — possibly this GUI). Handle those and exit BEFORE opening a window,
-	// or starting a tunnel would spawn a second app window.
-	if os.Getenv("RC_ASKPASS_MODE") == "1" {
-		fmt.Println(os.Getenv("RC_ASKPASS_SECRET"))
-		return
-	}
+	// ssh invokes this same binary headlessly for the xray ProxyCommand relay (a
+	// host's ProxyCommand points at whichever binary wrote it — possibly this
+	// GUI). Handle it and exit BEFORE opening a window, or starting a tunnel would
+	// spawn a second app window.
 	if len(os.Args) >= 2 && os.Args[1] == "relay" {
 		os.Exit(relay.Main(os.Args[2:]))
 	}
@@ -385,18 +381,19 @@ func (g *gui) showEdit(h core.HostView) {
 	d.Show()
 }
 
-// showSetupServer tries key/agent auth first (no prompt) and only asks for a
-// password if that fails — the first-time authorization case. The ssh work runs
-// off the UI thread so the window stays responsive.
+// showSetupServer connects with key/agent auth only (never a password). If the
+// server hasn't authorized this machine's key yet, it shows the public key for
+// the user to add to the server, then re-run setup. The ssh work runs off the UI
+// thread so the window stays responsive.
 func (g *gui) showSetupServer(alias string) {
 	go func() {
-		res, err := g.core.SetupServer(alias, "")
+		res, err := g.core.SetupServer(alias)
 		fyne.Do(func() {
 			switch {
 			case err == nil:
 				g.setupDone(res)
 			case isAuthError(err):
-				g.promptSetupPassword(alias) // key genuinely not authorized yet
+				g.showAuthorizeKey(alias) // key not authorized on the server yet
 			default:
 				dialog.ShowError(err, g.win) // some other failure — show the real error
 			}
@@ -411,25 +408,28 @@ func isAuthError(err error) bool {
 	return strings.Contains(s, "permission denied") || strings.Contains(s, "publickey")
 }
 
-func (g *gui) promptSetupPassword(alias string) {
-	pw := widget.NewPasswordEntry()
-	info := widget.NewLabel(g.t("setup_pw_info"))
-	dialog.ShowCustomConfirm(g.t("setup_server"), g.t("setup_pw_authorize"), g.t("cancel"),
-		container.NewVBox(info, pw), func(ok bool) {
-			if !ok {
-				return
-			}
-			go func() {
-				res, err := g.core.SetupServer(alias, pw.Text)
-				fyne.Do(func() {
-					if err != nil {
-						dialog.ShowError(err, g.win)
-						return
-					}
-					g.setupDone(res)
-				})
-			}()
-		}, g.win)
+// showAuthorizeKey displays this machine's public key so the user can add it to
+// the server's authorized_keys, then re-run "Set up server".
+func (g *gui) showAuthorizeKey(alias string) {
+	pub, err := g.core.PublicKey()
+	if err != nil {
+		dialog.ShowError(err, g.win)
+		return
+	}
+	info := widget.NewLabel(fmt.Sprintf(g.t("authorize_instr"), alias))
+	info.Wrapping = fyne.TextWrapWord
+	key := widget.NewMultiLineEntry()
+	key.SetText(pub)
+	key.Wrapping = fyne.TextWrapBreak
+	key.Disable() // read-only; copy via the button
+	copyBtn := widget.NewButton(g.t("copy"), func() {
+		g.app.Clipboard().SetContent(pub)
+		g.status.SetText(g.t("copied"))
+	})
+	content := container.NewBorder(info, copyBtn, nil, nil, key)
+	d := dialog.NewCustom(g.t("authorize_title"), g.t("close"), content, g.win)
+	d.Resize(fyne.NewSize(560, 340))
+	d.Show()
 }
 
 func (g *gui) setupDone(res provision.ServerResult) {

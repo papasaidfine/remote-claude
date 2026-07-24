@@ -38,13 +38,6 @@ const defaultAddr = "127.0.0.1:8765"
 var version = "dev"
 
 func main() {
-	// SSH_ASKPASS hook: when the bridge/provision runs ssh with a UI-supplied
-	// password, ssh execs this same binary to fetch it. Gated by an env flag so
-	// a normal launch never triggers it.
-	if os.Getenv("RC_ASKPASS_MODE") == "1" {
-		fmt.Println(os.Getenv("RC_ASKPASS_SECRET"))
-		return
-	}
 	if len(os.Args) >= 2 {
 		switch os.Args[1] {
 		case "relay":

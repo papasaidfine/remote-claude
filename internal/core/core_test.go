@@ -42,12 +42,13 @@ type fakeProv struct {
 }
 
 func (f *fakeProv) EnsureKey() error { f.keyCalls++; return nil }
-func (f *fakeProv) ServerBootstrap(alias, clientAlias string, port int, pw string) (provision.ServerResult, error) {
+func (f *fakeProv) ServerBootstrap(alias, clientAlias string, port int) (provision.ServerResult, error) {
 	f.bootCalls++
 	f.lastAlias = alias
 	f.lastPort = port
 	return provision.ServerResult{Alias: clientAlias, Authorized: true, ServerPubKey: "k"}, nil
 }
+func (f *fakeProv) PublicKey() (string, error) { return "ssh-ed25519 AAAATEST", nil }
 func (f *fakeProv) EnsureLocalSSHD(bool) error { return nil }
 
 type fakePlat struct{}
@@ -204,7 +205,7 @@ func TestSetupServerUsesMetadataReversePort(t *testing.T) {
 	app.SetAlias("lc-pc")
 	app.AddHost("wb", "h", "u", 22)
 	app.SetReverseTunnel("wb", 2223)
-	if _, err := app.SetupServer("wb", ""); err != nil {
+	if _, err := app.SetupServer("wb"); err != nil {
 		t.Fatalf("SetupServer: %v", err)
 	}
 	if fp.bootCalls != 1 || fp.lastAlias != "wb" || fp.lastPort != 2223 {

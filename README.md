@@ -58,9 +58,10 @@ Open the app, then:
    user, and port.
 4. **Enable the reverse tunnel** and set its port, then **Start** — it comes up
    and stays reconnected.
-5. **Set up server** — configures the server side over the connection. The first
-   time it may ask for your server password to authorize your key; after that
-   it's automatic.
+5. **Set up server** — configures the server side over the connection using key
+   auth only (never a password). If the server hasn't authorized this machine's
+   key yet, it shows the public key for you to add to the server's
+   `authorized_keys`; add it, then run **Set up server** again.
 6. **Xray** (optional, for censored/slow networks) — download the binary and add
    your `vless://` nodes, then turn on xray per host.
 7. **Usage** — Claude token usage & Anthropic-priced cost per host, by model,

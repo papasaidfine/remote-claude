@@ -48,8 +48,9 @@ irm https://raw.githubusercontent.com/papasaidfine/remote-claude/main/install.ps
 2. **安装 / 确保本地 ssh 服务器**——让 agent 能连回来（可能需要 `sudo` / 管理员）。
 3. **添加 host**（或用 `~/.ssh/config` 里已有的）——地址、SSH 用户、端口。
 4. **启用反向隧道**并设端口，再 **Start**——建立并自动重连。
-5. **配置服务器**——经这条连接把远端配好。首次可能要输你在**服务器上**的密码以
-   授权你的 key，之后全自动。
+5. **配置服务器**——经这条连接把远端配好，**只用密钥、从不用密码**。如果服务器还
+   没授权这台机器的密钥，它会把公钥显示出来让你加到服务器的 `authorized_keys`；加好
+   后再点一次 **配置服务器** 即可。
 6. **Xray**（可选，网络受限/慢时用）——在 Xray 区下载二进制、填 `vless://` 节点，
    然后按 host 打开 xray。
 7. **Usage**——按 host 查看 Claude 用量与 Anthropic 计价，分模型，覆盖过去 1 / 7 /

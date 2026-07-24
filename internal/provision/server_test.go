@@ -150,34 +150,24 @@ func TestServerScriptExecutes(t *testing.T) {
 }
 
 func TestBootstrapSSHArgs(t *testing.T) {
-	noPw := strings.Join(bootstrapSSHArgs("workbox", ""), " ")
-	if !strings.Contains(noPw, "BatchMode=yes") {
-		t.Errorf("no-password path should be BatchMode: %q", noPw)
+	args := strings.Join(bootstrapSSHArgs("workbox"), " ")
+	if !strings.Contains(args, "BatchMode=yes") {
+		t.Errorf("bootstrap must be key/agent-only (BatchMode): %q", args)
 	}
-	withPw := strings.Join(bootstrapSSHArgs("workbox", "secret"), " ")
-	if strings.Contains(withPw, "BatchMode") {
-		t.Errorf("password path must not set BatchMode: %q", withPw)
+	if strings.Contains(args, "NumberOfPasswordPrompts") || strings.Contains(args, "SSH_ASKPASS") {
+		t.Errorf("bootstrap must never use a password path: %q", args)
 	}
-	if !strings.Contains(withPw, "workbox") || !strings.HasSuffix(withPw, "bash -s") {
-		t.Errorf("must ssh to the alias then run the script: %q", withPw)
-	}
-}
-
-func TestAskpassEnv(t *testing.T) {
-	env := strings.Join(askpassEnv("hunter2"), "\n")
-	for _, want := range []string{"SSH_ASKPASS=", "SSH_ASKPASS_REQUIRE=force", "RC_ASKPASS_MODE=1", "RC_ASKPASS_SECRET=hunter2"} {
-		if !strings.Contains(env, want) {
-			t.Errorf("askpass env missing %q", want)
-		}
+	if !strings.Contains(args, "workbox") || !strings.HasSuffix(args, "bash -s") {
+		t.Errorf("must ssh to the alias then run the script: %q", args)
 	}
 }
 
 func TestServerBootstrapRequiresAlias(t *testing.T) {
 	c := New(testPaths(t), platform.New())
-	if _, err := c.ServerBootstrap("wb", "", 2222, ""); err == nil {
+	if _, err := c.ServerBootstrap("wb", "", 2222); err == nil {
 		t.Fatal("expected error when client alias is empty")
 	}
-	if _, err := c.ServerBootstrap("wb", "me", 0, ""); err == nil {
+	if _, err := c.ServerBootstrap("wb", "me", 0); err == nil {
 		t.Fatal("expected error when reverse port is missing")
 	}
 }

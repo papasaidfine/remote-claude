@@ -7,6 +7,7 @@ package provision
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/papasaidfine/remote-claude/internal/keys"
 	"github.com/papasaidfine/remote-claude/internal/paths"
@@ -36,6 +37,17 @@ func (c *Client) EnsureKey() error {
 		return fmt.Errorf("ensure ssh key: %w", err)
 	}
 	return nil
+}
+
+// PublicKey ensures the local ssh key exists and returns its public half
+// (trimmed) — shown to the user to authorize on a server that hasn't accepted it
+// yet.
+func (c *Client) PublicKey() (string, error) {
+	res, err := keys.Ensure(c.P, c.Plat.SetStrictPerms)
+	if err != nil {
+		return "", fmt.Errorf("ensure ssh key: %w", err)
+	}
+	return strings.TrimSpace(res.Pub), nil
 }
 
 // EnsureLocalSSHD installs/enables and hardens the local sshd so the server can

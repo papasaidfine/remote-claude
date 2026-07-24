@@ -39,9 +39,10 @@ func (f *fakeMgr) Status(a string) bridge.Status {
 type fakeProv struct{}
 
 func (fakeProv) EnsureKey() error { return nil }
-func (fakeProv) ServerBootstrap(alias, clientAlias string, port int, pw string) (provision.ServerResult, error) {
+func (fakeProv) ServerBootstrap(alias, clientAlias string, port int) (provision.ServerResult, error) {
 	return provision.ServerResult{Alias: clientAlias, Authorized: true, ServerPubKey: "k"}, nil
 }
+func (fakeProv) PublicKey() (string, error) { return "ssh-ed25519 AAAATEST", nil }
 func (fakeProv) EnsureLocalSSHD(bool) error { return nil }
 
 type fakePlat struct{}
@@ -191,7 +192,7 @@ func TestSetupServer(t *testing.T) {
 	do(t, s, "POST", "/api/alias", map[string]string{"alias": "lisa"})
 	addHost(t, s, "wb")
 	do(t, s, "POST", "/api/hosts/wb/reverse", map[string]int{"port": 2223})
-	code, resp := do(t, s, "POST", "/api/hosts/wb/setup-server", map[string]string{"password": ""})
+	code, resp := do(t, s, "POST", "/api/hosts/wb/setup-server", nil)
 	if code != 200 || resp["authorized"] != true {
 		t.Fatalf("setup-server code %d resp %v", code, resp)
 	}

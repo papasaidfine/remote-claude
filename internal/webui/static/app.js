@@ -58,7 +58,10 @@ const I18N = {
     setup_ok: 'Server configured as “%s”. Its connect-back key was %s on this machine.',
     authorized: "authorized",
     already_present: "already present",
-    setup_prompt: "The server rejected your key — it isn't authorized there yet. If the\nserver accepts a password, enter it to authorize your key (Cancel to abort).\nKey-only server? Cancel and add ~/.ssh/id_ed25519.pub to its authorized_keys.",
+    authorize_title: "Authorize this machine on the server",
+    authorize_instr: "The server %s hasn't authorized this machine's key yet. Add the public key below to ~/.ssh/authorized_keys on the server, then click “Set up server” again.",
+    copy: "Copy",
+    copied: "Public key copied to clipboard.",
     col_model: "Model",
     col_input: "Input",
     col_output: "Output",
@@ -141,7 +144,10 @@ const I18N = {
     setup_ok: '服务器已配置为“%s”。它的回连密钥在本机%s。',
     authorized: "已授权",
     already_present: "本已存在",
-    setup_prompt: "服务器拒绝了你的密钥——它还没在那边被授权。如果服务器接受\n密码，输入密码以授权你的密钥（取消则中止）。\n仅密钥的服务器？取消，并把 ~/.ssh/id_ed25519.pub 加到它的 authorized_keys。",
+    authorize_title: "在服务器上授权这台机器",
+    authorize_instr: "服务器 %s 还没授权这台机器的密钥。把下面这段公钥加到服务器的 ~/.ssh/authorized_keys，然后再点一次“配置服务器”。",
+    copy: "复制",
+    copied: "公钥已复制到剪贴板。",
     col_model: "模型",
     col_input: "输入",
     col_output: "输出",
@@ -279,26 +285,46 @@ function setupOk(res) {
   alert(fmt("setup_ok", res.alias, res.authorized ? t("authorized") : t("already_present")));
 }
 
-// Try key/agent auth first. Only ask for a password if the server actually
-// rejected the key; any other failure shows the real error (no password demand).
+// Key/agent auth only — never a password. If the server hasn't authorized this
+// machine's key, show the public key to copy over; any other failure shows the
+// real error.
 async function setupServer(alias) {
   try {
-    setupOk(await api("POST", `/api/hosts/${alias}/setup-server`, { password: "" }));
+    setupOk(await api("POST", `/api/hosts/${alias}/setup-server`));
     await refresh();
-    return;
   } catch (e) {
-    if (!/permission denied|publickey/i.test(e.message)) {
+    if (/permission denied|publickey/i.test(e.message)) {
+      await showAuthorizeKey(alias);
+    } else {
       alert(e.message); // not an auth problem — show the real error
-      return;
     }
-    const pw = prompt(t("setup_prompt"));
-    if (pw === null) return;
-    try {
-      setupOk(await api("POST", `/api/hosts/${alias}/setup-server`, { password: pw }));
-      await refresh();
-    } catch (e2) { alert(e2.message); }
   }
 }
+
+// showAuthorizeKey displays this machine's public key so the user can add it to
+// the server's authorized_keys, then re-run "Set up server".
+async function showAuthorizeKey(alias) {
+  let pub = "";
+  try { pub = (await api("GET", "/api/pubkey")).pubkey || ""; }
+  catch (e) { alert(e.message); return; }
+  $("#authkey-instr").textContent = fmt("authorize_instr", alias);
+  $("#authkey-text").value = pub;
+  $("#authkey-msg").textContent = "";
+  authkeyDialog.showModal();
+}
+
+const authkeyDialog = $("#authkey-dialog");
+$("#authkey-close").onclick = () => authkeyDialog.close();
+$("#authkey-copy").onclick = async () => {
+  const text = $("#authkey-text").value;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (_) {
+    $("#authkey-text").select();
+    document.execCommand("copy");
+  }
+  $("#authkey-msg").textContent = t("copied");
+};
 
 function renderFooter(state) {
   $("#platform").textContent = fmt("platform", state.platform) + (state.xray_supported ? "" : t("xray_optional"));
