@@ -90,6 +90,7 @@ func run() {
 	mgr := bridge.NewManager(sshbin.SSH())
 	prov := provision.New(p, plat)
 	appCore := core.New(cfg, store.Path(p), p, mgr, prov, plat)
+	appCore.RepairProxies() // fix any xray ProxyCommand left pointing at a moved binary
 	appCore.AutoStart(func(string, error) {})
 
 	a := app.New()

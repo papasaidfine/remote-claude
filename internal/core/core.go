@@ -334,15 +334,94 @@ func (a *App) SetupServer(alias string) (provision.ServerResult, error) {
 		return provision.ServerResult{}, errf(ErrUnavailable, "provisioning unavailable")
 	}
 	a.mu.Lock()
-	exists := a.readConfig().FindHost(alias) != nil
+	b := a.readConfig().FindHost(alias)
+	exists := b != nil
+	var proxyCmd string
+	if b != nil {
+		proxyCmd = b.Get("ProxyCommand")
+	}
 	rport := a.meta.Host(alias).ReversePort
 	clientAlias := a.meta.ClientAlias
 	a.mu.Unlock()
 	if !exists {
 		return provision.ServerResult{}, errf(ErrNotFound, "no such host")
 	}
+	// If the host routes through xray, sanity-check that path first — otherwise a
+	// broken proxy surfaces only as ssh's opaque "Connection closed by UNKNOWN
+	// port 65535" from deep inside the ProxyCommand.
+	if proxyCmd != "" {
+		if err := a.preflightProxy(proxyCmd); err != nil {
+			return provision.ServerResult{}, err
+		}
+	}
 	res, err := a.prov.ServerBootstrap(alias, clientAlias, rport)
 	return res, wrap(ErrRemote, err)
+}
+
+// preflightProxy checks the local pieces a host's xray ProxyCommand needs before
+// we lean on it: the relay binary it points at still exists, xray is installed on
+// this machine, and there is at least one vless node. These settings are
+// per-machine, so a working setup on one device says nothing about another.
+func (a *App) preflightProxy(proxyCmd string) error {
+	if bin := proxyBinPath(proxyCmd); bin != "" {
+		if _, err := os.Stat(bin); err != nil {
+			return errf(ErrInvalid, "the xray proxy points at a binary that's no longer there:\n  %s\nToggle \"route through xray\" off and on for this host to repoint it at this app.", bin)
+		}
+	}
+	if xray.Resolve(a.paths) == "" {
+		return errf(ErrUnavailable, "xray isn't installed on this machine — open Xray and Download it (xray + nodes are per-machine, not shared across your devices)")
+	}
+	if nodes.Count(a.paths.VlessNodes) == 0 {
+		return errf(ErrInvalid, "no vless nodes on this machine — add one under Xray (nodes are per-machine, not shared across your devices)")
+	}
+	return nil
+}
+
+// proxyBinPath extracts the relay binary path from a ProxyCommand of the form
+// `"<path>" relay %h %p` (or an unquoted first token).
+func proxyBinPath(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return ""
+	}
+	if cmd[0] == '"' {
+		if i := strings.IndexByte(cmd[1:], '"'); i >= 0 {
+			return cmd[1 : 1+i]
+		}
+		return ""
+	}
+	return strings.Fields(cmd)[0]
+}
+
+// RepairProxies re-points any managed xray ProxyCommand whose relay binary no
+// longer exists at the current binary. It self-heals the common case where the
+// app was moved after "route through xray" was enabled — e.g. on macOS, run from
+// the mounted dmg and then dragged into Applications — which otherwise breaks the
+// relay with an opaque ssh "Connection closed by UNKNOWN port 65535". Best-effort,
+// call once at startup.
+func (a *App) RepairProxies() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	f := a.readConfig()
+	want := provision.ProxyCommand()
+	changed := false
+	for _, b := range f.Hosts() {
+		pc := strings.TrimSpace(b.Get("ProxyCommand"))
+		if !strings.HasSuffix(pc, "relay %h %p") {
+			continue // not one of our managed relay proxies
+		}
+		bin := proxyBinPath(pc)
+		if bin == "" {
+			continue
+		}
+		if _, err := os.Stat(bin); err != nil { // recorded binary is gone → repoint
+			b.Set("ProxyCommand", want)
+			changed = true
+		}
+	}
+	if changed {
+		_ = a.writeConfig(f)
+	}
 }
 
 // PublicKey ensures the local ssh key exists and returns its public half, for

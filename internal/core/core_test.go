@@ -213,6 +213,41 @@ func TestSetupServerUsesMetadataReversePort(t *testing.T) {
 	}
 }
 
+func TestProxyBinPath(t *testing.T) {
+	cases := map[string]string{
+		`"/Apps/x.app/Contents/MacOS/rc" relay %h %p`: "/Apps/x.app/Contents/MacOS/rc",
+		`/usr/local/bin/rc relay %h %p`:               "/usr/local/bin/rc",
+		"":                                            "",
+	}
+	for in, want := range cases {
+		if got := proxyBinPath(in); got != want {
+			t.Errorf("proxyBinPath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestRepairProxiesRepointsMovedBinary(t *testing.T) {
+	app, _, _ := newTestApp(t)
+	app.AddHost("wb", "h", "u", 22)
+	// A proxy left pointing at a binary that no longer exists (moved app).
+	if err := app.SetParam("wb", "ProxyCommand", `"/no/such/binary" relay %h %p`); err != nil {
+		t.Fatalf("SetParam: %v", err)
+	}
+	app.RepairProxies()
+	if got := app.State().Hosts[0].ProxyCommand; got != provision.ProxyCommand() {
+		t.Errorf("stale proxy not repointed:\n got  %q\n want %q", got, provision.ProxyCommand())
+	}
+	// A non-managed ProxyCommand (not our relay) must be left untouched.
+	app.AddHost("other", "h2", "u", 22)
+	app.SetParam("other", "ProxyCommand", "ssh -W %h:%p jump")
+	app.RepairProxies()
+	for _, h := range app.State().Hosts {
+		if h.Alias == "other" && h.ProxyCommand != "ssh -W %h:%p jump" {
+			t.Errorf("non-managed ProxyCommand was rewritten: %q", h.ProxyCommand)
+		}
+	}
+}
+
 func TestAutoStartStartsFlaggedHosts(t *testing.T) {
 	app, fm, _ := newTestApp(t)
 	app.AddHost("wb", "h", "u", 22)

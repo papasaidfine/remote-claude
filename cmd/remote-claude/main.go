@@ -74,6 +74,7 @@ func runApp(addr string, openBrowser bool) {
 	mgr := bridge.NewManager(sshbin.SSH())
 	prov := provision.New(p, plat)
 	app := core.New(cfg, cfgPath, p, mgr, prov, plat) // Normalizes cfg
+	app.RepairProxies()                               // fix xray ProxyCommand pointing at a moved binary
 	srv := webui.New(app)
 
 	app.AutoStart(func(alias string, err error) {
