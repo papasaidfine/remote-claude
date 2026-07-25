@@ -97,8 +97,9 @@ label.check.inline input { width: auto; }
 .tabs { display: flex; gap: 4px; margin: 4px 0 12px; border-bottom: 1px solid var(--line); }
 .tab { background: transparent; color: var(--dim); border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 6px 12px; font-weight: 600; }
 .tab.active { color: var(--text); border-bottom-color: var(--accent); }
-.usage-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.usage-table th, .usage-table td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+#usage-body { overflow-x: auto; }
+.usage-table { width: 100%; min-width: 420px; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
+.usage-table th, .usage-table td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .usage-table th:first-child, .usage-table td:first-child { text-align: left; }
 .usage-table tr.total td { font-weight: 700; border-top: 2px solid var(--line); }
 .controls { display: flex; gap: 14px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
