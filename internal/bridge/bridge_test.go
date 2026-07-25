@@ -153,3 +153,62 @@ func TestRestartReplacesTunnel(t *testing.T) {
 		t.Fatal("StopAll left tunnels behind")
 	}
 }
+
+// wedgedRunner ignores cancellation entirely: the ssh child that will not die.
+type wedgedRunner struct {
+	once    sync.Once
+	started chan struct{}
+	release chan struct{}
+}
+
+func (w *wedgedRunner) Run(context.Context, []string) error {
+	w.once.Do(func() { close(w.started) })
+	<-w.release
+	return nil
+}
+
+// A tunnel that never exits must not pin shutdown. The GUI stops tunnels from
+// Fyne's OnStopped hook, and Fyne waits for that hook before letting the process
+// exit — so an unbounded wait here left the old binary running forever after a
+// self-update, leaking memory and pinning its renamed-aside "<exe>.old".
+func TestStopAllGivesUpOnAWedgedTunnel(t *testing.T) {
+	r := &wedgedRunner{started: make(chan struct{}), release: make(chan struct{})}
+	defer close(r.release)
+	m := fastManager(r)
+	m.stopGrace = 50 * time.Millisecond
+	if err := m.Start(Spec{Alias: "wedged"}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	<-r.started
+
+	done := make(chan struct{})
+	go func() { m.StopAll(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StopAll blocked on a tunnel that would not exit")
+	}
+	if m.Running("wedged") {
+		t.Error("tunnel still registered after StopAll")
+	}
+}
+
+// Stop runs on the UI thread, so the same unbounded wait would freeze the window.
+func TestStopGivesUpOnAWedgedTunnel(t *testing.T) {
+	r := &wedgedRunner{started: make(chan struct{}), release: make(chan struct{})}
+	defer close(r.release)
+	m := fastManager(r)
+	m.stopGrace = 50 * time.Millisecond
+	if err := m.Start(Spec{Alias: "wedged"}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	<-r.started
+
+	done := make(chan struct{})
+	go func() { m.Stop("wedged"); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop blocked on a tunnel that would not exit")
+	}
+}

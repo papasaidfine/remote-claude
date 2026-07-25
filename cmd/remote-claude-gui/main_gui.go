@@ -14,6 +14,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -106,17 +107,26 @@ func run() {
 	lang := i18n.Parse(appCore.Lang())
 	g := &gui{core: appCore, app: a, win: w, lang: lang, pr: i18n.P(lang)}
 	w.SetContent(g.build())
+	g.shown.Store(true) // ShowAndRun below puts the window on screen
 	g.refresh()
 	go g.autoRefresh()
 
 	// System tray: closing the window hides to the tray so the app keeps holding
 	// the tunnels up; Fyne adds a native Quit item. Only where a tray exists.
+	// Hiding also parks the refresh tick — see tick().
 	if desk, ok := a.(desktop.App); ok {
 		desk.SetSystemTrayIcon(trayIcon)
 		desk.SetSystemTrayMenu(fyne.NewMenu("remote-claude",
-			fyne.NewMenuItem("Open", func() { w.Show() }),
+			fyne.NewMenuItem("Open", func() {
+				w.Show()
+				g.shown.Store(true)
+				fyne.Do(g.tick) // the window may have been parked for hours
+			}),
 		))
-		w.SetCloseIntercept(func() { w.Hide() })
+		w.SetCloseIntercept(func() {
+			w.Hide()
+			g.shown.Store(false)
+		})
 	}
 
 	w.ShowAndRun()
@@ -128,8 +138,19 @@ func (g *gui) autoRefresh() {
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
 	for range t.C {
-		fyne.Do(g.refresh)
+		fyne.Do(g.tick)
 	}
+}
+
+// tick is one auto-refresh step. It stands down while the window is hidden in
+// the tray: Fyne only reclaims discarded widgets when a window actually
+// repaints, so refreshing an off-screen window leaks everything it touches.
+// Nothing is visible then anyway, and showing the window refreshes immediately.
+func (g *gui) tick() {
+	if !g.shown.Load() {
+		return
+	}
+	g.refresh()
 }
 
 func die(err error) {
@@ -161,6 +182,9 @@ type gui struct {
 	aliasBtn *widget.Button
 	status   *widget.Label
 	hostsBox *fyne.Container
+	rows     map[string]*hostRow // live host cards, keyed by ssh alias
+	empty    *widget.Label       // the "no hosts yet" placeholder, built once
+	shown    atomic.Bool         // window is on screen (false while hidden in the tray)
 }
 
 // t translates key into the active UI language.
@@ -224,6 +248,10 @@ func (g *gui) build() fyne.CanvasObject {
 	g.status = widget.NewLabel("")
 
 	g.hostsBox = container.NewVBox()
+	// Cards cache their captions in the current language and belong to the box
+	// built above, so a rebuild (start-up, or a language switch) starts empty.
+	g.rows = map[string]*hostRow{}
+	g.empty = nil
 	scroll := container.NewVScroll(g.hostsBox)
 
 	top := container.NewVBox(aliasRow, autoLaunch, langRow, widget.NewSeparator(), toolbar, g.status, widget.NewSeparator())
@@ -249,32 +277,129 @@ func (g *gui) toggleAliasEdit() {
 
 func (g *gui) refresh() {
 	st := g.core.State()
-	if g.alias.Disabled() { // keep the locked field in sync; don't clobber an edit
+	if g.alias.Disabled() && g.alias.Text != st.ClientAlias { // don't clobber an edit
 		g.alias.SetText(st.ClientAlias)
 	}
-	g.status.SetText(fmt.Sprintf(g.t("status_fmt"),
+	setLabel(g.status, fmt.Sprintf(g.t("status_fmt"),
 		st.Platform, g.yn(st.LocalSSHOK), st.NodeCount))
+	g.syncHosts(st.Hosts)
+}
 
-	g.hostsBox.Objects = nil
-	if len(st.Hosts) == 0 {
-		g.hostsBox.Add(widget.NewLabel(g.t("no_hosts")))
+// syncHosts brings the card list in line with hosts, reusing every card whose
+// host is still there in the same layout variant. Rebuilding the list instead —
+// which is what this used to do, twice a minute — strands the old widget tree in
+// Fyne's renderer cache, and that cache is only swept when a window actually
+// repaints (internal/cache.Clean only calls destroyExpiredRenderers on a canvas
+// refresh). Hidden in the system tray, nothing ever repaints, so every card ever
+// built stayed live: ~14MB/min, gigabytes over a day.
+func (g *gui) syncHosts(hosts []core.HostView) {
+	objs := make([]fyne.CanvasObject, 0, len(hosts))
+	seen := make(map[string]bool, len(hosts))
+	for _, h := range hosts {
+		seen[h.Alias] = true
+		row, ok := g.rows[h.Alias]
+		if !ok || row.hasRev != h.HasReverse {
+			row = g.newHostRow(h)
+			g.rows[h.Alias] = row
+		} else {
+			row.update(g, h)
+		}
+		objs = append(objs, row.root)
 	}
-	for _, h := range st.Hosts {
-		g.hostsBox.Add(g.hostCard(h))
+	for alias := range g.rows {
+		if !seen[alias] {
+			delete(g.rows, alias)
+		}
 	}
+	if len(objs) == 0 {
+		if g.empty == nil {
+			g.empty = widget.NewLabel(g.t("no_hosts"))
+		}
+		objs = append(objs, g.empty)
+	}
+	if sameObjects(g.hostsBox.Objects, objs) {
+		return // same cards in the same order; the in-place updates were enough
+	}
+	g.hostsBox.Objects = objs
 	g.hostsBox.Refresh()
 }
 
-func (g *gui) hostCard(h core.HostView) fyne.CanvasObject {
+func sameObjects(a, b []fyne.CanvasObject) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// The setters below are all guarded. Fyne's SetText/SetChecked/Enable refresh
+// unconditionally, so writing the same value back on every tick would keep the
+// whole tree churning even when nothing changed.
+
+func setLabel(l *widget.Label, text string) {
+	if l.Text != text {
+		l.SetText(text)
+	}
+}
+
+func setButton(b *widget.Button, text string) {
+	if b.Text != text {
+		b.SetText(text)
+	}
+}
+
+func setDisabled(b *widget.Button, off bool) {
+	if b.Disabled() == off {
+		return
+	}
+	if off {
+		b.Disable()
+	} else {
+		b.Enable()
+	}
+}
+
+// setChecked syncs a checkbox without firing OnChanged: that handler writes the
+// value straight back to config, so echoing it every tick would be a write storm.
+func setChecked(c *widget.Check, on bool) {
+	if c.Checked == on {
+		return
+	}
+	fn := c.OnChanged
+	c.OnChanged = nil
+	c.SetChecked(on)
+	c.OnChanged = fn
+}
+
+// hostRow is one host's card. It is built once and then updated in place; the
+// widgets whose contents change on a tick are kept as fields.
+type hostRow struct {
+	root   fyne.CanvasObject
+	cur    core.HostView // latest state — dialogs read this, not a stale capture
+	hasRev bool          // layout variant this card was built for
+	title  *widget.Label
+	status *widget.Label  // tunnel hosts only
+	start  *widget.Button // tunnel hosts only
+	stop   *widget.Button // tunnel hosts only
+	xray   *widget.Check
+	auto   *widget.Check // tunnel hosts only
+}
+
+func (g *gui) newHostRow(h core.HostView) *hostRow {
+	r := &hostRow{cur: h, hasRev: h.HasReverse}
 	alias := h.Alias
-	title := widget.NewLabelWithStyle(alias+"   ("+target(h)+")",
-		fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
-	xrayCheck := widget.NewCheck(g.t("route_xray"), nil)
-	xrayCheck.SetChecked(h.HasProxy)
-	xrayCheck.OnChanged = func(on bool) { g.do(func() error { return g.core.SetProxy(alias, on) }) }
+	r.title = widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
-	edit := widget.NewButton(g.t("edit"), func() { g.showEdit(h) })
+	r.xray = widget.NewCheck(g.t("route_xray"), nil)
+	r.xray.SetChecked(h.HasProxy)
+	r.xray.OnChanged = func(on bool) { g.do(func() error { return g.core.SetProxy(alias, on) }) }
+
+	edit := widget.NewButton(g.t("edit"), func() { g.showEdit(r.cur) })
 	usageBtn := widget.NewButton(g.t("usage"), func() { g.showUsage(alias) })
 	del := widget.NewButton(g.t("delete"), func() {
 		dialog.ShowConfirm(g.t("delete_host_title"), fmt.Sprintf(g.t("delete_host_conf_fmt"), alias),
@@ -285,27 +410,21 @@ func (g *gui) hostCard(h core.HostView) fyne.CanvasObject {
 			}, g.win)
 	})
 
-	rows := []fyne.CanvasObject{title}
+	rows := []fyne.CanvasObject{r.title}
 	if h.HasReverse {
 		// A tunnel host: full tunnel controls.
-		rows = append(rows, widget.NewLabel(fmt.Sprintf(g.t("reverse_status_fmt"),
-			h.ReversePort, g.stateLabel(h.Status))))
-		start := widget.NewButton(g.t("start"), func() {
+		r.status = widget.NewLabel("")
+		r.start = widget.NewButton(g.t("start"), func() {
 			g.do(func() error { _, err := g.core.StartTunnel(alias); return err })
 		})
-		stop := widget.NewButton(g.t("stop"), func() { g.core.StopTunnel(alias); g.refresh() })
-		if h.Status.State == bridge.StateStopped {
-			stop.Disable()
-		} else {
-			start.SetText(g.t("restart"))
-		}
+		r.stop = widget.NewButton(g.t("stop"), func() { g.core.StopTunnel(alias); g.refresh() })
 		setup := widget.NewButton(g.t("setup_server"), func() { g.showSetupServer(alias) })
-		auto := widget.NewCheck(g.t("auto_start_tunnel"), nil)
-		auto.SetChecked(h.AutoStart)
-		auto.OnChanged = func(on bool) { g.do(func() error { return g.core.SetAutoStart(alias, on) }) }
-		rows = append(rows,
-			container.NewHBox(start, stop, setup, usageBtn),
-			container.NewHBox(xrayCheck, auto, edit, del))
+		r.auto = widget.NewCheck(g.t("auto_start_tunnel"), nil)
+		r.auto.SetChecked(h.AutoStart)
+		r.auto.OnChanged = func(on bool) { g.do(func() error { return g.core.SetAutoStart(alias, on) }) }
+		rows = append(rows, r.status,
+			container.NewHBox(r.start, r.stop, setup, usageBtn),
+			container.NewHBox(r.xray, r.auto, edit, del))
 	} else {
 		// A plain ssh host: just show it and offer to make it a tunnel host.
 		rows = append(rows,
@@ -315,10 +434,35 @@ func (g *gui) hostCard(h core.HostView) fyne.CanvasObject {
 				widget.NewButton(g.t("enable_reverse"), func() {
 					g.do(func() error { return g.core.SetReverseTunnel(alias, 2222) })
 				}),
-				usageBtn, xrayCheck, edit, del))
+				usageBtn, r.xray, edit, del))
 	}
 	rows = append(rows, widget.NewSeparator())
-	return container.NewVBox(rows...)
+	r.root = container.NewVBox(rows...)
+	r.update(g, h)
+	return r
+}
+
+// update re-syncs the parts of a card that track live state.
+func (r *hostRow) update(g *gui, h core.HostView) {
+	r.cur = h
+	setLabel(r.title, h.Alias+"   ("+target(h)+")")
+	if r.status != nil {
+		setLabel(r.status, fmt.Sprintf(g.t("reverse_status_fmt"),
+			h.ReversePort, g.stateLabel(h.Status)))
+	}
+	if r.start != nil {
+		stopped := h.Status.State == bridge.StateStopped
+		if stopped {
+			setButton(r.start, g.t("start"))
+		} else {
+			setButton(r.start, g.t("restart"))
+		}
+		setDisabled(r.stop, stopped)
+	}
+	setChecked(r.xray, h.HasProxy)
+	if r.auto != nil {
+		setChecked(r.auto, h.AutoStart)
+	}
 }
 
 func target(h core.HostView) string {
@@ -674,6 +818,11 @@ func (g *gui) applyUpdate() {
 						return
 					}
 					g.app.Quit() // triggers OnStopped → tunnels stop; the new process takes over
+					// Belt and braces. Apply has already renamed this binary
+					// aside, so a survivor here runs a stale image for as long
+					// as it lives and pins the "<exe>.old" that the next launch
+					// tries to sweep. If Fyne's shutdown doesn't take, leave.
+					time.AfterFunc(5*time.Second, func() { os.Exit(0) })
 				}, g.win)
 		})
 	}()

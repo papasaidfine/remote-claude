@@ -242,7 +242,13 @@ type Manager struct {
 	upThreshold time.Duration
 	baseBackoff time.Duration
 	maxBackoff  time.Duration
+	stopGrace   time.Duration // how long a stop waits for a tunnel to actually exit
 }
+
+// defaultStopGrace bounds how long stopping a tunnel waits for its supervisor to
+// wind down. Long enough for an ssh child to die normally, short enough that one
+// that won't can never hang the caller.
+const defaultStopGrace = 3 * time.Second
 
 // NewManager builds a Manager that runs the given ssh binary.
 func NewManager(sshBin string) *Manager {
@@ -252,6 +258,25 @@ func NewManager(sshBin string) *Manager {
 		upThreshold: 5 * time.Second,
 		baseBackoff: 1 * time.Second,
 		maxBackoff:  60 * time.Second,
+		stopGrace:   defaultStopGrace,
+	}
+}
+
+// stopAndWait cancels t and waits for its supervisor to finish, but only for
+// stopGrace. A tunnel whose ssh child ignores the kill is abandoned rather than
+// waited on: callers are the UI thread and the app's shutdown hook, and neither
+// can afford to block forever. It is already deregistered, so nothing restarts it.
+func (m *Manager) stopAndWait(t *tunnel) {
+	t.cancel()
+	grace := m.stopGrace
+	if grace <= 0 {
+		grace = defaultStopGrace
+	}
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case <-t.done:
+	case <-timer.C:
 	}
 }
 
@@ -264,8 +289,7 @@ func (m *Manager) Start(spec Spec) error {
 	if old, ok := m.tunnels[spec.Alias]; ok {
 		delete(m.tunnels, spec.Alias)
 		m.mu.Unlock()
-		old.cancel()
-		<-old.done
+		m.stopAndWait(old)
 		m.mu.Lock()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -295,8 +319,7 @@ func (m *Manager) Stop(alias string) {
 	}
 	m.mu.Unlock()
 	if ok {
-		t.cancel()
-		<-t.done
+		m.stopAndWait(t)
 	}
 }
 
@@ -341,6 +364,19 @@ func (m *Manager) StopAll() {
 	m.mu.Unlock()
 	for _, t := range ts {
 		t.cancel()
-		<-t.done
+	}
+	// One shared deadline: shutdown must not cost grace × tunnels.
+	grace := m.stopGrace
+	if grace <= 0 {
+		grace = defaultStopGrace
+	}
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	for _, t := range ts {
+		select {
+		case <-t.done:
+		case <-timer.C:
+			return
+		}
 	}
 }
