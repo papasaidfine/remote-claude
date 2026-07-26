@@ -167,12 +167,16 @@ func (g *gui) newHostRow(h core.HostView) *hostRow {
 	// work in it from a terminal. The command is copied rather than run — there
 	// is no portable way to open "the user's terminal", and picking one for them
 	// would be wrong as often as it was right.
-	vscode := widget.NewButtonWithIcon(g.t("open_vscode"), theme.ComputerIcon(), func() {
+	// Icon only — the marks carry the meaning, and two more labelled buttons
+	// would not fit the row. Fyne has no tooltips, so the status line names the
+	// action after a click instead.
+	vscode := widget.NewButtonWithIcon("", vscodeIcon, func() {
+		setLabel(g.status, fmt.Sprintf(g.t("opening_vscode_fmt"), alias))
 		if err := g.core.OpenVSCode(alias); err != nil {
 			dialog.ShowError(err, g.win)
 		}
 	})
-	cli := widget.NewButtonWithIcon(g.t("copy_cli"), theme.ContentCopyIcon(), func() {
+	cli := widget.NewButtonWithIcon("", theme.NewThemedResource(claudeCodeIcon), func() {
 		cmd := core.ClaudeCommand(alias)
 		g.app.Clipboard().SetContent(cmd)
 		setLabel(g.status, fmt.Sprintf(g.t("cli_copied_fmt"), cmd))
