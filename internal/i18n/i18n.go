@@ -96,13 +96,15 @@ var messages = map[string]map[Lang]string{
 	"edit":               {EN: "Edit", ZH: "编辑"},
 	"save":               {EN: "Save", ZH: "保存"},
 	"start_on_login":     {EN: "Start this app when I log in", ZH: "登录时自动启动本应用"},
-	"add_host":           {EN: "+ Add host", ZH: "+ 添加主机"},
-	"local_ssh_server":   {EN: "Local ssh server", ZH: "本地 ssh 服务器"},
-	"refresh":            {EN: "Refresh", ZH: "刷新"},
-	"language":           {EN: "Language", ZH: "语言"},
-	"check_update":       {EN: "Check for updates", ZH: "检查更新"},
-	"tab_hosts":          {EN: "Hosts", ZH: "主机"},
-	"tab_settings":       {EN: "Settings", ZH: "设置"},
+	// No leading "+": the button carries an add icon, and the two together read
+	// as "+ + Add host".
+	"add_host":         {EN: "Add host", ZH: "添加主机"},
+	"local_ssh_server": {EN: "Local ssh server", ZH: "本地 ssh 服务器"},
+	"refresh":          {EN: "Refresh", ZH: "刷新"},
+	"language":         {EN: "Language", ZH: "语言"},
+	"check_update":     {EN: "Check for updates", ZH: "检查更新"},
+	"tab_hosts":        {EN: "Hosts", ZH: "主机"},
+	"tab_settings":     {EN: "Settings", ZH: "设置"},
 
 	// status line
 	"status_fmt":   {EN: "%s  ·  local ssh server: %s  ·  %d proxy node(s)  ·  hosts from ~/.ssh/config", ZH: "%s  ·  本地 ssh 服务器：%s  ·  %d 个代理节点  ·  主机读取自 ~/.ssh/config"},
@@ -110,7 +112,7 @@ var messages = map[string]map[Lang]string{
 	"not_detected": {EN: "not detected", ZH: "未检测到"},
 
 	// host list
-	"no_hosts":             {EN: "No hosts in ~/.ssh/config yet — click “+ Add host”.", ZH: "~/.ssh/config 里还没有主机——点“+ 添加主机”。"},
+	"no_hosts":             {EN: "No hosts in ~/.ssh/config yet — click “Add host”.", ZH: "~/.ssh/config 里还没有主机——点“添加主机”。"},
 	"reverse_status_fmt":   {EN: "reverse tunnel :%d  ·  tunnel: %s", ZH: "反向隧道 :%d  ·  隧道：%s"},
 	"start":                {EN: "Start", ZH: "启动"},
 	"restart":              {EN: "Restart", ZH: "重启"},

@@ -156,14 +156,15 @@ func (t *rcTheme) lightColor(name fyne.ThemeColorName) color.Color {
 	return t.Theme.Color(name, theme.VariantLight)
 }
 
-// Size widens the breathing room a little over Fyne's defaults. The window is a
-// list of cards; at the stock 4pt padding they run together.
+// Size widens the gaps between cards a little over Fyne's stock 4pt, at which
+// they run together.
+//
+// SizeNameInnerPadding is deliberately left alone: it is a widget's *internal*
+// padding, so raising it inflates the height of every button on screen rather
+// than the space around the cards.
 func (t *rcTheme) Size(name fyne.ThemeSizeName) float32 {
-	switch name {
-	case theme.SizeNamePadding:
-		return 5
-	case theme.SizeNameInnerPadding:
-		return 10
+	if name == theme.SizeNamePadding {
+		return 7
 	}
 	return t.Theme.Size(name)
 }

@@ -168,7 +168,9 @@ func (g *gui) newHostRow(h core.HostView) *hostRow {
 				}
 			}, g.win)
 	})
-	del.Importance = widget.DangerImportance
+	// Left plain on purpose. Painting it red put two saturated buttons on every
+	// card, and the louder of the two was the one you rarely want — the eye went
+	// to Delete instead of Start. The confirmation dialog is what guards it.
 
 	rows := []fyne.CanvasObject{titleRow}
 	if h.HasReverse {
@@ -195,10 +197,15 @@ func (g *gui) newHostRow(h core.HostView) *hostRow {
 				usageBtn, layout.NewSpacer(), edit, del))
 	}
 
+	// Fill contrast only — no hairline stroke. A card's height is driven by text
+	// metrics and lands on a fraction (~128.8px), so consecutive cards rasterise
+	// at different subpixel phases. The layout gap is exactly uniform, but a 1px
+	// stroke on each edge turns that ±1px of rounding into two borders that
+	// sometimes touch and sometimes leave a visible sliver of background — which
+	// reads as wildly uneven spacing, especially once a HiDPI scale doubles it.
+	// Separating by fill alone is immune: there is no hard line to misalign.
 	bg := canvas.NewRectangle(cardColor(g.app))
 	bg.CornerRadius = 8
-	bg.StrokeColor = separatorColor(g.app)
-	bg.StrokeWidth = 1
 	r.root = container.NewStack(bg, container.NewPadded(container.NewVBox(rows...)))
 	r.update(g, h)
 	return r
