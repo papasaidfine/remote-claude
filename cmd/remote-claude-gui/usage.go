@@ -11,7 +11,6 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/papasaidfine/remote-claude/internal/usage"
@@ -72,10 +71,20 @@ func (g *gui) usageWindow(w usage.Window) fyne.CanvasObject {
 	}
 	shares := costShares(costs)
 
-	chart := container.NewVBox()
+	// One grid, not a stack of rows: the name and amount columns are then sized
+	// from the widest model name and the dearest figure, and every row lines up.
+	var bars []fyne.CanvasObject
 	for i, m := range w.Models {
-		chart.Add(g.costBar(shortModel(m.Model), shares[i], m.Cost))
+		fill := canvas.NewRectangle(accentColor(g.app))
+		fill.CornerRadius = 3 // rounded data-end, square against the baseline it grows from
+		bars = append(bars,
+			widget.NewLabel(shortModel(m.Model)),
+			container.NewPadded(container.New(barLayout{frac: shares[i]}, fill)),
+			widget.NewLabelWithStyle("$"+money(m.Cost), fyne.TextAlignTrailing, fyne.TextStyle{}))
 	}
+	// The bar column takes the slack, so it is the chart that grows with the
+	// window while the labels either side stay exactly as wide as they need.
+	chart := container.New(columnsLayout{cols: 3, grow: 1}, bars...)
 
 	// Scrolls both ways, not just vertically. The grid cannot shrink below the
 	// width of its own labels, so in a narrow window a vertical-only scroll
@@ -102,21 +111,6 @@ func dialogSize(win, min fyne.Size) fyne.Size {
 		h = min.Height
 	}
 	return fyne.NewSize(w, h)
-}
-
-// costBar is one row of the chart: the model, its bar, and what it cost.
-func (g *gui) costBar(model string, share float32, cost float64) fyne.CanvasObject {
-	name := widget.NewLabel(model)
-	amount := widget.NewLabelWithStyle("$"+money(cost), fyne.TextAlignTrailing, fyne.TextStyle{})
-
-	fill := canvas.NewRectangle(accentColor(g.app))
-	fill.CornerRadius = 3 // rounded data-end, square against the baseline it grows from
-	track := container.New(barLayout{frac: share}, fill)
-
-	return container.NewBorder(nil, nil,
-		container.New(layout.NewGridWrapLayout(fyne.NewSize(150, 30)), name),
-		container.New(layout.NewGridWrapLayout(fyne.NewSize(80, 30)), amount),
-		container.NewPadded(track))
 }
 
 // barLayout stretches its object across frac of the track's width.
@@ -191,7 +185,10 @@ func (g *gui) usageGrid(w usage.Window) fyne.CanvasObject {
 		row(shortModel(m.Model), m.Tokens, m.Cost, false)
 	}
 	row(g.t("col_total"), w.Total, w.Cost, true)
-	return container.New(layout.NewGridLayoutWithColumns(6), cells...)
+	// Content-sized columns, with the model name absorbing the slack. An even
+	// six-way split gave "1.2M" as much room as a model name, which both wasted
+	// the width and pushed the table's minimum past what the dialog could show.
+	return container.New(columnsLayout{cols: 6, grow: 0}, cells...)
 }
 
 func tok(n int64) string {
