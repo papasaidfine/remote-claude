@@ -26,22 +26,21 @@ var claudeTraySVG []byte
 //go:embed claude-surf.svg
 var claudeSurfSVG []byte
 
-// Marks for the two per-host launch buttons. Both are drawn at button size, so
-// they are the only place a third-party logo appears.
+// Marks for the two per-host launch buttons:
 //
-//   - vscode.svg      the Visual Studio Code logo (a Microsoft trademark, used
-//     here only to point at the editor the button opens). Fyne renders it as-is
-//     despite the mask and filter in it; do NOT wrap it in a ThemedResource, which
-//     flattens it to a shapeless blob.
-//   - claude-code.svg the Claude Code mark from Simple Icons (CC0). It is a bare
-//     path with no fill, so it comes out black — invisible on a dark window. It
-//     MUST be wrapped in a ThemedResource to take the foreground colour.
+//   - vscode.svg  the Visual Studio Code logo (a Microsoft trademark, used here
+//     only to point at the editor the button opens).
+//   - clawd.svg   Clawd, in the same clay as this window's accent.
+//
+// Both carry their own fills, so both are drawn raw. Wrapping either in a
+// ThemedResource repaints every shape a single colour and flattens it into an
+// unreadable blob — which is not obvious until you render it.
 
 //go:embed vscode.svg
 var vscodeSVG []byte
 
-//go:embed claude-code.svg
-var claudeCodeSVG []byte
+//go:embed clawd.svg
+var clawdSVG []byte
 
 // The icon on the downloaded artifact itself is separate — SetIcon can't do it:
 //   - Windows: rsrc_windows_amd64.syso (a compiled .rsrc the Go linker embeds
@@ -57,9 +56,9 @@ var claudeCodeSVG []byte
 //	# then Icon.png -> multi-size Icon.ico (Pillow) -> rsrc:
 //	go run github.com/akavel/rsrc@latest -ico Icon.ico -arch amd64 -o rsrc_windows_amd64.syso
 var (
-	appIcon        = fyne.NewStaticResource("claude-front.svg", claudeFrontSVG)
-	trayIcon       = fyne.NewStaticResource("claude-tray.svg", claudeTraySVG)
-	surfIcon       = fyne.NewStaticResource("claude-surf.svg", claudeSurfSVG)
-	vscodeIcon     = fyne.NewStaticResource("vscode.svg", vscodeSVG)
-	claudeCodeIcon = fyne.NewStaticResource("claude-code.svg", claudeCodeSVG)
+	appIcon    = fyne.NewStaticResource("claude-front.svg", claudeFrontSVG)
+	trayIcon   = fyne.NewStaticResource("claude-tray.svg", claudeTraySVG)
+	surfIcon   = fyne.NewStaticResource("claude-surf.svg", claudeSurfSVG)
+	vscodeIcon = fyne.NewStaticResource("vscode.svg", vscodeSVG)
+	clawdIcon  = fyne.NewStaticResource("clawd.svg", clawdSVG)
 )

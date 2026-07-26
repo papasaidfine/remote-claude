@@ -176,7 +176,7 @@ func (g *gui) newHostRow(h core.HostView) *hostRow {
 			dialog.ShowError(err, g.win)
 		}
 	})
-	cli := widget.NewButtonWithIcon("", theme.NewThemedResource(claudeCodeIcon), func() {
+	cli := widget.NewButtonWithIcon("", clawdIcon, func() {
 		cmd := core.ClaudeCommand(alias)
 		g.app.Clipboard().SetContent(cmd)
 		setLabel(g.status, fmt.Sprintf(g.t("cli_copied_fmt"), cmd))
