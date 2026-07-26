@@ -22,7 +22,10 @@ import (
 func (g *gui) showUsage(alias string) {
 	body := container.NewStack(waiting(fmt.Sprintf(g.t("reading_usage_fmt"), alias)))
 	d := dialog.NewCustom(fmt.Sprintf(g.t("usage_title_fmt"), alias), g.t("close"), body, g.win)
-	d.Resize(fyne.NewSize(680, 520))
+	// Six columns of numbers plus a chart want room. Take what the window can
+	// spare rather than a fixed guess that is cramped on a large display and
+	// overflowing on a small one.
+	d.Resize(dialogSize(g.win.Canvas().Size(), fyne.NewSize(680, 520)))
 	d.Show()
 	go func() {
 		rep, err := g.core.HostUsage(alias)
@@ -74,13 +77,31 @@ func (g *gui) usageWindow(w usage.Window) fyne.CanvasObject {
 		chart.Add(g.costBar(shortModel(m.Model), shares[i], m.Cost))
 	}
 
-	return container.NewVScroll(container.NewPadded(container.NewVBox(
+	// Scrolls both ways, not just vertically. The grid cannot shrink below the
+	// width of its own labels, so in a narrow window a vertical-only scroll
+	// silently clipped the last column — the cost, which is the number the page
+	// exists to show — with no way to reach it.
+	return container.NewScroll(container.NewPadded(container.NewVBox(
 		head,
 		widget.NewSeparator(),
 		chart,
 		widget.NewSeparator(),
 		g.usageGrid(w),
 	)))
+}
+
+// dialogSize fits a dialog to the window it opens over: most of the available
+// room, never below what the content needs to lay out without clipping.
+func dialogSize(win, min fyne.Size) fyne.Size {
+	const margin = 0.92
+	w, h := win.Width*margin, win.Height*margin
+	if w < min.Width {
+		w = min.Width
+	}
+	if h < min.Height {
+		h = min.Height
+	}
+	return fyne.NewSize(w, h)
 }
 
 // costBar is one row of the chart: the model, its bar, and what it cost.
