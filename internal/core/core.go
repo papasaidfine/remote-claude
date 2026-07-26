@@ -115,8 +115,19 @@ func (a *App) State() State {
 		NodeCount:     nodes.Count(a.paths.VlessNodes),
 		LocalSSHOK:    a.plat.StatusIncomingSSH(),
 	}
+	// An alias repeated in ~/.ssh/config — a second "Host foo" block appended
+	// below an existing one — is still one host: ssh resolves the name to a
+	// single destination, and FindHost/SetParam/RemoveHost all act on the first
+	// block. Reporting it twice handed the GUI the same card object for both
+	// entries, and Fyne can only draw an object in one place, so the second slot
+	// came out as a host-sized hole in the list.
+	seen := make(map[string]bool)
 	for _, b := range f.Hosts() {
 		alias := b.Alias()
+		if seen[alias] {
+			continue
+		}
+		seen[alias] = true
 		s := b.Summary()
 		m := a.meta.Host(alias)
 		st.Hosts = append(st.Hosts, HostView{

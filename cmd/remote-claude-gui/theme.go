@@ -211,3 +211,12 @@ func pendingColor(a fyne.App) color.Color {
 	}
 	return darkPending
 }
+
+// accentColor is the clay used for data marks — the usage bars — so the chart
+// reads as part of the same window rather than a separate widget.
+func accentColor(a fyne.App) color.Color {
+	if isLight(a) {
+		return lightAccent
+	}
+	return darkAccent
+}

@@ -179,6 +179,8 @@ var messages = map[string]map[Lang]string{
 	"col_cache_r":       {EN: "CacheR", ZH: "缓存读"},
 	"col_cost":          {EN: "Cost", ZH: "花费"},
 	"col_total":         {EN: "TOTAL", ZH: "合计"},
+	"col_share":         {EN: "Share of cost", ZH: "花费占比"},
+	"usage_total_fmt":   {EN: "%s total", ZH: "合计 %s"},
 
 	// settings — section headings
 	"settings_general":   {EN: "General", ZH: "通用"},

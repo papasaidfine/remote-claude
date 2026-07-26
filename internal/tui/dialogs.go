@@ -215,51 +215,84 @@ func (u *UI) showUsage(alias string) {
 			t := u.usageTable(rep)
 			t.SetBorder(true).SetTitle(" " + fmt.Sprintf(u.t("usage_title_fmt"), alias) + " ")
 			t.SetDoneFunc(func(tcell.Key) { u.closeModal() })
-			u.modal(t, 84, 26)
+			u.modal(t, 100, 30)
 		})
 	}()
 }
 
+// barCells is how wide the share-of-cost bar is drawn, in terminal cells.
+const barCells = 22
+
+// usageTable lays each window out as a headline total, then one row per model
+// carrying a bar for its share of the cost alongside the raw numbers.
+//
+// The bar is the point: cost per model is a magnitude comparison, and a length
+// answers "which model is eating the budget" at a glance where a column of
+// dollar figures has to be read and compared. It stays in a Table so the
+// numbers keep their alignment — which space-padding cannot do once the labels
+// are Chinese.
+//
+// One hue for every bar, deliberately: they all encode the same measure, so a
+// colour per model would imply a distinction that isn't there.
 func (u *UI) usageTable(rep usage.Report) *tview.Table {
 	t := tview.NewTable().SetSelectable(false, false)
 	row := 0
-	cell := func(col int, text string, colour tcell.Color, bold bool) {
-		c := tview.NewTableCell(text).SetTextColor(colour)
-		if col > 0 {
-			c.SetAlign(tview.AlignRight)
-		}
+	cell := func(col int, text string, colour tcell.Color, align int, bold bool) {
+		c := tview.NewTableCell(text).SetTextColor(colour).SetAlign(align)
 		if bold {
 			c.SetAttributes(tcell.AttrBold)
 		}
 		t.SetCell(row, col, c)
 	}
-	line := func(name string, tk usage.Tokens, cost float64, bold bool) {
-		cell(0, name, tcell.ColorDefault, bold)
-		cell(1, tok(tk.Input), tcell.ColorDefault, bold)
-		cell(2, tok(tk.Output), tcell.ColorDefault, bold)
-		cell(3, tok(tk.CacheWrite), tcell.ColorDefault, bold)
-		cell(4, tok(tk.CacheRead), tcell.ColorDefault, bold)
-		cell(5, "$"+money(cost), tcell.ColorDefault, bold)
-		row++
+	numbers := func(tk usage.Tokens, cost float64, bold bool) {
+		cell(2, "$"+money(cost), tcell.ColorDefault, tview.AlignRight, bold)
+		cell(3, tok(tk.Input), tcell.ColorGray, tview.AlignRight, bold)
+		cell(4, tok(tk.Output), tcell.ColorGray, tview.AlignRight, bold)
+		cell(5, tok(tk.CacheWrite), tcell.ColorGray, tview.AlignRight, bold)
+		cell(6, tok(tk.CacheRead), tcell.ColorGray, tview.AlignRight, bold)
 	}
 	section := func(title string, w usage.Window) {
-		cell(0, title, tcell.ColorDarkOrange, true)
-		row++
+		cell(0, title, tcell.ColorDarkOrange, tview.AlignLeft, true)
 		if len(w.Models) == 0 {
-			cell(0, u.t("no_usage_window"), tcell.ColorGray, false)
+			row++
+			cell(0, u.t("no_usage_window"), tcell.ColorGray, tview.AlignLeft, false)
 			row += 2
 			return
 		}
-		for i, h := range []string{u.t("col_model"), u.t("col_input"), u.t("col_output"),
-			u.t("col_cache_w"), u.t("col_cache_r"), u.t("col_cost")} {
-			cell(i, h, tcell.ColorGray, false)
+		// Headline first: the total is the number you came for.
+		cell(2, fmt.Sprintf(u.t("usage_total_fmt"), "$"+money(w.Cost)),
+			tcell.ColorDarkOrange, tview.AlignRight, true)
+		row++
+
+		for i, h := range []string{u.t("col_model"), u.t("col_share"), u.t("col_cost"),
+			u.t("col_input"), u.t("col_output"), u.t("col_cache_w"), u.t("col_cache_r")} {
+			align := tview.AlignRight
+			if i < 2 {
+				align = tview.AlignLeft
+			}
+			cell(i, h, tcell.ColorGray, align, false)
 		}
 		row++
+
+		peak := 0.0
 		for _, m := range w.Models {
-			line(shortModel(m.Model), m.Tokens, m.Cost, false)
+			if m.Cost > peak {
+				peak = m.Cost
+			}
 		}
-		line(u.t("col_total"), w.Total, w.Cost, true)
-		row++ // blank line between sections
+		for _, m := range w.Models {
+			frac := 0.0
+			if peak > 0 {
+				frac = m.Cost / peak
+			}
+			cell(0, shortModel(m.Model), tcell.ColorDefault, tview.AlignLeft, false)
+			cell(1, bar(frac, barCells), tcell.ColorDarkOrange, tview.AlignLeft, false)
+			numbers(m.Tokens, m.Cost, false)
+			row++
+		}
+		cell(0, u.t("col_total"), tcell.ColorDefault, tview.AlignLeft, true)
+		numbers(w.Total, w.Cost, true)
+		row += 2 // blank line between sections
 	}
 	section(u.t("past_1d"), rep.Day)
 	section(u.t("past_7d"), rep.Week)

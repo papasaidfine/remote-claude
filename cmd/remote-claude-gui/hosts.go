@@ -18,7 +18,6 @@ import (
 	"github.com/papasaidfine/remote-claude/internal/bridge"
 	"github.com/papasaidfine/remote-claude/internal/core"
 	"github.com/papasaidfine/remote-claude/internal/provision"
-	"github.com/papasaidfine/remote-claude/internal/usage"
 )
 
 // buildHosts lays out the Hosts tab: who this machine is, then one card per
@@ -89,6 +88,12 @@ func (g *gui) syncHosts(hosts []core.HostView) {
 	objs := make([]fyne.CanvasObject, 0, len(hosts))
 	seen := make(map[string]bool, len(hosts))
 	for _, h := range hosts {
+		if seen[h.Alias] {
+			// Belt and braces: core.State already collapses a repeated ssh-config
+			// alias, and appending one card object twice would leave a hole the
+			// size of a card where the second slot is.
+			continue
+		}
 		seen[h.Alias] = true
 		row, ok := g.rows[h.Alias]
 		if !ok || row.hasRev != h.HasReverse {
@@ -413,89 +418,4 @@ func (g *gui) setupDone(res provision.ServerResult) {
 	dialog.ShowInformation(g.t("server_configured"),
 		fmt.Sprintf(g.t("server_conf_fmt"), res.Alias, g.authLabel(res.Authorized)), g.win)
 	g.refresh()
-}
-
-// showUsage fetches Claude usage from the host over ssh (off the UI thread) and
-// shows a 1D/7D/30D tabbed, priced breakdown.
-func (g *gui) showUsage(alias string) {
-	body := container.NewStack(waiting(fmt.Sprintf(g.t("reading_usage_fmt"), alias)))
-	d := dialog.NewCustom(fmt.Sprintf(g.t("usage_title_fmt"), alias), g.t("close"), body, g.win)
-	d.Resize(fyne.NewSize(640, 480))
-	d.Show()
-	go func() {
-		rep, err := g.core.HostUsage(alias)
-		fyne.Do(func() {
-			if err != nil {
-				body.Objects = []fyne.CanvasObject{container.NewPadded(widget.NewLabel(fmt.Sprintf(g.t("failed_fmt"), err.Error())))}
-			} else {
-				body.Objects = []fyne.CanvasObject{g.usageTabs(rep)}
-			}
-			body.Refresh()
-		})
-	}()
-}
-
-func (g *gui) usageTabs(rep usage.Report) fyne.CanvasObject {
-	return container.NewAppTabs(
-		container.NewTabItem(g.t("past_1d"), g.usageWindow(rep.Day)),
-		container.NewTabItem(g.t("past_7d"), g.usageWindow(rep.Week)),
-		container.NewTabItem(g.t("past_30d"), g.usageWindow(rep.Month)),
-	)
-}
-
-// usageWindow renders the priced breakdown as a real 6-column grid (not a
-// monospace ASCII table): full-width CJK glyphs and proportional fonts can't be
-// aligned by space-padding, so each cell is its own aligned label.
-func (g *gui) usageWindow(w usage.Window) fyne.CanvasObject {
-	if len(w.Models) == 0 {
-		return container.NewPadded(widget.NewLabel(g.t("no_usage_window")))
-	}
-	var cells []fyne.CanvasObject
-	cell := func(text string, align fyne.TextAlign, bold bool) {
-		cells = append(cells, widget.NewLabelWithStyle(text, align, fyne.TextStyle{Bold: bold}))
-	}
-	row := func(name string, tk usage.Tokens, cost float64, bold bool) {
-		cell(name, fyne.TextAlignLeading, bold)
-		cell(tok(tk.Input), fyne.TextAlignTrailing, bold)
-		cell(tok(tk.Output), fyne.TextAlignTrailing, bold)
-		cell(tok(tk.CacheWrite), fyne.TextAlignTrailing, bold)
-		cell(tok(tk.CacheRead), fyne.TextAlignTrailing, bold)
-		cell("$"+money(cost), fyne.TextAlignTrailing, bold)
-	}
-	cell(g.t("col_model"), fyne.TextAlignLeading, true)
-	cell(g.t("col_input"), fyne.TextAlignTrailing, true)
-	cell(g.t("col_output"), fyne.TextAlignTrailing, true)
-	cell(g.t("col_cache_w"), fyne.TextAlignTrailing, true)
-	cell(g.t("col_cache_r"), fyne.TextAlignTrailing, true)
-	cell(g.t("col_cost"), fyne.TextAlignTrailing, true)
-	for _, m := range w.Models {
-		row(shortModel(m.Model), m.Tokens, m.Cost, false)
-	}
-	row(g.t("col_total"), w.Total, w.Cost, true)
-	grid := container.New(layout.NewGridLayoutWithColumns(6), cells...)
-	return container.NewVScroll(container.NewPadded(grid))
-}
-
-func tok(n int64) string {
-	switch {
-	case n >= 1_000_000:
-		return fmt.Sprintf("%.1fM", float64(n)/1e6)
-	case n >= 1_000:
-		return fmt.Sprintf("%.1fK", float64(n)/1e3)
-	default:
-		return strconv.FormatInt(n, 10)
-	}
-}
-
-func money(f float64) string { return fmt.Sprintf("%.2f", f) }
-
-func shortModel(s string) string {
-	s = strings.TrimPrefix(s, "claude-")
-	if i := strings.IndexByte(s, '['); i >= 0 {
-		s = s[:i]
-	}
-	if len(s) > 22 {
-		s = s[:22]
-	}
-	return s
 }
