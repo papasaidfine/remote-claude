@@ -373,21 +373,24 @@ func (a *App) SetupServer(alias string) (provision.ServerResult, error) {
 	return res, wrap(ErrRemote, err)
 }
 
-// preflightProxy checks the local pieces a host's xray ProxyCommand needs before
-// we lean on it: the relay binary it points at still exists, xray is installed on
-// this machine, and there is at least one vless node. These settings are
-// per-machine, so a working setup on one device says nothing about another.
+// preflightProxy checks the local pieces a host's proxy ProxyCommand needs before
+// we lean on it: the relay binary it points at still exists, the proxy components
+// are installed on this machine, and there is at least one node. These settings
+// are per-machine, so a working setup on one device says nothing about another.
+//
+// The wording here reaches the user, so it says "proxy" rather than naming the
+// implementation — see the note on i18n's message catalog.
 func (a *App) preflightProxy(proxyCmd string) error {
 	if bin := proxyBinPath(proxyCmd); bin != "" {
 		if _, err := os.Stat(bin); err != nil {
-			return errf(ErrInvalid, "the xray proxy points at a binary that's no longer there:\n  %s\nToggle \"route through xray\" off and on for this host to repoint it at this app.", bin)
+			return errf(ErrInvalid, "the proxy points at a binary that's no longer there:\n  %s\nTurn \"Use proxy\" off and on for this host to repoint it at this app.", bin)
 		}
 	}
 	if xray.Resolve(a.paths) == "" {
-		return errf(ErrUnavailable, "xray isn't installed on this machine — open Xray and Download it (xray + nodes are per-machine, not shared across your devices)")
+		return errf(ErrUnavailable, "the proxy components aren't installed on this machine — install them under Settings → Proxy (components and nodes are per-machine, not shared across your devices)")
 	}
 	if nodes.Count(a.paths.VlessNodes) == 0 {
-		return errf(ErrInvalid, "no vless nodes on this machine — add one under Xray (nodes are per-machine, not shared across your devices)")
+		return errf(ErrInvalid, "no proxy nodes on this machine — add one under Settings → Proxy (nodes are per-machine, not shared across your devices)")
 	}
 	return nil
 }
@@ -437,7 +440,7 @@ func proxyBinPath(cmd string) string {
 
 // RepairProxies re-points any managed xray ProxyCommand whose relay binary no
 // longer exists at the current binary. It self-heals the common case where the
-// app was moved after "route through xray" was enabled — e.g. on macOS, run from
+// app was moved after "Use proxy" was enabled — e.g. on macOS, run from
 // the mounted dmg and then dragged into Applications — which otherwise breaks the
 // relay with an opaque ssh "Connection closed by UNKNOWN port 65535". Best-effort,
 // call once at startup.

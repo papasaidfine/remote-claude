@@ -1,8 +1,10 @@
-// Package i18n holds the UI string catalog and language selection for the native
-// GUI. Strings are keyed; T looks a key up in the active language, falling back
-// to English and then to the key itself, so a missing translation degrades
-// gracefully instead of showing blank. The web UI carries its own copy of the
-// catalog in JavaScript.
+// Package i18n holds the UI string catalog and language selection. Strings are
+// keyed; T looks a key up in the active language, falling back to English and
+// then to the key itself, so a missing translation degrades gracefully instead
+// of showing blank.
+//
+// Both front-ends — the desktop GUI and the terminal UI — read this one catalog,
+// so their wording cannot drift apart.
 package i18n
 
 import (
@@ -83,6 +85,10 @@ func (p Printer) T(key string) string { return T(p.Lang, key) }
 
 // messages is the catalog: key -> language -> text. Format strings keep their
 // %-verbs identical across languages (callers fmt.Sprintf the result).
+//
+// The UI never names the proxy implementation (xray) — not in a value and not in
+// a key, since T echoes an unknown key straight to the screen. TestNoXrayInUserFacingText
+// enforces this.
 var messages = map[string]map[Lang]string{
 	// top bar / chrome
 	"machine_name_label": {EN: "This machine's name", ZH: "这台机器的名字"},
@@ -95,9 +101,11 @@ var messages = map[string]map[Lang]string{
 	"refresh":            {EN: "Refresh", ZH: "刷新"},
 	"language":           {EN: "Language", ZH: "语言"},
 	"check_update":       {EN: "Check for updates", ZH: "检查更新"},
+	"tab_hosts":          {EN: "Hosts", ZH: "主机"},
+	"tab_settings":       {EN: "Settings", ZH: "设置"},
 
 	// status line
-	"status_fmt":   {EN: "%s  ·  local ssh server: %s  ·  %d xray node(s)  ·  hosts from ~/.ssh/config", ZH: "%s  ·  本地 ssh 服务器：%s  ·  %d 个 xray 节点  ·  主机读取自 ~/.ssh/config"},
+	"status_fmt":   {EN: "%s  ·  local ssh server: %s  ·  %d proxy node(s)  ·  hosts from ~/.ssh/config", ZH: "%s  ·  本地 ssh 服务器：%s  ·  %d 个代理节点  ·  主机读取自 ~/.ssh/config"},
 	"running":      {EN: "running", ZH: "运行中"},
 	"not_detected": {EN: "not detected", ZH: "未检测到"},
 
@@ -109,13 +117,21 @@ var messages = map[string]map[Lang]string{
 	"stop":                 {EN: "Stop", ZH: "停止"},
 	"setup_server":         {EN: "Set up server", ZH: "配置服务器"},
 	"usage":                {EN: "Usage", ZH: "用量"},
-	"route_xray":           {EN: "route through xray", ZH: "经 xray 转发"},
-	"auto_start_tunnel":    {EN: "start tunnel when app opens", ZH: "打开应用时启动隧道"},
+	"use_proxy":            {EN: "Use proxy", ZH: "使用代理"},
+	"auto_start_tunnel":    {EN: "Start tunnel when app opens", ZH: "打开应用时启动隧道"},
 	"delete":               {EN: "Delete", ZH: "删除"},
 	"plain_host":           {EN: "plain ssh host — no reverse tunnel", ZH: "普通 ssh 主机——无反向隧道"},
 	"enable_reverse":       {EN: "Enable reverse tunnel", ZH: "启用反向隧道"},
 	"delete_host_title":    {EN: "Delete host", ZH: "删除主机"},
 	"delete_host_conf_fmt": {EN: "Delete “%s” from ~/.ssh/config? This stops its tunnel.", ZH: "从 ~/.ssh/config 删除“%s”？这会停止它的隧道。"},
+
+	// host table (terminal UI)
+	"col_alias":     {EN: "Alias", ZH: "别名"},
+	"col_target":    {EN: "Target", ZH: "目标"},
+	"col_tunnel":    {EN: "Tunnel", ZH: "隧道"},
+	"col_state":     {EN: "State", ZH: "状态"},
+	"keys_hosts":    {EN: " s start   x stop   c set up server   u usage   e edit   a add   d delete   r refresh   q quit", ZH: " s 启动   x 停止   c 配置服务器   u 用量   e 编辑   a 添加   d 删除   r 刷新   q 退出"},
+	"keys_settings": {EN: " Tab/arrows move   Enter activate   1 back to hosts   q quit", ZH: " Tab/方向键 移动   Enter 执行   1 回到主机   q 退出"},
 
 	// tunnel states
 	"state_stopped":    {EN: "stopped", ZH: "已停止"},
@@ -162,20 +178,39 @@ var messages = map[string]map[Lang]string{
 	"col_cost":          {EN: "Cost", ZH: "花费"},
 	"col_total":         {EN: "TOTAL", ZH: "合计"},
 
-	// xray
-	"xray_download": {EN: "Download / update xray", ZH: "下载 / 更新 xray"},
-	"xray_proxy_ph": {EN: "download via proxy, e.g. http://127.0.0.1:7890 (optional, one-time)", ZH: "经代理下载，如 http://127.0.0.1:7890（可选，一次性）"},
-	"downloading":   {EN: "Downloading… (this can take a moment)", ZH: "下载中…（可能要等一会儿）"},
-	"xray_ready":    {EN: "xray ready.", ZH: "xray 就绪。"},
-	"nodes_label":   {EN: "Nodes (one vless:// per line):", ZH: "节点（每行一个 vless://）："},
-	"save_nodes":    {EN: "Save nodes", ZH: "保存节点"},
-	"nodes_ph":      {EN: "one vless:// URL per line; # comments allowed", ZH: "每行一个 vless:// URL；允许 # 注释"},
+	// settings — section headings
+	"settings_general":   {EN: "General", ZH: "通用"},
+	"settings_proxy":     {EN: "Proxy", ZH: "代理"},
+	"settings_local_ssh": {EN: "Local ssh server", ZH: "本地 ssh 服务器"},
+	"settings_keys":      {EN: "SSH key", ZH: "SSH 密钥"},
+	"settings_about":     {EN: "About", ZH: "关于"},
 
-	// local ssh server dialog
+	// settings — proxy
+	"proxy_install":     {EN: "Install / update proxy components", ZH: "安装 / 更新代理组件"},
+	"proxy_via_ph":      {EN: "download via proxy, e.g. http://127.0.0.1:7890 (optional, one-time)", ZH: "经代理下载，如 http://127.0.0.1:7890（可选，一次性）"},
+	"proxy_via_label":   {EN: "Download via", ZH: "经代理下载"},
+	"proxy_intro":       {EN: "For restricted or slow networks. Install the components, add nodes below, then turn on “Use proxy” for a host under Edit.", ZH: "用于受限或缓慢的网络。先安装组件、在下面添加节点，然后在主机的「编辑」里打开「使用代理」。"},
+	"downloading":       {EN: "Downloading… (this can take a moment)", ZH: "下载中…（可能要等一会儿）"},
+	"proxy_ready":       {EN: "Proxy ready.", ZH: "代理就绪。"},
+	"proxy_installed":   {EN: "installed", ZH: "已安装"},
+	"proxy_missing":     {EN: "not installed", ZH: "未安装"},
+	"proxy_unsupported": {EN: "The proxy is optional on this system.", ZH: "此系统上代理为可选项。"},
+	"nodes_label":       {EN: "Nodes (one vless:// per line):", ZH: "节点（每行一个 vless://）："},
+	"save_nodes":        {EN: "Save nodes", ZH: "保存节点"},
+	"nodes_ph":          {EN: "one vless:// URL per line; # comments allowed", ZH: "每行一个 vless:// URL；允许 # 注释"},
+	"nodes_saved_fmt":   {EN: "Saved — %d node(s).", ZH: "已保存——%d 个节点。"},
+
+	// settings — local ssh server
 	"sshd_disable_pw": {EN: "also disable password login (recommended)", ZH: "同时禁用密码登录（推荐）"},
-	"sshd_info":       {EN: "Install/ensure the local ssh server so the agent can reach\nback in. May prompt for sudo / Administrator in the terminal\nwhere you launched the app.", ZH: "安装/确保本地 ssh 服务器，好让 agent 能连回来。\n可能会在你启动应用的终端里要求 sudo / 管理员权限。"},
-	"sshd_install":    {EN: "Install / ensure", ZH: "安装 / 确保"},
+	"sshd_info":       {EN: "Install/ensure the local ssh server so the agent can reach back in. May prompt for sudo / Administrator in the terminal where you launched the app.", ZH: "安装/确保本地 ssh 服务器，好让 agent 能连回来。可能会在你启动应用的终端里要求 sudo / 管理员权限。"},
+	"sshd_install":    {EN: "Install local ssh server", ZH: "安装本地 ssh 服务器"},
 	"sshd_done_fmt":   {EN: "Done — running: %s", ZH: "完成——运行中：%s"},
+
+	// settings — ssh key
+	"key_show":    {EN: "Create / show public key", ZH: "创建 / 显示公钥"},
+	"key_title":   {EN: "This machine's public key", ZH: "这台机器的公钥"},
+	"key_intro":   {EN: "A server must have this key in its ~/.ssh/authorized_keys before this machine can connect to it.", ZH: "服务器的 ~/.ssh/authorized_keys 里要有这段公钥，这台机器才连得上它。"},
+	"version_fmt": {EN: "Version %s", ZH: "版本 %s"},
 
 	// self-update
 	"update_title":        {EN: "Update", ZH: "更新"},
@@ -184,7 +219,7 @@ var messages = map[string]map[Lang]string{
 	"update_dev":          {EN: "This is a development build — nothing to update.", ZH: "这是开发版——无需更新。"},
 	"update_avail_fmt":    {EN: "Update available: %s → %s.\nDownload and install now?", ZH: "有可用更新：%s → %s。\n现在下载并安装吗？"},
 	"update_download_yes": {EN: "Download & install", ZH: "下载并安装"},
-	"update_downloading":  {EN: "Downloading update… (retries via xray if direct download stalls)", ZH: "正在下载更新…（直连超时会自动尝试经 xray）"},
+	"update_downloading":  {EN: "Downloading update… (retries through the proxy if the direct download stalls)", ZH: "正在下载更新…（直连超时会自动尝试经代理）"},
 	"update_failed_fmt":   {EN: "Update failed: %s", ZH: "更新失败：%s"},
 	"update_done":         {EN: "Update installed. Restart now to use the new version?", ZH: "更新已安装。现在重启以使用新版本吗？"},
 	"restart_now":         {EN: "Restart now", ZH: "现在重启"},

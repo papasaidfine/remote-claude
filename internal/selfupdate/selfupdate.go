@@ -1,7 +1,10 @@
 // Package selfupdate lets the desktop GUI update itself in place: it checks the
 // latest GitHub release, downloads the matching asset (directly or, on failure,
-// through a temporary local xray HTTP proxy built from the user's vless nodes),
-// atomically replaces the running executable, and re-execs the new binary.
+// through a temporary local proxy built from the user's vless nodes), atomically
+// replaces the running executable, and re-execs the new binary.
+//
+// The repository is private, so both the release lookup and the asset download
+// are authenticated GitHub API calls. See token for how the credential gets in.
 package selfupdate
 
 import (
@@ -32,16 +35,31 @@ const (
 	assetPrefix = "remote-claude-gui_"
 )
 
+// token authenticates against the private repository. It is stamped in at build
+// time — never committed — with:
+//
+//	-ldflags "-X github.com/papasaidfine/remote-claude/internal/selfupdate.token=$TOKEN"
+//
+// A local build leaves it empty, which makes every request anonymous; that is
+// fine because a "dev" build never updates itself anyway.
+var token string
+
+// apiBase is the GitHub API root. A variable so tests can point it at a stub.
+var apiBase = "https://api.github.com"
+
 // Release is the latest GitHub release info.
 type Release struct {
 	Version   string // tag_name, e.g. "v0.2.0-rc.8"
 	HasUpdate bool   // true if Version differs from the current version and current != "dev"
+	AssetID   int64  // id of this platform's asset; 0 if the release has none
 }
 
 // Check queries the latest release. current is the running version string.
 func Check(current string) (Release, error) {
-	req, _ := http.NewRequest("GET", "https://api.github.com/repos/"+repo+"/releases/latest", nil)
-	req.Header.Set("Accept", "application/vnd.github+json")
+	req, err := newAPIRequest(apiURL("/releases/latest"), "application/vnd.github+json")
+	if err != nil {
+		return Release{}, err
+	}
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -53,14 +71,29 @@ func Check(current string) (Release, error) {
 	}
 	var body struct {
 		TagName string `json:"tag_name"`
+		Assets  []struct {
+			ID   int64  `json:"id"`
+			Name string `json:"name"`
+		} `json:"assets"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return Release{}, err
 	}
-	return Release{
+	rel := Release{
 		Version:   body.TagName,
 		HasUpdate: hasUpdate(body.TagName, current),
-	}, nil
+	}
+	// A release missing this platform's asset still counts as an update — the
+	// user should be told one exists. Apply is where that turns into an error.
+	if name, err := AssetName(); err == nil {
+		for _, a := range body.Assets {
+			if a.Name == name {
+				rel.AssetID = a.ID
+				break
+			}
+		}
+	}
+	return rel, nil
 }
 
 // hasUpdate reports whether tag represents a newer release than current. It is
@@ -96,28 +129,41 @@ func assetNameFor(goos, goarch string) (string, error) {
 	return name, nil
 }
 
-// Apply downloads the latest release asset and atomically replaces the running
-// executable. It tries a direct download first; on failure/timeout it retries
-// through a temporary local xray HTTP proxy built from the user's configured
-// vless nodes (best effort — if xray/nodes are unavailable, the direct error is returned).
-// proxy, if non-empty, is an explicit http proxy URL tried before xray.
-func Apply(proxy string) error {
+// apiURL builds a repository-scoped API URL, e.g. "/releases/latest".
+func apiURL(path string) string { return apiBase + "/repos/" + repo + path }
+
+// newAPIRequest builds an authenticated GET against the GitHub API. With no
+// built-in token the request goes out anonymous rather than with an empty
+// credential, which reads better in GitHub's logs and error messages.
+func newAPIRequest(rawURL, accept string) (*http.Request, error) {
+	req, err := http.NewRequest("GET", rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", accept)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return req, nil
+}
+
+// Apply downloads rel's asset and atomically replaces the running executable.
+// It tries a direct download first; on failure/timeout it retries through a
+// temporary local proxy built from the user's configured vless nodes (best
+// effort — if the proxy or nodes are unavailable, the direct error is returned).
+// proxy, if non-empty, is an explicit http proxy URL used for the direct attempt.
+func Apply(rel Release, proxy string) error {
 	exe, err := selfPath()
 	if err != nil {
 		return err
 	}
-	asset, err := AssetName()
-	if err != nil {
-		return err
-	}
-	srcURL := "https://github.com/" + repo + "/releases/latest/download/" + asset
 	newPath := exe + ".new"
 
 	// 1. Direct download (optionally through an explicit http proxy).
-	directErr := downloadDirect(srcURL, newPath, proxy)
+	directErr := downloadAsset(directClient(proxy), rel.AssetID, newPath)
 	if directErr != nil {
-		// 2. Retry through a local xray proxy built from the user's nodes.
-		if xerr := downloadViaXray(srcURL, newPath); xerr != nil {
+		// 2. Retry through a local proxy built from the user's nodes.
+		if perr := downloadViaProxy(rel.AssetID, newPath); perr != nil {
 			// Best effort: surface the original direct error, not the fallback's.
 			return directErr
 		}
@@ -169,30 +215,74 @@ func replaceExecutable(exe, newPath string) error {
 	return nil
 }
 
-// downloadDirect fetches srcURL to dest, optionally through an explicit http
-// proxy URL ("" = direct connection).
-func downloadDirect(srcURL, dest, proxy string) error {
+// directClient builds the client for the first download attempt, optionally
+// routed through an explicit http proxy URL ("" = direct connection).
+func directClient(proxy string) *http.Client {
 	tr := &http.Transport{}
 	if proxy != "" {
 		if u, err := url.Parse(proxy); err == nil {
 			tr.Proxy = http.ProxyURL(u)
 		}
 	}
-	client := &http.Client{Transport: tr, Timeout: 60 * time.Second}
-	return downloadWith(client, srcURL, dest)
+	return &http.Client{Transport: tr, Timeout: 60 * time.Second}
 }
 
-// downloadWith GETs srcURL with client and writes the body to dest, requiring
-// HTTP 200 and a non-empty body. dest is created/truncated; on any failure it
-// is removed so a partial file never survives.
-func downloadWith(client *http.Client, srcURL, dest string) error {
-	resp, err := client.Get(srcURL)
+// downloadAsset fetches release asset id to dest through client.
+//
+// The asset endpoint answers a 302 pointing at a pre-signed CDN URL. That URL
+// carries its own credentials in its query string and rejects a request that
+// *also* presents our bearer token, so the redirect is deliberately not followed
+// by the same request: we read the Location and issue a fresh, unauthenticated
+// GET for it. Letting net/http follow it would work in production only because
+// api.github.com and the CDN are different hosts — a same-host redirect would
+// silently forward the token, which is exactly the failure this avoids.
+func downloadAsset(client *http.Client, id int64, dest string) error {
+	if id == 0 {
+		return fmt.Errorf("this release has no build for %s/%s", runtime.GOOS, runtime.GOARCH)
+	}
+	req, err := newAPIRequest(apiURL("/releases/assets/"+strconv.FormatInt(id, 10)), "application/octet-stream")
+	if err != nil {
+		return err
+	}
+	noFollow := *client
+	noFollow.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := noFollow.Do(req)
+	if err != nil {
+		return err
+	}
+	if loc := resp.Header.Get("Location"); isRedirect(resp.StatusCode) && loc != "" {
+		resp.Body.Close()
+		return downloadUnauthenticated(client, loc, dest)
+	}
+	defer resp.Body.Close()
+	return writeBody(resp, dest)
+}
+
+func isRedirect(code int) bool {
+	switch code {
+	case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther,
+		http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+		return true
+	}
+	return false
+}
+
+// downloadUnauthenticated GETs a pre-signed URL with no credentials of ours.
+func downloadUnauthenticated(client *http.Client, rawURL, dest string) error {
+	resp, err := client.Get(rawURL)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	return writeBody(resp, dest)
+}
+
+// writeBody requires HTTP 200 and a non-empty body, and writes it to dest. dest
+// is created/truncated; on any failure it is removed so a partial or empty file
+// never survives to be swapped in as the new executable.
+func writeBody(resp *http.Response, dest string) error {
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download %s: HTTP %d", srcURL, resp.StatusCode)
+		return fmt.Errorf("download %s: HTTP %d", resp.Request.URL, resp.StatusCode)
 	}
 	out, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
 	if err != nil {
@@ -208,22 +298,22 @@ func downloadWith(client *http.Client, srcURL, dest string) error {
 	}
 	if n == 0 {
 		os.Remove(dest)
-		return fmt.Errorf("download %s: empty body", srcURL)
+		return fmt.Errorf("download %s: empty body", resp.Request.URL)
 	}
 	return nil
 }
 
-// downloadViaXray retries the download through a temporary local xray HTTP proxy
-// built from a random configured vless node. Everything it spawns is cleaned up
-// before it returns.
-func downloadViaXray(srcURL, dest string) error {
+// downloadViaProxy retries the download through a temporary local xray HTTP
+// proxy built from a random configured vless node. Everything it spawns is
+// cleaned up before it returns.
+func downloadViaProxy(assetID int64, dest string) error {
 	p, err := paths.Resolve()
 	if err != nil {
 		return err
 	}
 	xrayBin := xray.Resolve(p)
 	if xrayBin == "" {
-		return fmt.Errorf("xray binary not found; cannot retry through proxy")
+		return fmt.Errorf("proxy components not installed; cannot retry through the proxy")
 	}
 	node, err := nodes.PickRandom(p.VlessNodes)
 	if err != nil {
@@ -250,7 +340,7 @@ func downloadViaXray(srcURL, dest string) error {
 	cmd.Stderr = os.Stderr
 	sysproc.Hide(cmd) // no console window on Windows
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start xray: %w", err)
+		return fmt.Errorf("failed to start the proxy: %w", err)
 	}
 	defer func() {
 		if cmd.Process != nil {
@@ -271,7 +361,7 @@ func downloadViaXray(srcURL, dest string) error {
 		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
 		Timeout:   60 * time.Second,
 	}
-	return downloadWith(client, srcURL, dest)
+	return downloadAsset(client, assetID, dest)
 }
 
 // reservePort grabs a free loopback TCP port for the xray inbound. Copied from
@@ -286,12 +376,12 @@ func reservePort() (int, error) {
 	return port, nil
 }
 
-// waitForPort blocks until xray's inbound accepts a connection, up to ~5s.
+// waitForPort blocks until the proxy's inbound accepts a connection, up to ~5s.
 func waitForPort(cmd *exec.Cmd, port int) error {
 	addr := "127.0.0.1:" + strconv.Itoa(port)
 	for i := 0; i < 50; i++ {
 		if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
-			return fmt.Errorf("xray exited before its inbound came up")
+			return fmt.Errorf("the proxy exited before its inbound came up")
 		}
 		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
 		if err == nil {
@@ -300,17 +390,20 @@ func waitForPort(cmd *exec.Cmd, port int) error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return fmt.Errorf("xray proxy did not come up")
+	return fmt.Errorf("the proxy did not come up")
 }
 
-// Restart re-execs the (now-updated) binary with the same args, detached, so the
-// caller can exit. Returns after the new process is started.
-func Restart() error {
+// Restart re-execs the (now-updated) binary, detached, so the caller can exit.
+// extraArgs are appended to the original argument list — the updater uses this
+// to pass the flag that makes the incoming process wait for this one's
+// single-instance lock instead of deferring to it. Returns once the new process
+// has started.
+func Restart(extraArgs ...string) error {
 	exe, err := selfPath()
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(exe, os.Args[1:]...)
+	cmd := exec.Command(exe, append(append([]string{}, os.Args[1:]...), extraArgs...)...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
