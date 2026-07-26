@@ -173,9 +173,10 @@ func TestDownloadAssetAsksForOctetStreamWithTheToken(t *testing.T) {
 	}
 }
 
-// The asset endpoint redirects to a pre-signed CDN URL. That URL authenticates
-// via its own query parameters and rejects a request that also carries our
-// bearer token, so the token must not travel with the redirect.
+// The asset endpoint redirects to a pre-signed URL that authenticates via its
+// own query parameters. Our bearer token has no business being sent there, and
+// net/http would forward it on a redirect that kept the same hostname — so the
+// download must not simply follow the redirect.
 func TestDownloadAssetDoesNotSendTheTokenToTheRedirectTarget(t *testing.T) {
 	var cdnSawAuth bool
 	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

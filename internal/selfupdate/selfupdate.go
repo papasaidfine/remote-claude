@@ -229,13 +229,17 @@ func directClient(proxy string) *http.Client {
 
 // downloadAsset fetches release asset id to dest through client.
 //
-// The asset endpoint answers a 302 pointing at a pre-signed CDN URL. That URL
-// carries its own credentials in its query string and rejects a request that
-// *also* presents our bearer token, so the redirect is deliberately not followed
-// by the same request: we read the Location and issue a fresh, unauthenticated
-// GET for it. Letting net/http follow it would work in production only because
-// api.github.com and the CDN are different hosts — a same-host redirect would
-// silently forward the token, which is exactly the failure this avoids.
+// The asset endpoint answers a 302 pointing at a pre-signed URL on
+// release-assets.githubusercontent.com, which authenticates by query string. We
+// read the Location and issue a fresh, unauthenticated GET rather than letting
+// the client follow it, for two reasons: our credential never travels to a host
+// that is not the API, and correctness does not rest on net/http's redirect
+// heuristic. That heuristic compares hostnames only (see
+// shouldCopyHeaderOnRedirect), so a redirect that stayed on the same host — or a
+// future change of CDN arrangement — would forward the token silently.
+//
+// GitHub's CDN does currently accept a request that carries the token as well;
+// this is credential hygiene, not a workaround for a rejection.
 func downloadAsset(client *http.Client, id int64, dest string) error {
 	if id == 0 {
 		return fmt.Errorf("this release has no build for %s/%s", runtime.GOOS, runtime.GOARCH)
