@@ -115,7 +115,6 @@ var messages = map[string]map[Lang]string{
 	"no_hosts":             {EN: "No hosts in ~/.ssh/config yet — click “Add host”.", ZH: "~/.ssh/config 里还没有主机——点“添加主机”。"},
 	"reverse_status_fmt":   {EN: "reverse tunnel :%d  ·  tunnel: %s", ZH: "反向隧道 :%d  ·  隧道：%s"},
 	"start":                {EN: "Start", ZH: "启动"},
-	"restart":              {EN: "Restart", ZH: "重启"},
 	"stop":                 {EN: "Stop", ZH: "停止"},
 	"setup_server":         {EN: "Set up server", ZH: "配置服务器"},
 	"usage":                {EN: "Usage", ZH: "用量"},

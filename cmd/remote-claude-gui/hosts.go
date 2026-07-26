@@ -142,9 +142,9 @@ type hostRow struct {
 	hasRev bool          // layout variant this card was built for
 	dot    *canvas.Circle
 	title  *widget.Label
-	status *widget.Label  // tunnel hosts only
-	start  *widget.Button // tunnel hosts only
-	stop   *widget.Button // tunnel hosts only
+	status *widget.Label    // tunnel hosts only
+	toggle *widget.Button   // tunnel hosts only: start and stop, one control
+	spin   *widget.Activity // tunnel hosts only: shown while not yet settled
 }
 
 func (g *gui) newHostRow(h core.HostView) *hostRow {
@@ -172,9 +172,17 @@ func (g *gui) newHostRow(h core.HostView) *hostRow {
 	// action after a click instead.
 	vscode := widget.NewButtonWithIcon("", vscodeIcon, func() {
 		setLabel(g.status, fmt.Sprintf(g.t("opening_vscode_fmt"), alias))
-		if err := g.core.OpenVSCode(alias); err != nil {
-			dialog.ShowError(err, g.win)
-		}
+		// The first click for a host asks it where its home directory is, which
+		// is an ssh round-trip; later ones are immediate. Off the UI thread
+		// either way, so a slow or unreachable host cannot freeze the window.
+		go func() {
+			err := g.core.OpenVSCode(alias)
+			fyne.Do(func() {
+				if err != nil {
+					dialog.ShowError(err, g.win)
+				}
+			})
+		}()
 	})
 	cli := widget.NewButtonWithIcon("", clawdIcon, func() {
 		cmd := core.ClaudeCommand(alias)
@@ -201,14 +209,25 @@ func (g *gui) newHostRow(h core.HostView) *hostRow {
 		// A tunnel host: full tunnel controls.
 		r.status = widget.NewLabel("")
 		r.status.Importance = widget.LowImportance
-		r.start = widget.NewButton(g.t("start"), func() {
-			g.do(func() error { _, err := g.core.StartTunnel(alias); return err })
+		// One control for the whole tunnel lifecycle. Start and Stop were two
+		// buttons of which one was always the wrong one to press, and a separate
+		// Restart on top of that; what the row actually has to say is whether the
+		// tunnel is on, so it is a toggle. While the state is unsettled a spinner
+		// stands beside it — and the toggle still works, because a tunnel stuck
+		// retrying behind a long backoff has to be stoppable.
+		r.toggle = widget.NewButtonWithIcon(g.t("start"), theme.MediaPlayIcon(), func() {
+			if r.cur.Status.State == bridge.StateStopped {
+				g.do(func() error { _, err := g.core.StartTunnel(alias); return err })
+				return
+			}
+			g.core.StopTunnel(alias)
+			g.refresh()
 		})
-		r.start.Importance = widget.HighImportance
-		r.stop = widget.NewButton(g.t("stop"), func() { g.core.StopTunnel(alias); g.refresh() })
+		r.spin = widget.NewActivity()
+		r.spin.Hide()
 		setup := widget.NewButton(g.t("setup_server"), func() { g.showSetupServer(alias) })
 		rows = append(rows, r.status,
-			container.NewHBox(r.start, r.stop, vscode, cli, setup, usageBtn, layout.NewSpacer(), edit, del))
+			container.NewHBox(r.toggle, r.spin, vscode, cli, setup, usageBtn, layout.NewSpacer(), edit, del))
 	} else {
 		// A plain ssh host: just show it and offer to make it a tunnel host.
 		plain := widget.NewLabel(g.t("plain_host"))
@@ -244,14 +263,18 @@ func (r *hostRow) update(g *gui, h core.HostView) {
 		setLabel(r.status, fmt.Sprintf(g.t("reverse_status_fmt"),
 			h.ReversePort, g.stateLabel(h.Status)))
 	}
-	if r.start != nil {
-		stopped := h.Status.State == bridge.StateStopped
-		if stopped {
-			setButton(r.start, g.t("start"))
-		} else {
-			setButton(r.start, g.t("restart"))
+	if r.toggle != nil {
+		switch h.Status.State {
+		case bridge.StateStopped:
+			setButtonLook(r.toggle, g.t("start"), theme.MediaPlayIcon(), widget.HighImportance)
+			stopSpinner(r.spin)
+		case bridge.StateUp:
+			setButtonLook(r.toggle, g.t("stop"), theme.MediaStopIcon(), widget.MediumImportance)
+			stopSpinner(r.spin)
+		default: // connecting, retrying — on its way somewhere, and interruptible
+			setButtonLook(r.toggle, g.stateName(h.Status.State), theme.MediaStopIcon(), widget.MediumImportance)
+			startSpinner(r.spin)
 		}
-		setDisabled(r.stop, stopped)
 	}
 	g.setDot(r.dot, h)
 }

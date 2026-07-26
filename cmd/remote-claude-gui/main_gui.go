@@ -421,15 +421,34 @@ func setButton(b *widget.Button, text string) {
 	}
 }
 
-func setDisabled(b *widget.Button, off bool) {
-	if b.Disabled() == off {
+// setButtonLook changes a button's whole appearance in one refresh. Text, icon
+// and importance each trigger their own otherwise, so a tunnel changing state
+// would repaint the card three times.
+func setButtonLook(b *widget.Button, text string, icon fyne.Resource, imp widget.Importance) {
+	if b.Text == text && b.Icon == icon && b.Importance == imp {
 		return
 	}
-	if off {
-		b.Disable()
-	} else {
-		b.Enable()
+	b.Text, b.Icon, b.Importance = text, icon, imp
+	b.Refresh()
+}
+
+// The spinner animates, so starting an already-running one restarts it: on a
+// two-second tick that reads as a stutter rather than a spin.
+
+func startSpinner(a *widget.Activity) {
+	if a.Visible() {
+		return
 	}
+	a.Show()
+	a.Start()
+}
+
+func stopSpinner(a *widget.Activity) {
+	if !a.Visible() {
+		return
+	}
+	a.Stop()
+	a.Hide()
 }
 
 // setChecked syncs a checkbox without firing OnChanged: that handler writes the
