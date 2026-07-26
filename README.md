@@ -23,8 +23,7 @@ reaches whichever one you're connected from.
 ## Get it
 
 Download from the
-[latest release](https://github.com/papasaidfine/remote-claude/releases) — you'll
-need to be signed in to GitHub with access to this repository.
+[latest release](https://github.com/papasaidfine/remote-claude/releases).
 
 **Desktop app** (the usual choice):
 

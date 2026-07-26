@@ -310,9 +310,8 @@ func (g *gui) do(fn func() error) {
 // checkUpdate queries GitHub for a newer release and, if one exists, offers to
 // download and install it. Network work runs off the UI thread.
 //
-// The "is this a dev build?" question is settled before going to the network:
-// the repository is private, so an unstamped local build gets a 404 rather than
-// a release, and reporting that as a network failure would bury the real answer.
+// The "is this a dev build?" question is settled before going to the network, so
+// a local build says so plainly instead of reporting whatever the network did.
 func (g *gui) checkUpdate() {
 	if version == "dev" {
 		dialog.ShowInformation(g.t("update_title"), g.t("update_dev"), g.win)
@@ -335,7 +334,7 @@ func (g *gui) checkUpdate() {
 					widget.NewLabel(fmt.Sprintf(g.t("update_avail_fmt"), version, rel.Version)),
 					func(ok bool) {
 						if ok {
-							g.applyUpdate(rel)
+							g.applyUpdate()
 						}
 					}, g.win)
 			}
@@ -343,13 +342,13 @@ func (g *gui) checkUpdate() {
 	}()
 }
 
-// applyUpdate downloads and installs rel, then offers a restart.
-func (g *gui) applyUpdate(rel selfupdate.Release) {
+// applyUpdate downloads and installs the latest release, then offers a restart.
+func (g *gui) applyUpdate() {
 	prog := dialog.NewCustom(g.t("update_title"), g.t("close"),
 		waiting(g.t("update_downloading")), g.win)
 	prog.Show()
 	go func() {
-		err := selfupdate.Apply(rel, "")
+		err := selfupdate.Apply("")
 		fyne.Do(func() {
 			prog.Hide()
 			if err != nil {

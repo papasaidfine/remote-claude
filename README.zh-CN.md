@@ -18,8 +18,7 @@ agent   ── ssh "$LC_CLIENT_NAME" ──▶  你的电脑          （反向�
 
 ## 获取
 
-从 [最新 release](https://github.com/papasaidfine/remote-claude/releases) 下载——
-需要先登录 GitHub，且账号对本仓库有访问权限。
+从 [最新 release](https://github.com/papasaidfine/remote-claude/releases) 下载。
 
 **桌面应用**（一般用这个）：
 

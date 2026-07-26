@@ -70,26 +70,12 @@ jobs:
         shell: bash
         env:
           CGO_ENABLED: '1'
-          # The repository is private, so the in-app updater has to authenticate
-          # to read releases and download assets. The credential is stamped in
-          # here rather than committed, so rotating it means changing this
-          # secret, not the source. Repository secret — an environment secret
-          # would not resolve, as this job declares no `environment:`.
-          RC_UPDATE_TOKEN: ${{ secrets.RC_UPDATE_TOKEN }}
         run: |
-          # Without the token the build still succeeds — it just ships an app
-          # whose "Check for updates" 404s against the private repo. Fail loudly
-          # instead of publishing that.
-          if [ -z "$RC_UPDATE_TOKEN" ]; then
-            echo "::error::RC_UPDATE_TOKEN repository secret is not set; the release would ship an app that cannot check for updates."
-            exit 1
-          fi
           out="remote-claude-gui_${{ matrix.suffix }}${{ matrix.ext }}"
-          tokenvar="github.com/papasaidfine/remote-claude/internal/selfupdate.token"
           # On Windows the icon comes from cmd/remote-claude-gui/rsrc_windows_amd64.syso
           # (the Go linker embeds it automatically — no flag needed).
           go build -tags gui -trimpath \
-            -ldflags "-s -w -X main.version=${{ github.ref_name }} -X $tokenvar=$RC_UPDATE_TOKEN ${{ matrix.ldflags }}" \
+            -ldflags "-s -w -X main.version=${{ github.ref_name }} ${{ matrix.ldflags }}" \
             -o "$out" ./cmd/remote-claude-gui
           sha256sum "$out" > "$out.sha256"
       # macOS: also wrap the binary in a proper .app (with an .icns icon) and a

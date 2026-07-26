@@ -3,8 +3,7 @@
 // through a temporary local proxy built from the user's vless nodes), atomically
 // replaces the running executable, and re-execs the new binary.
 //
-// The repository is private, so both the release lookup and the asset download
-// are authenticated GitHub API calls. See token for how the credential gets in.
+// The repository is public, so nothing here authenticates.
 package selfupdate
 
 import (
@@ -35,15 +34,6 @@ const (
 	assetPrefix = "remote-claude-gui_"
 )
 
-// token authenticates against the private repository. It is stamped in at build
-// time — never committed — with:
-//
-//	-ldflags "-X github.com/papasaidfine/remote-claude/internal/selfupdate.token=$TOKEN"
-//
-// A local build leaves it empty, which makes every request anonymous; that is
-// fine because a "dev" build never updates itself anyway.
-var token string
-
 // apiBase is the GitHub API root. A variable so tests can point it at a stub.
 var apiBase = "https://api.github.com"
 
@@ -51,15 +41,15 @@ var apiBase = "https://api.github.com"
 type Release struct {
 	Version   string // tag_name, e.g. "v0.2.0-rc.8"
 	HasUpdate bool   // true if Version differs from the current version and current != "dev"
-	AssetID   int64  // id of this platform's asset; 0 if the release has none
 }
 
 // Check queries the latest release. current is the running version string.
 func Check(current string) (Release, error) {
-	req, err := newAPIRequest(apiURL("/releases/latest"), "application/vnd.github+json")
+	req, err := http.NewRequest("GET", apiURL("/releases/latest"), nil)
 	if err != nil {
 		return Release{}, err
 	}
+	req.Header.Set("Accept", "application/vnd.github+json")
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -71,29 +61,14 @@ func Check(current string) (Release, error) {
 	}
 	var body struct {
 		TagName string `json:"tag_name"`
-		Assets  []struct {
-			ID   int64  `json:"id"`
-			Name string `json:"name"`
-		} `json:"assets"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return Release{}, err
 	}
-	rel := Release{
+	return Release{
 		Version:   body.TagName,
 		HasUpdate: hasUpdate(body.TagName, current),
-	}
-	// A release missing this platform's asset still counts as an update — the
-	// user should be told one exists. Apply is where that turns into an error.
-	if name, err := AssetName(); err == nil {
-		for _, a := range body.Assets {
-			if a.Name == name {
-				rel.AssetID = a.ID
-				break
-			}
-		}
-	}
-	return rel, nil
+	}, nil
 }
 
 // hasUpdate reports whether tag represents a newer release than current. It is
@@ -132,38 +107,29 @@ func assetNameFor(goos, goarch string) (string, error) {
 // apiURL builds a repository-scoped API URL, e.g. "/releases/latest".
 func apiURL(path string) string { return apiBase + "/repos/" + repo + path }
 
-// newAPIRequest builds an authenticated GET against the GitHub API. With no
-// built-in token the request goes out anonymous rather than with an empty
-// credential, which reads better in GitHub's logs and error messages.
-func newAPIRequest(rawURL, accept string) (*http.Request, error) {
-	req, err := http.NewRequest("GET", rawURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", accept)
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	return req, nil
-}
-
-// Apply downloads rel's asset and atomically replaces the running executable.
-// It tries a direct download first; on failure/timeout it retries through a
-// temporary local proxy built from the user's configured vless nodes (best
-// effort — if the proxy or nodes are unavailable, the direct error is returned).
-// proxy, if non-empty, is an explicit http proxy URL used for the direct attempt.
-func Apply(rel Release, proxy string) error {
+// Apply downloads the latest release asset and atomically replaces the running
+// executable. It tries a direct download first; on failure/timeout it retries
+// through a temporary local proxy built from the user's configured vless nodes
+// (best effort — if the proxy or nodes are unavailable, the direct error is
+// returned). proxy, if non-empty, is an explicit http proxy URL used for the
+// direct attempt.
+func Apply(proxy string) error {
 	exe, err := selfPath()
 	if err != nil {
 		return err
 	}
+	asset, err := AssetName()
+	if err != nil {
+		return err
+	}
+	srcURL := "https://github.com/" + repo + "/releases/latest/download/" + asset
 	newPath := exe + ".new"
 
 	// 1. Direct download (optionally through an explicit http proxy).
-	directErr := downloadAsset(directClient(proxy), rel.AssetID, newPath)
+	directErr := downloadWith(directClient(proxy), srcURL, newPath)
 	if directErr != nil {
 		// 2. Retry through a local proxy built from the user's nodes.
-		if perr := downloadViaProxy(rel.AssetID, newPath); perr != nil {
+		if perr := downloadViaProxy(srcURL, newPath); perr != nil {
 			// Best effort: surface the original direct error, not the fallback's.
 			return directErr
 		}
@@ -227,66 +193,18 @@ func directClient(proxy string) *http.Client {
 	return &http.Client{Transport: tr, Timeout: 60 * time.Second}
 }
 
-// downloadAsset fetches release asset id to dest through client.
-//
-// The asset endpoint answers a 302 pointing at a pre-signed URL on
-// release-assets.githubusercontent.com, which authenticates by query string. We
-// read the Location and issue a fresh, unauthenticated GET rather than letting
-// the client follow it, for two reasons: our credential never travels to a host
-// that is not the API, and correctness does not rest on net/http's redirect
-// heuristic. That heuristic compares hostnames only (see
-// shouldCopyHeaderOnRedirect), so a redirect that stayed on the same host — or a
-// future change of CDN arrangement — would forward the token silently.
-//
-// GitHub's CDN does currently accept a request that carries the token as well;
-// this is credential hygiene, not a workaround for a rejection.
-func downloadAsset(client *http.Client, id int64, dest string) error {
-	if id == 0 {
-		return fmt.Errorf("this release has no build for %s/%s", runtime.GOOS, runtime.GOARCH)
-	}
-	req, err := newAPIRequest(apiURL("/releases/assets/"+strconv.FormatInt(id, 10)), "application/octet-stream")
-	if err != nil {
-		return err
-	}
-	noFollow := *client
-	noFollow.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	resp, err := noFollow.Do(req)
-	if err != nil {
-		return err
-	}
-	if loc := resp.Header.Get("Location"); isRedirect(resp.StatusCode) && loc != "" {
-		resp.Body.Close()
-		return downloadUnauthenticated(client, loc, dest)
-	}
-	defer resp.Body.Close()
-	return writeBody(resp, dest)
-}
-
-func isRedirect(code int) bool {
-	switch code {
-	case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther,
-		http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
-		return true
-	}
-	return false
-}
-
-// downloadUnauthenticated GETs a pre-signed URL with no credentials of ours.
-func downloadUnauthenticated(client *http.Client, rawURL, dest string) error {
-	resp, err := client.Get(rawURL)
+// downloadWith GETs srcURL with client and writes the body to dest, requiring
+// HTTP 200 and a non-empty body. dest is created/truncated; on any failure it is
+// removed so a partial or empty file never survives to be swapped in as the new
+// executable.
+func downloadWith(client *http.Client, srcURL, dest string) error {
+	resp, err := client.Get(srcURL)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	return writeBody(resp, dest)
-}
-
-// writeBody requires HTTP 200 and a non-empty body, and writes it to dest. dest
-// is created/truncated; on any failure it is removed so a partial or empty file
-// never survives to be swapped in as the new executable.
-func writeBody(resp *http.Response, dest string) error {
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download %s: HTTP %d", resp.Request.URL, resp.StatusCode)
+		return fmt.Errorf("download %s: HTTP %d", srcURL, resp.StatusCode)
 	}
 	out, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
 	if err != nil {
@@ -302,7 +220,7 @@ func writeBody(resp *http.Response, dest string) error {
 	}
 	if n == 0 {
 		os.Remove(dest)
-		return fmt.Errorf("download %s: empty body", resp.Request.URL)
+		return fmt.Errorf("download %s: empty body", srcURL)
 	}
 	return nil
 }
@@ -310,7 +228,7 @@ func writeBody(resp *http.Response, dest string) error {
 // downloadViaProxy retries the download through a temporary local xray HTTP
 // proxy built from a random configured vless node. Everything it spawns is
 // cleaned up before it returns.
-func downloadViaProxy(assetID int64, dest string) error {
+func downloadViaProxy(srcURL, dest string) error {
 	p, err := paths.Resolve()
 	if err != nil {
 		return err
@@ -365,7 +283,7 @@ func downloadViaProxy(assetID int64, dest string) error {
 		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
 		Timeout:   60 * time.Second,
 	}
-	return downloadAsset(client, assetID, dest)
+	return downloadWith(client, srcURL, dest)
 }
 
 // reservePort grabs a free loopback TCP port for the xray inbound. Copied from
