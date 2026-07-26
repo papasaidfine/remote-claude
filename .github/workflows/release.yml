@@ -7,36 +7,9 @@ on:
 permissions:
   contents: write
 
-# Build jobs publish straight to the release rather than handing files to a
-# collector job through actions/upload-artifact. Artifacts only exist to move a
-# file between two runners, and they are billed against the account's Actions
-# storage now that this repo is private — 2.34GB of dead intermediates once
-# filled the quota and blocked every release. Uploading to the release instead
-# means nothing is ever written to that storage, and release assets are not
-# counted at all.
-#
-# The release has to exist before anything can upload to it, but a release that
-# appears the moment the build starts is one you have to delete by hand when a
-# platform fails. So it is created as a DRAFT — invisible on the releases page —
-# and only flipped live once every platform has uploaded. A failed build takes
-# the draft down with it.
 jobs:
-  create:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Open a draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          # Idempotent, so re-running a failed release does not error out here.
-          gh release view "$TAG" >/dev/null 2>&1 && exit 0
-          gh release create "$TAG" --draft --title "$TAG" --notes ""
-
-  # CGO-free CLI, cross-compiled for every target.
+  # CGO-free CLI, cross-compiled for every target → artifacts.
   cli:
-    needs: create
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -62,18 +35,18 @@ jobs:
           out="remote-claude_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}"
           go build -trimpath -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o "$out" ./cmd/remote-claude
           sha256sum "$out" > "$out.sha256"
-      - name: Upload to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
-        # The glob is this job's own targets only, so parallel jobs never write
-        # the same asset. --clobber makes a re-run idempotent.
-        run: gh release upload "$TAG" remote-claude_${{ matrix.goos }}_${{ matrix.goarch }}* --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: remote-claude_*
+          # Only has to live long enough for the publish job to collect it. The
+          # real assets end up on the release, which does not count against the
+          # Actions storage quota — and that quota is finite now the repo is
+          # private, where it used to be free.
+          retention-days: 1
 
-  # Native Fyne GUI — needs CGO, so build on each OS's own runner.
+  # Native Fyne GUI — needs CGO, so build on each OS's own runner → artifacts.
   gui:
-    needs: create
     strategy:
       fail-fast: false
       matrix:
@@ -172,50 +145,24 @@ jobs:
           dmg="remote-claude-gui_${{ matrix.suffix }}.dmg"
           hdiutil create -volname "remote-claude" -srcfolder "$stage" -ov -format UDZO "$dmg" >/dev/null
           sha256sum "$dmg" > "$dmg.sha256"
-      - name: Upload to the release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
-        # Picks up the bare binary, the .dmg on macOS, and every .sha256 beside
-        # them — all prefixed with this platform's suffix, so parallel jobs
-        # never write the same asset.
-        run: gh release upload "$TAG" remote-claude-gui_${{ matrix.suffix }}* --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gui-${{ matrix.suffix }}
+          path: remote-claude-gui_*
+          retention-days: 1
 
-  # Everything built and uploaded — make the release visible.
+  # One publisher → no concurrent-create race on the release.
   publish:
     needs: [cli, gui]
     runs-on: ubuntu-latest
     steps:
-      - name: Publish the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
-          # The release title is just the tag (e.g. "v0.2.0"). A tag with a
-          # pre-release suffix (v0.2.0-rc.1) is a pre-release; a bare tag is a
-          # full release and becomes "Latest".
-          PRERELEASE: ${{ contains(github.ref_name, '-') }}
-        run: gh release edit "$TAG" --draft=false --prerelease=$PRERELEASE
-
-  # Any job above failed, so the draft is empty or half-filled. Take it down
-  # rather than leaving it to be deleted by hand. The tag is left alone.
-  discard:
-    needs: [create, cli, gui]
-    if: failure()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Discard the draft
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          # Only ever deletes a draft, so a re-run can never remove a release
-          # that already went live.
-          draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || echo "")
-          if [ "$draft" = "true" ]; then
-            gh release delete "$TAG" --yes
-            echo "discarded the draft release for $TAG"
-          fi
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*
+          # No name/body: the release title is just the tag (e.g. "v0.2.0").
+          # A tag with a pre-release suffix (v0.2.0-rc.1) is a pre-release; a
+          # bare tag (v0.2.0) is a full release and becomes "Latest".
+          prerelease: ${{ contains(github.ref_name, '-') }}
