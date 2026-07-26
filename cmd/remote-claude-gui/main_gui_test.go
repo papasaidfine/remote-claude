@@ -41,6 +41,7 @@ type fakePlat struct{}
 func (fakePlat) Name() string            { return "TestOS" }
 func (fakePlat) SupportsXray() bool      { return true }
 func (fakePlat) StatusIncomingSSH() bool { return false }
+func (fakePlat) OpenURL(string) error    { return nil }
 
 // newTestGUI builds a gui over a real core.App backed by a temp ssh config,
 // using Fyne's headless test driver. aliases each become a tunnel host.

@@ -229,3 +229,9 @@ func copyFile(src, dst string) error {
 	}
 	return os.WriteFile(dst, b, 0o644)
 }
+
+// OpenURL hands url to whatever is registered for its scheme. rundll32 rather
+// than "start", which is a shell builtin and would need a cmd.exe wrapper.
+func (windowsPlatform) OpenURL(url string) error {
+	return command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+}

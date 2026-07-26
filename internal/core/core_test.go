@@ -56,6 +56,7 @@ type fakePlat struct{}
 func (fakePlat) Name() string            { return "TestOS" }
 func (fakePlat) SupportsXray() bool      { return true }
 func (fakePlat) StatusIncomingSSH() bool { return false }
+func (fakePlat) OpenURL(string) error    { return nil }
 
 func newTestApp(t *testing.T) (*App, *fakeMgr, *fakeProv) {
 	t.Helper()

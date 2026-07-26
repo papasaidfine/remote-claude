@@ -27,6 +27,9 @@ type Platform interface {
 	// RequireElevation returns a non-nil error (with a re-run hint) when the
 	// incoming-SSH item needs privileges not currently held; nil otherwise.
 	RequireElevation() error
+	// OpenURL hands a URL to the desktop's default handler. Used for the
+	// vscode:// deep link, so which editor answers it is the OS's business.
+	OpenURL(url string) error
 }
 
 // New returns the Platform implementation for the current OS.

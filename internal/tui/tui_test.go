@@ -37,6 +37,7 @@ type fakePlat struct{}
 func (fakePlat) Name() string            { return "TestOS" }
 func (fakePlat) SupportsXray() bool      { return true }
 func (fakePlat) StatusIncomingSSH() bool { return false }
+func (fakePlat) OpenURL(string) error    { return nil }
 
 // newTestUI builds a UI over a real core.App backed by a temp ssh config, wired
 // to a simulation screen so tests can read back what was actually rendered.

@@ -163,6 +163,21 @@ func (g *gui) newHostRow(h core.HostView) *hostRow {
 	where.Importance = widget.LowImportance
 	titleRow := container.NewBorder(nil, nil, container.NewHBox(dot, r.title), where)
 
+	// Launch actions: open the host in an editor, or hand over the command to
+	// work in it from a terminal. The command is copied rather than run — there
+	// is no portable way to open "the user's terminal", and picking one for them
+	// would be wrong as often as it was right.
+	vscode := widget.NewButtonWithIcon(g.t("open_vscode"), theme.ComputerIcon(), func() {
+		if err := g.core.OpenVSCode(alias); err != nil {
+			dialog.ShowError(err, g.win)
+		}
+	})
+	cli := widget.NewButtonWithIcon(g.t("copy_cli"), theme.ContentCopyIcon(), func() {
+		cmd := core.ClaudeCommand(alias)
+		g.app.Clipboard().SetContent(cmd)
+		setLabel(g.status, fmt.Sprintf(g.t("cli_copied_fmt"), cmd))
+	})
+
 	usageBtn := widget.NewButton(g.t("usage"), func() { g.showUsage(alias) })
 	edit := widget.NewButton(g.t("edit"), func() { g.showEdit(r.cur) })
 	del := widget.NewButton(g.t("delete"), func() {
@@ -189,13 +204,14 @@ func (g *gui) newHostRow(h core.HostView) *hostRow {
 		r.stop = widget.NewButton(g.t("stop"), func() { g.core.StopTunnel(alias); g.refresh() })
 		setup := widget.NewButton(g.t("setup_server"), func() { g.showSetupServer(alias) })
 		rows = append(rows, r.status,
-			container.NewHBox(r.start, r.stop, setup, usageBtn, layout.NewSpacer(), edit, del))
+			container.NewHBox(r.start, r.stop, vscode, cli, setup, usageBtn, layout.NewSpacer(), edit, del))
 	} else {
 		// A plain ssh host: just show it and offer to make it a tunnel host.
 		plain := widget.NewLabel(g.t("plain_host"))
 		plain.Importance = widget.LowImportance
 		rows = append(rows, plain,
 			container.NewHBox(
+				vscode, cli,
 				widget.NewButton(g.t("enable_reverse"), func() {
 					g.do(func() error { return g.core.SetReverseTunnel(alias, 2222) })
 				}),

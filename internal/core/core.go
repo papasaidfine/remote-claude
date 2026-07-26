@@ -48,6 +48,7 @@ type PlatformInfo interface {
 	Name() string
 	SupportsXray() bool
 	StatusIncomingSSH() bool
+	OpenURL(url string) error
 }
 
 // App is the live application state and orchestration. All methods are safe for

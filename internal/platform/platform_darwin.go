@@ -123,3 +123,8 @@ func macSshdCheck() error {
 	}
 	return err
 }
+
+// OpenURL hands url to whatever is registered for its scheme.
+func (darwinPlatform) OpenURL(url string) error {
+	return command("open", url).Start()
+}
