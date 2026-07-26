@@ -1,38 +1,33 @@
-// Command remote-claude is the reverse-tunnel bridge app. With no arguments it
-// launches the local web UI (and opens the browser); the app is also the daemon
-// that keeps the reverse tunnels up. Subcommands:
+// Command remote-claude is the reverse-tunnel bridge app for machines without a
+// desktop. With no arguments it opens a terminal UI; it is also the process that
+// keeps the reverse tunnels up. Subcommands:
 //
-//	relay <host> <port>   ssh ProxyCommand relay for the xray path (unchanged)
-//	serve [addr]          run the app without opening a browser (headless)
+//	relay <host> <port>   ssh ProxyCommand relay for the proxy path
+//	serve                 hold the tunnels up with no UI (for systemd / nohup)
+//	version               print the version
+//
+// The desktop front-end is cmd/remote-claude-gui. Only one of the two may run on
+// a machine at a time — see internal/single for why.
 package main
 
 import (
 	"errors"
-	"fmt"
-	"net"
-	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
-	"runtime"
-	"syscall"
 
 	"github.com/papasaidfine/remote-claude/internal/bridge"
 	"github.com/papasaidfine/remote-claude/internal/core"
+	"github.com/papasaidfine/remote-claude/internal/i18n"
 	"github.com/papasaidfine/remote-claude/internal/paths"
 	"github.com/papasaidfine/remote-claude/internal/platform"
 	"github.com/papasaidfine/remote-claude/internal/provision"
 	"github.com/papasaidfine/remote-claude/internal/relay"
+	"github.com/papasaidfine/remote-claude/internal/single"
 	"github.com/papasaidfine/remote-claude/internal/sshbin"
 	"github.com/papasaidfine/remote-claude/internal/store"
+	"github.com/papasaidfine/remote-claude/internal/tui"
 	"github.com/papasaidfine/remote-claude/internal/ui"
-	"github.com/papasaidfine/remote-claude/internal/webui"
 )
-
-// defaultAddr is the fixed local address the app binds. A failed bind is taken
-// as "an instance is already running" — we just open that URL and exit, which
-// makes a second launch focus the existing app instead of starting a rival.
-const defaultAddr = "127.0.0.1:8765"
 
 // version is stamped at release time via -ldflags "-X main.version=...".
 var version = "dev"
@@ -41,23 +36,38 @@ func main() {
 	if len(os.Args) >= 2 {
 		switch os.Args[1] {
 		case "relay":
+			// ssh runs this once per connection, so it must never touch the
+			// single-instance lock.
 			os.Exit(relay.Main(os.Args[2:]))
 		case "version", "--version", "-v":
-			fmt.Println(version)
+			ui.Plain(version)
 			return
 		case "serve":
-			addr := defaultAddr
-			if len(os.Args) >= 3 {
-				addr = os.Args[2]
-			}
-			runApp(addr, false)
+			run(false)
 			return
 		}
 	}
-	runApp(defaultAddr, true)
+	run(true)
 }
 
-func runApp(addr string, openBrowser bool) {
+// run starts the app, either with the terminal UI or as a bare daemon.
+func run(interactive bool) {
+	lock, err := single.Acquire(single.DefaultAddr)
+	if err != nil {
+		if errors.Is(err, single.ErrRunning) {
+			// The holder may be the desktop app, which will raise its window.
+			_ = single.Signal(single.DefaultAddr)
+			ui.Warn("remote-claude is already running on this machine — nothing to do.")
+			return
+		}
+		// The guard itself is unavailable. Refusing to start over that would be a
+		// worse failure than the duplicate it protects against.
+		ui.Warn("single-instance guard unavailable, continuing without it: %v", err)
+	}
+	if lock != nil {
+		defer lock.Release()
+	}
+
 	p, err := paths.Resolve()
 	if err != nil {
 		ui.Errf("remote-claude: %v", err)
@@ -73,65 +83,31 @@ func runApp(addr string, openBrowser bool) {
 	plat := platform.New()
 	mgr := bridge.NewManager(sshbin.SSH())
 	prov := provision.New(p, plat)
-	app := core.New(cfg, cfgPath, p, mgr, prov, plat) // Normalizes cfg
-	app.RepairProxies()                               // fix xray ProxyCommand pointing at a moved binary
-	srv := webui.New(app)
+	app := core.New(cfg, cfgPath, p, mgr, prov, plat) // normalizes cfg
+	app.RepairProxies()                               // fix a ProxyCommand pointing at a moved binary
+	defer mgr.StopAll()
 
 	app.AutoStart(func(alias string, err error) {
 		ui.Warn("auto-start %s: %v", alias, err)
 	})
 
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		if isAddrInUse(err) {
-			url := "http://" + addr
-			ui.Log("remote-claude appears to be running already: %s", url)
-			if openBrowser {
-				openURL(url)
-			}
-			return
-		}
-		ui.Errf("remote-claude: cannot listen on %s: %v", addr, err)
+	if !interactive {
+		serve(mgr)
+		return
+	}
+	if err := tui.New(app, i18n.Parse(app.Lang()), version).Run(); err != nil {
+		ui.Errf("remote-claude: %v", err)
 		os.Exit(1)
 	}
-
-	url := "http://" + ln.Addr().String()
-	ui.Log("remote-claude app: %s", url)
-	ui.Log("Keep this process running to keep tunnels up (Ctrl-C to stop).")
-	if openBrowser {
-		go openURL(url)
-	}
-
-	httpSrv := &http.Server{Handler: srv.Handler()}
-	go func() {
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, os.Interrupt)
-		<-sig
-		ui.Log("Shutting down — stopping tunnels…")
-		mgr.StopAll()
-		httpSrv.Close()
-	}()
-
-	if err := httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
-		ui.Errf("remote-claude: server error: %v", err)
-	}
 }
 
-func isAddrInUse(err error) bool {
-	return errors.Is(err, syscall.EADDRINUSE)
-}
-
-// openURL best-effort opens the default browser at url.
-func openURL(url string) {
-	var cmd string
-	var args []string
-	switch runtime.GOOS {
-	case "windows":
-		cmd, args = "rundll32", []string{"url.dll,FileProtocolHandler", url}
-	case "darwin":
-		cmd, args = "open", []string{url}
-	default:
-		cmd, args = "xdg-open", []string{url}
-	}
-	_ = exec.Command(cmd, args...).Start()
+// serve holds the tunnels up with no UI at all, for a machine where the app runs
+// under systemd or nohup and nobody is watching a terminal.
+func serve(mgr *bridge.Manager) {
+	ui.Log("remote-claude is holding the tunnels up. Ctrl-C to stop.")
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+	<-sig
+	ui.Log("Shutting down — stopping tunnels…")
+	mgr.StopAll()
 }
