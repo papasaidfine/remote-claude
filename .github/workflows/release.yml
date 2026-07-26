@@ -39,6 +39,11 @@ jobs:
         with:
           name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
           path: remote-claude_*
+          # Only has to live long enough for the publish job to collect it. The
+          # real assets end up on the release, which does not count against the
+          # Actions storage quota — and that quota is finite now the repo is
+          # private, where it used to be free.
+          retention-days: 1
 
   # Native Fyne GUI — needs CGO, so build on each OS's own runner → artifacts.
   gui:
@@ -144,6 +149,7 @@ jobs:
         with:
           name: gui-${{ matrix.suffix }}
           path: remote-claude-gui_*
+          retention-days: 1
 
   # One publisher → no concurrent-create race on the release.
   publish:

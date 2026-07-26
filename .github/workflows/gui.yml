@@ -46,3 +46,6 @@ jobs:
           name: remote-claude-gui_${{ matrix.suffix }}
           path: remote-claude-gui_${{ matrix.suffix }}${{ matrix.ext }}
           if-no-files-found: error
+          # Long enough to grab an unreleased main build, short enough that a
+          # private repo's Actions storage quota does not fill up with them.
+          retention-days: 7
