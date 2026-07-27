@@ -142,9 +142,8 @@ type hostRow struct {
 	hasRev bool          // layout variant this card was built for
 	dot    *canvas.Circle
 	title  *widget.Label
-	status *widget.Label    // tunnel hosts only
-	toggle *widget.Button   // tunnel hosts only: start and stop, one control
-	spin   *widget.Activity // tunnel hosts only: shown while not yet settled
+	status *widget.Label  // tunnel hosts only
+	toggle *widget.Button // tunnel hosts only: start and stop, one control
 }
 
 func (g *gui) newHostRow(h core.HostView) *hostRow {
@@ -212,9 +211,9 @@ func (g *gui) newHostRow(h core.HostView) *hostRow {
 		// One control for the whole tunnel lifecycle. Start and Stop were two
 		// buttons of which one was always the wrong one to press, and a separate
 		// Restart on top of that; what the row actually has to say is whether the
-		// tunnel is on, so it is a toggle. While the state is unsettled a spinner
-		// stands beside it — and the toggle still works, because a tunnel stuck
-		// retrying behind a long backoff has to be stoppable.
+		// tunnel is on, so it is a toggle. While the state is unsettled its own
+		// icon spins in place of the stop square — and it stays clickable, because
+		// a tunnel stuck retrying behind a long backoff has to be stoppable.
 		r.toggle = widget.NewButtonWithIcon(g.t("start"), theme.MediaPlayIcon(), func() {
 			if r.cur.Status.State == bridge.StateStopped {
 				g.do(func() error { _, err := g.core.StartTunnel(alias); return err })
@@ -223,22 +222,18 @@ func (g *gui) newHostRow(h core.HostView) *hostRow {
 			g.core.StopTunnel(alias)
 			g.refresh()
 		})
-		r.spin = widget.NewActivity()
-		r.spin.Hide()
 		setup := widget.NewButton(g.t("setup_server"), func() { g.showSetupServer(alias) })
 		rows = append(rows, r.status,
-			container.NewHBox(r.toggle, r.spin, vscode, cli, setup, usageBtn, layout.NewSpacer(), edit, del))
+			container.NewHBox(r.toggle, vscode, cli, setup, usageBtn, layout.NewSpacer(), edit, del))
 	} else {
 		// A plain ssh host: just show it and offer to make it a tunnel host.
 		plain := widget.NewLabel(g.t("plain_host"))
 		plain.Importance = widget.LowImportance
+		// No "enable reverse tunnel" button: that is the reverse-port field in the
+		// Edit dialog, and the same setting reachable two ways from one card is
+		// one way too many.
 		rows = append(rows, plain,
-			container.NewHBox(
-				vscode, cli,
-				widget.NewButton(g.t("enable_reverse"), func() {
-					g.do(func() error { return g.core.SetReverseTunnel(alias, 2222) })
-				}),
-				usageBtn, layout.NewSpacer(), edit, del))
+			container.NewHBox(vscode, cli, usageBtn, layout.NewSpacer(), edit, del))
 	}
 
 	// Fill contrast only — no hairline stroke. A card's height is driven by text
@@ -267,13 +262,12 @@ func (r *hostRow) update(g *gui, h core.HostView) {
 		switch h.Status.State {
 		case bridge.StateStopped:
 			setButtonLook(r.toggle, g.t("start"), theme.MediaPlayIcon(), widget.HighImportance)
-			stopSpinner(r.spin)
 		case bridge.StateUp:
 			setButtonLook(r.toggle, g.t("stop"), theme.MediaStopIcon(), widget.MediumImportance)
-			stopSpinner(r.spin)
 		default: // connecting, retrying — on its way somewhere, and interruptible
-			setButtonLook(r.toggle, g.stateName(h.Status.State), theme.MediaStopIcon(), widget.MediumImportance)
-			startSpinner(r.spin)
+			// The icon is left alone here: spinTick owns it while pending, and it
+			// turns far faster than this two-second refresh.
+			setButtonText(r.toggle, g.stateName(h.Status.State), widget.MediumImportance)
 		}
 	}
 	g.setDot(r.dot, h)

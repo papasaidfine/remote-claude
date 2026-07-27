@@ -125,6 +125,7 @@ func run() {
 	g.shown.Store(true) // ShowAndRun below puts the window on screen
 	g.refresh()
 	go g.autoRefresh()
+	go g.spinRefresh()
 
 	// A second launch hands over to us rather than starting a rival, so put the
 	// window in front — that click was someone asking to see the app.
@@ -212,6 +213,42 @@ func (g *gui) tick() {
 	g.refresh()
 }
 
+// spinRefresh turns the spinner on any tunnel still on its way. It is a separate,
+// much faster timer than autoRefresh because a spinner that steps twice a second
+// is not a spinner, and re-reading every host's state that often would be waste.
+func (g *gui) spinRefresh() {
+	t := time.NewTicker(90 * time.Millisecond)
+	defer t.Stop()
+	for range t.C {
+		fyne.Do(g.spinTick)
+	}
+}
+
+// spinTick advances one frame, touching only the buttons that are spinning.
+func (g *gui) spinTick() {
+	if !g.shown.Load() {
+		return
+	}
+	var spinning bool
+	for _, r := range g.rows {
+		if r.toggle != nil && isPending(r.cur.Status.State) {
+			spinning = true
+			r.toggle.SetIcon(spinnerFrames[g.spinFrame%len(spinnerFrames)])
+		}
+	}
+	// Only advance while something is spinning, so a tunnel that starts later
+	// picks the animation up from the top rather than mid-turn.
+	if spinning {
+		g.spinFrame++
+	}
+}
+
+// isPending reports whether a tunnel is on its way somewhere — neither settled
+// up nor deliberately stopped.
+func isPending(s bridge.State) bool {
+	return s == bridge.StateConnecting || s == bridge.StateRetrying
+}
+
 // surface brings the window back from the tray. Both the tray's Open item and a
 // second launch land here, so they cannot drift apart.
 func (g *gui) surface() {
@@ -250,12 +287,13 @@ type gui struct {
 	pr   i18n.Printer
 
 	// hosts tab
-	alias    *widget.Entry
-	aliasBtn *widget.Button
-	status   *widget.Label
-	hostsBox *fyne.Container
-	rows     map[string]*hostRow // live host cards, keyed by ssh alias
-	empty    *widget.Label       // the "no hosts yet" placeholder, built once
+	alias     *widget.Entry
+	aliasBtn  *widget.Button
+	status    *widget.Label
+	hostsBox  *fyne.Container
+	rows      map[string]*hostRow // live host cards, keyed by ssh alias
+	empty     *widget.Label       // the "no hosts yet" placeholder, built once
+	spinFrame int                 // which frame the pending-tunnel spinners are on
 
 	// settings tab
 	proxyState *widget.Label
@@ -432,23 +470,14 @@ func setButtonLook(b *widget.Button, text string, icon fyne.Resource, imp widget
 	b.Refresh()
 }
 
-// The spinner animates, so starting an already-running one restarts it: on a
-// two-second tick that reads as a stutter rather than a spin.
-
-func startSpinner(a *widget.Activity) {
-	if a.Visible() {
+// setButtonText changes a button's caption without touching its icon, for the
+// pending state where spinTick owns the icon.
+func setButtonText(b *widget.Button, text string, imp widget.Importance) {
+	if b.Text == text && b.Importance == imp {
 		return
 	}
-	a.Show()
-	a.Start()
-}
-
-func stopSpinner(a *widget.Activity) {
-	if !a.Visible() {
-		return
-	}
-	a.Stop()
-	a.Hide()
+	b.Text, b.Importance = text, imp
+	b.Refresh()
 }
 
 // setChecked syncs a checkbox without firing OnChanged: that handler writes the

@@ -126,7 +126,6 @@ var messages = map[string]map[Lang]string{
 	"auto_start_tunnel":    {EN: "Start tunnel when app opens", ZH: "打开应用时启动隧道"},
 	"delete":               {EN: "Delete", ZH: "删除"},
 	"plain_host":           {EN: "plain ssh host — no reverse tunnel", ZH: "普通 ssh 主机——无反向隧道"},
-	"enable_reverse":       {EN: "Enable reverse tunnel", ZH: "启用反向隧道"},
 	"delete_host_title":    {EN: "Delete host", ZH: "删除主机"},
 	"delete_host_conf_fmt": {EN: "Delete “%s” from ~/.ssh/config? This stops its tunnel.", ZH: "从 ~/.ssh/config 删除“%s”？这会停止它的隧道。"},
 
