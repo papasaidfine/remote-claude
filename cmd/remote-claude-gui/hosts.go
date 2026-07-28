@@ -391,9 +391,9 @@ func (g *gui) showEdit(h core.HostView) {
 // the user to add to the server, then re-run setup. The ssh work runs off the UI
 // thread so the window stays responsive.
 func (g *gui) showSetupServer(alias string) {
-	wait := waiting(fmt.Sprintf(g.t("connecting_fmt"), alias))
+	wait, stopWait := waiting(fmt.Sprintf(g.t("connecting_fmt"), alias))
 	prog := dialog.NewCustom(g.t("setup_server"), g.t("close"), wait, g.win)
-	prog.SetOnClosed(wait.stop)
+	prog.SetOnClosed(stopWait)
 	prog.Show()
 	go func() {
 		res, err := g.core.SetupServer(alias)

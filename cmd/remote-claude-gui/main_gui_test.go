@@ -3,6 +3,7 @@
 package main
 
 import (
+	"image"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -218,4 +219,44 @@ func TestSurfCellLeavesThePositionToTheAnimation(t *testing.T) {
 	if got := img.Size().Height; got != surfSize {
 		t.Errorf("mark sized %v high, want %v", got, surfSize)
 	}
+}
+
+// Fyne's painter walks *fyne.Container and fyne.Widget and paints the canvas
+// primitives it knows about. An object of any other type — a struct of ours
+// embedding a CanvasObject, say — is a leaf it can neither draw nor descend
+// into, and the whole panel vanishes: mark, message and all. That shipped once
+// (v0.2.6-rc.9, an empty dialog), so this one renders the panel for real and
+// looks for the mark's own clay among the pixels.
+func TestWaitingPanelDrawsTheMark(t *testing.T) {
+	test.NewTempApp(t)
+
+	panel, stop := waiting("connecting…")
+	defer stop()
+
+	w := test.NewWindow(panel)
+	defer w.Close()
+	w.Resize(fyne.NewSize(320, 280))
+
+	if !hasClay(w.Canvas().Capture()) {
+		t.Error("no clay pixels on the canvas — the waiting panel drew nothing")
+	}
+}
+
+// hasClay reports whether the surf mark's own #D67657 shows up in img. Scaling
+// and anti-aliasing move the exact value around, hence the tolerance.
+func hasClay(img image.Image) bool {
+	near := func(got uint32, want uint8) bool {
+		v := int(got >> 8)
+		return v >= int(want)-10 && v <= int(want)+10
+	}
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			r, g, bl, a := img.At(x, y).RGBA()
+			if a > 0x8000 && near(r, 0xD6) && near(g, 0x76) && near(bl, 0x57) {
+				return true
+			}
+		}
+	}
+	return false
 }

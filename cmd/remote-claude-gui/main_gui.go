@@ -271,18 +271,6 @@ const (
 	surfTravel = 12
 )
 
-// waitPanel is the "hang tight" panel plus the handle that stops its animation.
-//
-// Stopping is the caller's job because a Fyne animation lives on the app's
-// run-loop rather than on the object it moves: one whose dialog has closed is
-// not collected, it keeps ticking for the life of the process. Every caller
-// hands stop to dialog.SetOnClosed, which fires on Hide() as well as on the
-// user closing the dialog.
-type waitPanel struct {
-	fyne.CanvasObject
-	stop func()
-}
-
 // waiting is the panel shown in dialogs that block on the network: Claude surfing
 // above the status line, so a slow ssh/HTTP round-trip reads as "hang tight"
 // rather than a frozen window.
@@ -292,7 +280,16 @@ type waitPanel struct {
 // in a hung one. It is animated from here rather than inside the SVG because
 // Fyne rasterizes with oksvg, which draws shapes and ignores SMIL and CSS
 // animation entirely; a <animateTransform> in the file would simply not move.
-func waiting(msg string) *waitPanel {
+//
+// The animation comes back as a second return value rather than bundled with the
+// panel into one object, because Fyne's painter walks *fyne.Container and
+// fyne.Widget and nothing else: a struct of our own embedding a CanvasObject is
+// a leaf it can neither draw nor descend into, so the panel disappears — mark,
+// message and all. Callers hand stop to dialog.SetOnClosed, which fires on
+// Hide() as well as on the user closing the dialog. Somebody has to, since a
+// Fyne animation lives on the app's run-loop and not on the object it moves: one
+// whose dialog has closed is not collected, it ticks for the life of the process.
+func waiting(msg string) (fyne.CanvasObject, func()) {
 	surf := canvas.NewImageFromResource(surfIcon)
 	surf.FillMode = canvas.ImageFillContain
 	surf.SetMinSize(fyne.NewSize(surfSize, surfSize))
@@ -310,13 +307,10 @@ func waiting(msg string) *waitPanel {
 	ride.Curve = fyne.AnimationEaseInOut
 	ride.Start()
 
-	return &waitPanel{
-		CanvasObject: container.NewCenter(container.NewVBox(
-			cell,
-			widget.NewLabelWithStyle(msg, fyne.TextAlignCenter, fyne.TextStyle{}),
-		)),
-		stop: ride.Stop,
-	}
+	return container.NewCenter(container.NewVBox(
+		cell,
+		widget.NewLabelWithStyle(msg, fyne.TextAlignCenter, fyne.TextStyle{}),
+	)), ride.Stop
 }
 
 // surfCell is the mark's berth: it sizes the art but never positions it, because
@@ -412,9 +406,9 @@ func (g *gui) checkUpdate() {
 		dialog.ShowInformation(g.t("update_title"), g.t("update_dev"), g.win)
 		return
 	}
-	wait := waiting(g.t("update_checking"))
+	wait, stopWait := waiting(g.t("update_checking"))
 	prog := dialog.NewCustom(g.t("update_title"), g.t("close"), wait, g.win)
-	prog.SetOnClosed(wait.stop)
+	prog.SetOnClosed(stopWait)
 	prog.Show()
 	go func() {
 		rel, err := selfupdate.Check(version)
@@ -440,9 +434,9 @@ func (g *gui) checkUpdate() {
 
 // applyUpdate downloads and installs the latest release, then offers a restart.
 func (g *gui) applyUpdate() {
-	wait := waiting(g.t("update_downloading"))
+	wait, stopWait := waiting(g.t("update_downloading"))
 	prog := dialog.NewCustom(g.t("update_title"), g.t("close"), wait, g.win)
-	prog.SetOnClosed(wait.stop)
+	prog.SetOnClosed(stopWait)
 	prog.Show()
 	go func() {
 		err := selfupdate.Apply("")
