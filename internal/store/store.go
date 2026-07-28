@@ -17,10 +17,6 @@ import (
 type HostMeta struct {
 	ReversePort int  `json:"reverse_port,omitempty"`
 	AutoStart   bool `json:"auto_start,omitempty"`
-	// RemoteHome is the host's home directory, learned once over ssh. The VS Code
-	// deep link has to name a folder, and asking the host every click would put a
-	// network round-trip in front of a button press.
-	RemoteHome string `json:"remote_home,omitempty"`
 }
 
 // Config is the persisted metadata document.
@@ -107,14 +103,6 @@ func (c *Config) SetAutoStart(alias string, on bool) {
 	c.ensure()
 	m := c.Hosts[alias]
 	m.AutoStart = on
-	c.putOrDrop(alias, m)
-}
-
-// SetRemoteHome records the host's home directory.
-func (c *Config) SetRemoteHome(alias, path string) {
-	c.ensure()
-	m := c.Hosts[alias]
-	m.RemoteHome = path
 	c.putOrDrop(alias, m)
 }
 

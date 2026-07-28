@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
 
@@ -189,5 +190,32 @@ func TestRefreshTracksHostsAppearingAndDisappearing(t *testing.T) {
 	g.refresh()
 	if got := len(g.hostsBox.Objects); got != 1 {
 		t.Fatalf("want 1 card after removing a host, got %d", got)
+	}
+}
+
+// The mark's berth has to be taller than the mark itself, or the swell would
+// carry it down over the message it sits above.
+func TestSurfCellReservesRoomForTheSwell(t *testing.T) {
+	got := surfCell{}.MinSize(nil)
+	if got.Height != surfSize+surfTravel {
+		t.Errorf("cell height %v, want %v — the %v-pixel ride needs its own room",
+			got.Height, surfSize+surfTravel, surfTravel)
+	}
+}
+
+// The layout sizes the mark and stops there. The animation owns the position, so
+// a layout that also placed its child would snap the mark back on every pass —
+// which is a layout, not a frame, so the swell would stutter rather than stop.
+func TestSurfCellLeavesThePositionToTheAnimation(t *testing.T) {
+	img := canvas.NewImageFromResource(surfIcon)
+	img.Move(fyne.NewPos(0, surfTravel))
+
+	surfCell{}.Layout([]fyne.CanvasObject{img}, fyne.NewSize(200, surfSize+surfTravel))
+
+	if got := img.Position().Y; got != surfTravel {
+		t.Errorf("layout moved the mark to y=%v, want it left at %v", got, surfTravel)
+	}
+	if got := img.Size().Height; got != surfSize {
+		t.Errorf("mark sized %v high, want %v", got, surfSize)
 	}
 }

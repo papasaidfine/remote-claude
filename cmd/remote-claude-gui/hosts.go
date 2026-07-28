@@ -162,26 +162,23 @@ func (g *gui) newHostRow(h core.HostView) *hostRow {
 	where.Importance = widget.LowImportance
 	titleRow := container.NewBorder(nil, nil, container.NewHBox(dot, r.title), where)
 
-	// Launch actions: open the host in an editor, or hand over the command to
-	// work in it from a terminal. The command is copied rather than run — there
+	// Launch actions: bring up the editor, or hand over the command to work in
+	// the host from a terminal. The command is copied rather than run — there
 	// is no portable way to open "the user's terminal", and picking one for them
 	// would be wrong as often as it was right.
 	// Icon only — the marks carry the meaning, and two more labelled buttons
 	// would not fit the row. Fyne has no tooltips, so the status line names the
 	// action after a click instead.
+	//
+	// This one opens VS Code and leaves the host to VS Code's own Remote-SSH
+	// picker (see core.OpenVSCode). Nothing is waited on — handing a URL to the
+	// desktop returns as soon as the handler is launched — so it stays on the UI
+	// thread.
 	vscode := widget.NewButtonWithIcon("", vscodeIcon, func() {
-		setLabel(g.status, fmt.Sprintf(g.t("opening_vscode_fmt"), alias))
-		// The first click for a host asks it where its home directory is, which
-		// is an ssh round-trip; later ones are immediate. Off the UI thread
-		// either way, so a slow or unreachable host cannot freeze the window.
-		go func() {
-			err := g.core.OpenVSCode(alias)
-			fyne.Do(func() {
-				if err != nil {
-					dialog.ShowError(err, g.win)
-				}
-			})
-		}()
+		setLabel(g.status, g.t("opening_vscode"))
+		if err := g.core.OpenVSCode(); err != nil {
+			dialog.ShowError(err, g.win)
+		}
 	})
 	cli := widget.NewButtonWithIcon("", clawdIcon, func() {
 		cmd := core.ClaudeCommand(alias)
@@ -394,8 +391,9 @@ func (g *gui) showEdit(h core.HostView) {
 // the user to add to the server, then re-run setup. The ssh work runs off the UI
 // thread so the window stays responsive.
 func (g *gui) showSetupServer(alias string) {
-	prog := dialog.NewCustom(g.t("setup_server"), g.t("close"),
-		waiting(fmt.Sprintf(g.t("connecting_fmt"), alias)), g.win)
+	wait := waiting(fmt.Sprintf(g.t("connecting_fmt"), alias))
+	prog := dialog.NewCustom(g.t("setup_server"), g.t("close"), wait, g.win)
+	prog.SetOnClosed(wait.stop)
 	prog.Show()
 	go func() {
 		res, err := g.core.SetupServer(alias)

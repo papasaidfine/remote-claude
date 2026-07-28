@@ -121,7 +121,7 @@ var messages = map[string]map[Lang]string{
 	"open_vscode":          {EN: "VS Code", ZH: "VS Code"},
 	"copy_cli":             {EN: "Claude command", ZH: "Claude 命令"},
 	"cli_copied_fmt":       {EN: "Copied: %s", ZH: "已复制：%s"},
-	"opening_vscode_fmt":   {EN: "Opening %s in VS Code…", ZH: "正在用 VS Code 打开 %s…"},
+	"opening_vscode":       {EN: "Opening VS Code…", ZH: "正在打开 VS Code…"},
 	"use_proxy":            {EN: "Use proxy", ZH: "使用代理"},
 	"auto_start_tunnel":    {EN: "Start tunnel when app opens", ZH: "打开应用时启动隧道"},
 	"delete":               {EN: "Delete", ZH: "删除"},

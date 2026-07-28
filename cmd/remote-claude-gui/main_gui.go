@@ -264,17 +264,74 @@ func die(err error) {
 	os.Exit(1)
 }
 
+// The surf mark's own size, and how far it rides up and down. The cell it sits
+// in reserves both, so the bob never encroaches on the label underneath.
+const (
+	surfSize   = 128
+	surfTravel = 12
+)
+
+// waitPanel is the "hang tight" panel plus the handle that stops its animation.
+//
+// Stopping is the caller's job because a Fyne animation lives on the app's
+// run-loop rather than on the object it moves: one whose dialog has closed is
+// not collected, it keeps ticking for the life of the process. Every caller
+// hands stop to dialog.SetOnClosed, which fires on Hide() as well as on the
+// user closing the dialog.
+type waitPanel struct {
+	fyne.CanvasObject
+	stop func()
+}
+
 // waiting is the panel shown in dialogs that block on the network: Claude surfing
 // above the status line, so a slow ssh/HTTP round-trip reads as "hang tight"
 // rather than a frozen window.
-func waiting(msg string) fyne.CanvasObject {
+//
+// The mark rides a swell while it waits. Motion is the part that says "still
+// working" — a still image in a stalled dialog looks exactly like a still image
+// in a hung one. It is animated from here rather than inside the SVG because
+// Fyne rasterizes with oksvg, which draws shapes and ignores SMIL and CSS
+// animation entirely; a <animateTransform> in the file would simply not move.
+func waiting(msg string) *waitPanel {
 	surf := canvas.NewImageFromResource(surfIcon)
 	surf.FillMode = canvas.ImageFillContain
-	surf.SetMinSize(fyne.NewSize(128, 128))
-	return container.NewCenter(container.NewVBox(
-		surf,
-		widget.NewLabelWithStyle(msg, fyne.TextAlignCenter, fyne.TextStyle{}),
-	))
+	surf.SetMinSize(fyne.NewSize(surfSize, surfSize))
+	cell := container.New(surfCell{}, surf)
+
+	// Move, not Refresh: moving an image repaints the canvas without dropping
+	// the rasterized SVG, so the swell costs a redraw per frame and not a
+	// re-render of 15 paths. AutoReverse rather than a loop — a loop would snap
+	// the mark back down to the trough on every cycle — and ease-in-out for the
+	// hang at the top and bottom that reads as floating rather than sliding.
+	ride := canvas.NewPositionAnimation(
+		fyne.NewPos(0, surfTravel), fyne.NewPos(0, 0), 1400*time.Millisecond, surf.Move)
+	ride.AutoReverse = true
+	ride.RepeatCount = fyne.AnimationRepeatForever
+	ride.Curve = fyne.AnimationEaseInOut
+	ride.Start()
+
+	return &waitPanel{
+		CanvasObject: container.NewCenter(container.NewVBox(
+			cell,
+			widget.NewLabelWithStyle(msg, fyne.TextAlignCenter, fyne.TextStyle{}),
+		)),
+		stop: ride.Stop,
+	}
+}
+
+// surfCell is the mark's berth: it sizes the art but never positions it, because
+// the animation owns the position and a layout that moved its child would fight
+// it every frame. The reserved height carries the full travel.
+type surfCell struct{}
+
+func (surfCell) MinSize([]fyne.CanvasObject) fyne.Size {
+	return fyne.NewSize(surfSize, surfSize+surfTravel)
+}
+
+func (surfCell) Layout(objs []fyne.CanvasObject, size fyne.Size) {
+	for _, o := range objs {
+		o.Resize(fyne.NewSize(size.Width, surfSize))
+	}
 }
 
 type gui struct {
@@ -355,8 +412,9 @@ func (g *gui) checkUpdate() {
 		dialog.ShowInformation(g.t("update_title"), g.t("update_dev"), g.win)
 		return
 	}
-	prog := dialog.NewCustom(g.t("update_title"), g.t("close"),
-		waiting(g.t("update_checking")), g.win)
+	wait := waiting(g.t("update_checking"))
+	prog := dialog.NewCustom(g.t("update_title"), g.t("close"), wait, g.win)
+	prog.SetOnClosed(wait.stop)
 	prog.Show()
 	go func() {
 		rel, err := selfupdate.Check(version)
@@ -382,8 +440,9 @@ func (g *gui) checkUpdate() {
 
 // applyUpdate downloads and installs the latest release, then offers a restart.
 func (g *gui) applyUpdate() {
-	prog := dialog.NewCustom(g.t("update_title"), g.t("close"),
-		waiting(g.t("update_downloading")), g.win)
+	wait := waiting(g.t("update_downloading"))
+	prog := dialog.NewCustom(g.t("update_title"), g.t("close"), wait, g.win)
+	prog.SetOnClosed(wait.stop)
 	prog.Show()
 	go func() {
 		err := selfupdate.Apply("")

@@ -19,8 +19,13 @@ import (
 // showUsage fetches Claude usage from the host over ssh (off the UI thread) and
 // shows a 1D/7D/30D tabbed, priced breakdown.
 func (g *gui) showUsage(alias string) {
-	body := container.NewStack(waiting(fmt.Sprintf(g.t("reading_usage_fmt"), alias)))
+	wait := waiting(fmt.Sprintf(g.t("reading_usage_fmt"), alias))
+	body := container.NewStack(wait)
 	d := dialog.NewCustom(fmt.Sprintf(g.t("usage_title_fmt"), alias), g.t("close"), body, g.win)
+	// This dialog outlives its waiting panel — the numbers replace it in place —
+	// so the swell is stopped there rather than only on close, which would leave
+	// it riding under the table for as long as the dialog stayed open.
+	d.SetOnClosed(wait.stop)
 	// Six columns of numbers plus a chart want room. Take what the window can
 	// spare rather than a fixed guess that is cramped on a large display and
 	// overflowing on a small one.
@@ -29,6 +34,7 @@ func (g *gui) showUsage(alias string) {
 	go func() {
 		rep, err := g.core.HostUsage(alias)
 		fyne.Do(func() {
+			wait.stop()
 			if err != nil {
 				body.Objects = []fyne.CanvasObject{container.NewPadded(
 					widget.NewLabel(fmt.Sprintf(g.t("failed_fmt"), err.Error())))}
